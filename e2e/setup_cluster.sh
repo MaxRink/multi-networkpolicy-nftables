@@ -27,11 +27,6 @@ EOF
 # load multus image from container host to kind node
 kind load docker-image localhost:5000/multus-networkpolicy-iptables:e2e
 kind load docker-image localhost:5000/multi-networkpolicy-iptables:e2e-test
-kind load docker-image docker.io/calico/cni:v3.28.1
-kind load docker-image docker.io/calico/node:v3.28.1
-kind load docker-image docker.io/calico/kube-controllers:v3.28.1
-kind load docker-image alpine:3.22.1
-kind load docker-image ghcr.io/k8snetworkplumbingwg/multus-cni:snapshot
 
 kind export kubeconfig
 sleep 1
