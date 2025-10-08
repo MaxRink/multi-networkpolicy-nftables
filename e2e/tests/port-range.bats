@@ -15,7 +15,7 @@ setup() {
 	run kubectl -n test-port-range wait --for=condition=ready -l app=test-port-range pod --timeout=${kubewait_timeout}
 	[ "$status" -eq  "0" ]
 
-	sleep 3
+	sleep 10
 }
 
 @test "test-port-range check pod-a -> pod-b 5555 OK" {

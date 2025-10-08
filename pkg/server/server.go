@@ -519,10 +519,8 @@ func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controlle
 	klog.V(4).Infof("Generate rules for Pod: [%s]\n", podNamespacedName(pod))
 	// nft add table inet filter
 
+	// clean all rules if exist
 	nft.FlushRuleset()
-	if err := nft.Flush(); err != nil {
-		klog.Errorf("failed to remove old rules: %s", err.Error())
-	}
 
 	nftState, err := bootstrapNetfilterRules(nft, podInfo)
 	if err != nil {

@@ -167,9 +167,7 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 			},
 		},
 	})
-	if err := nft.Flush(); err != nil {
-		return nil, fmt.Errorf("nftables flush failed input interfaceFilterSet cannot be used: %v", err)
-	}
+
 	nft.InsertRule(&nftables.Rule{
 		Table: nftState.filter,
 		Chain: nftState.output,
@@ -187,9 +185,7 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 			},
 		},
 	})
-	if err := nft.Flush(); err != nil {
-		return nil, fmt.Errorf("nftables flush failed ouput interfaceFilterSet cannot be used: %v", err)
-	}
+
 	nft.InsertRule(&nftables.Rule{
 		Table: nftState.nat,
 		Chain: nftState.prerouting,
@@ -206,9 +202,7 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 			},
 		},
 	})
-	if err := nft.Flush(); err != nil {
-		return nil, fmt.Errorf("nftables flush failed prerouting interfaceNatSet cannot be used: %v", err)
-	}
+
 	nft.InsertRule(&nftables.Rule{
 		Table: nftState.filter,
 		Chain: nftState.ingressChain,
@@ -229,10 +223,7 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 			},
 		},
 	})
-	err := nft.Flush()
-	if err != nil {
-		return nil, fmt.Errorf("nftables flush failed for rules with: %v", err)
-	}
+
 	return nftState, nil
 }
 
@@ -484,9 +475,6 @@ func (n *nftState) applyCommonChainRules(s *Server) error {
 		return fmt.Errorf("failed to apply common egress conntrack rules: %v", err)
 	}
 
-	if err := n.nft.Flush(); err != nil {
-		return fmt.Errorf("nftables flush failed for common chain rules with: %v", err)
-	}
 	return nil
 }
 

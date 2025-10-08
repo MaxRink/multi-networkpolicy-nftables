@@ -20,7 +20,7 @@ setup() {
 	run kubectl -n test-protocol-only-ports wait --for=condition=ready -l app=test-protocol-only-ports pod --timeout=${kubewait_timeout}
 	[ "$status" -eq  "0" ]
 
-	sleep 3
+	sleep 10
 }
 
 @test "test-protocol-only-ports check pod-a -> pod-b TCP" {

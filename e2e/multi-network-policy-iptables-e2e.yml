@@ -130,7 +130,7 @@ spec:
         # uncomment this if you want to store iptables rules
         - "--pod-iptables=/var/lib/multi-networkpolicy/iptables"
         # (e2e test only) enshorten sync period to fast sync
-        - "--sync-period=1"
+        - "--sync-period=2"
         # uncomment this if you need to accept link-local address traffic
         #- "--allow-ipv6-src-prefix=fe80::/10"
         #- "--allow-ipv6-dst-prefix=fe80::/10"

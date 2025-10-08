@@ -23,20 +23,20 @@ setup() {
 	[ "$status" -eq  "0" ]
 }
 
-# @test "check generated ip6tables rules" {
-# 	# wait for sync
-# 	sleep 5
+@test "check generated nft rules" {
+	# wait for sync
+	sleep 10
 
-# 	# check pod-server has multi-networkpolicy ip6tables rules for ingress
-#         run kubectl -n test-simple-v6-ingress exec pod-server -- sh -c "ip6tables-save | grep MULTI-0-INGRESS"
-# 	[ "$status" -eq  "0" ]
-# 	# check pod-client-a has NO multi-networkpolicy ip6tables rules for ingress
-#         run kubectl -n test-simple-v6-ingress exec pod-client-a -- sh -c "ip6tables-save | grep MULTI-0-INGRESS"
-# 	[ "$status" -eq  "1" ]
-# 	# check pod-client-b has NO multi-networkpolicy ip6tables rules for ingress
-#         run kubectl -n test-simple-v6-ingress exec pod-client-b -- sh -c "ip6tables-save | grep MULTI-0-INGRESS"
-# 	[ "$status" -eq  "1" ]
-# }
+	# check pod-server has multi-networkpolicy ip6tables rules for ingress
+	run kubectl -n test-simple-v6-ingress exec pod-server -- sh -c "nft list ruleset | grep multi-ingress-0"
+	[ "$status" -eq  "0" ]
+	# check pod-client-a has NO multi-networkpolicy ip6tables rules for ingress
+	run kubectl -n test-simple-v6-ingress exec pod-client-a -- sh -c "nft list ruleset | grep multi-ingress-0"
+	[ "$status" -eq  "1" ]
+	# check pod-client-b has NO multi-networkpolicy ip6tables rules for ingress
+	run kubectl -n test-simple-v6-ingress exec pod-client-b -- sh -c "nft list ruleset | grep multi-ingress-0"
+	[ "$status" -eq  "1" ]
+}
 
 @test "test-simple-v6-ingress check client-a -> server" {
 	# nc should succeed from client-a to server by policy
@@ -69,7 +69,7 @@ setup() {
 # 	kubectl -n kube-system wait --for=delete -l app=multi-networkpolicy pod --timeout=${kubewait_timeout}
 
 # 	# check ip6table rules in pod-server
-# 	# run kubectl -n test-simple-v6-ingress exec pod-server -it -- sh -c "ip6tables-save | grep MULTI-0-INGRESS"
+# 	# run kubectl -n test-simple-v6-ingress exec pod-server -it -- sh -c "nft list ruleset | grep multi-ingress-0"
 # 	# [ "$status" -eq  "1" ]
 
 # 	# enable multi-networkpolicy again

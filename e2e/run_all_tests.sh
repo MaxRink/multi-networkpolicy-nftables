@@ -12,6 +12,7 @@ for f in ./tests/*.bats; do
     if [ $retval -ne 0 ]; then
         suite_failed=1
         ./bin/kind export logs ./artifacts/`basename $f`.test/kind-logs
+        break
     fi
 done
 
