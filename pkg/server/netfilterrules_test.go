@@ -26,15 +26,16 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 )
 
-const DEBUG = false
+const DEBUG = true
 
 func TestBootstrap(t *testing.T) {
 	// Open a system connection in a separate network namespace it requires root
 	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
 	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.FlushRuleset()
 	defer c.CloseLasting()
 	c.FlushRuleset()
-	defer c.FlushRuleset()
+
 	podMockInfo := &controllers.PodInfo{
 		Interfaces: []controllers.InterfaceInfo{
 			{InterfaceName: "eth0", IPs: []string{"10.0.0.0", "fd00::"}},
