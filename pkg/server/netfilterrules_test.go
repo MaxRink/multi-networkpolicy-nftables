@@ -26,7 +26,7 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 )
 
-const DEBUG = true
+const DEBUG = false
 
 func TestBootstrap(t *testing.T) {
 	// Open a system connection in a separate network namespace it requires root
