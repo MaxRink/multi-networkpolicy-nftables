@@ -38,9 +38,9 @@ func TestBootstrap(t *testing.T) {
 
 	podMockInfo := &controllers.PodInfo{
 		Interfaces: []controllers.InterfaceInfo{
-			{InterfaceName: "eth0", IPs: []string{"10.0.0.0", "fd00::"}},
-			{InterfaceName: "eth1", IPs: []string{"fd01::"}},
-			{InterfaceName: "eth2", IPs: []string{"10.0.0.0"}},
+			{NetattachName: "one", InterfaceName: "eth0", IPs: []string{"10.0.0.0", "fd00::"}},
+			{NetattachName: "two", InterfaceName: "eth1", IPs: []string{"fd01::"}},
+			{NetattachName: "three", InterfaceName: "eth2", IPs: []string{"10.0.0.0"}},
 		},
 	}
 
@@ -48,7 +48,10 @@ func TestBootstrap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bootstrapNetfilterRules() failed: %v", err)
 	}
-	c.Flush()
+	err = c.Flush()
+	if err != nil {
+		t.Fatalf("Cannot flush %v", err)
+	}
 
 	checkForBootstrap := func() bool {
 
