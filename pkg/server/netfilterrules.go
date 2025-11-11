@@ -563,7 +563,7 @@ func (n *nftState) allowNeighborDiscovery(chain *nftables.Chain) error {
 			&expr.Cmp{
 				Op:       expr.CmpOpEq,
 				Register: 0x1,
-				Data:     binaryutil.NativeEndian.PutUint16(uint16(unix.NFPROTO_IPV6)),
+				Data:     []byte{uint8(unix.NFPROTO_IPV6)},
 			},
 			&expr.Meta{
 				Key:      expr.MetaKeyL4PROTO,
@@ -668,7 +668,7 @@ func (n *nftState) applyCommonPrefixRules(chain *nftables.Chain, prefixes []stri
 				&expr.Cmp{
 					Op:       expr.CmpOpEq,
 					Register: 0x1,
-					Data:     binaryutil.NativeEndian.PutUint16(uint16(unix.NFPROTO_IPV4)),
+					Data:     []byte{uint8(unix.NFPROTO_IPV4)},
 				},
 				&expr.Payload{
 					DestRegister: 0x1,
@@ -708,7 +708,7 @@ func (n *nftState) applyCommonPrefixRules(chain *nftables.Chain, prefixes []stri
 				&expr.Cmp{
 					Op:       expr.CmpOpEq,
 					Register: 0x1,
-					Data:     binaryutil.NativeEndian.PutUint16(uint16(unix.NFPROTO_IPV6)),
+					Data:     []byte{uint8(unix.NFPROTO_IPV6)},
 				},
 				&expr.Payload{
 					DestRegister: 0x1,
@@ -999,10 +999,10 @@ func (n *nftState) applyPrefixes(chain *nftables.Chain, policyName string, peer 
 	if len(prefixes) > 0 {
 		offset := IPv4OffSet
 
-		nfProtocol := uint16(unix.NFPROTO_IPV4)
+		nfProtocol := uint8(unix.NFPROTO_IPV4)
 		if isV6 {
 			offset = IPv6OffSet
-			nfProtocol = uint16(unix.NFPROTO_IPV6)
+			nfProtocol = uint8(unix.NFPROTO_IPV6)
 		}
 		if !isIngressChain(chain) {
 			if !isV6 {
@@ -1040,7 +1040,7 @@ func (n *nftState) applyPrefixes(chain *nftables.Chain, policyName string, peer 
 					&expr.Cmp{
 						Op:       expr.CmpOpEq,
 						Register: 0x1,
-						Data:     binaryutil.NativeEndian.PutUint16(nfProtocol),
+						Data:     []byte{nfProtocol},
 					},
 					&expr.Payload{
 						DestRegister: 0x1,
@@ -1085,7 +1085,7 @@ func (n *nftState) applyPrefixes(chain *nftables.Chain, policyName string, peer 
 				&expr.Cmp{
 					Op:       expr.CmpOpEq,
 					Register: 0x1,
-					Data:     binaryutil.NativeEndian.PutUint16(nfProtocol),
+					Data:     []byte{nfProtocol},
 				},
 				&expr.Payload{
 					DestRegister: 0x1,
@@ -1229,13 +1229,13 @@ func (n *nftState) addIPRule(addrs []string, chain *nftables.Chain, policyName s
 	payloadLen := uint32(net.IPv4len)
 	keyType := nftables.TypeIPAddr
 	protocol := protoIPv4
-	nfProtocol := uint16(unix.NFPROTO_IPV4)
+	nfProtocol := uint8(unix.NFPROTO_IPV4)
 	if net.ParseIP(addrs[0]).To4() == nil {
 		offset = IPv6OffSet
 		payloadLen = uint32(net.IPv6len)
 		keyType = nftables.TypeIP6Addr
 		protocol = protoIPv6
-		nfProtocol = uint16(unix.NFPROTO_IPV6)
+		nfProtocol = uint8(unix.NFPROTO_IPV6)
 	}
 
 	if !isIngressChain(chain) {
@@ -1277,7 +1277,7 @@ func (n *nftState) addIPRule(addrs []string, chain *nftables.Chain, policyName s
 			&expr.Cmp{
 				Op:       expr.CmpOpEq,
 				Register: 0x1,
-				Data:     binaryutil.NativeEndian.PutUint16(nfProtocol),
+				Data:     []byte{uint8(nfProtocol)},
 			},
 			&expr.Payload{
 				DestRegister: 0x1,
