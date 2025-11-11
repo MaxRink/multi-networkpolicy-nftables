@@ -563,7 +563,7 @@ func (n *nftState) allowNeighborDiscovery(chain *nftables.Chain) error {
 			&expr.Cmp{
 				Op:       expr.CmpOpEq,
 				Register: 0x1,
-				Data:     binaryutil.NativeEndian.PutUint32(0x0000000a),
+				Data:     binaryutil.NativeEndian.PutUint16(uint16(unix.NFPROTO_IPV6)),
 			},
 			&expr.Meta{
 				Key:      expr.MetaKeyL4PROTO,
@@ -572,7 +572,7 @@ func (n *nftState) allowNeighborDiscovery(chain *nftables.Chain) error {
 			&expr.Cmp{
 				Op:       expr.CmpOpEq,
 				Register: 0x1,
-				Data:     binaryutil.NativeEndian.PutUint32(0x0000003a),
+				Data:     []byte{unix.IPPROTO_ICMPV6}, //binaryutil.NativeEndian.PutUint32(0x0000003a),
 			},
 			&expr.Payload{
 				DestRegister: 0x1,
@@ -665,7 +665,11 @@ func (n *nftState) applyCommonPrefixRules(chain *nftables.Chain, prefixes []stri
 			UserData: userDataComment(fmt.Sprintf("common rule:%s", v4Set.Name)),
 			Exprs: []expr.Any{
 				&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 0x1},
-				&expr.Cmp{Op: expr.CmpOpEq, Register: 0x1, Data: []byte{unix.NFPROTO_IPV4}},
+				&expr.Cmp{
+					Op:       expr.CmpOpEq,
+					Register: 0x1,
+					Data:     binaryutil.NativeEndian.PutUint16(uint16(unix.NFPROTO_IPV4)),
+				},
 				&expr.Payload{
 					DestRegister: 0x1,
 					Base:         expr.PayloadBaseNetworkHeader,
@@ -701,7 +705,11 @@ func (n *nftState) applyCommonPrefixRules(chain *nftables.Chain, prefixes []stri
 			UserData: userDataComment(fmt.Sprintf("common rule:%s", v6Set.Name)),
 			Exprs: []expr.Any{
 				&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 0x1},
-				&expr.Cmp{Op: expr.CmpOpEq, Register: 0x1, Data: []byte{unix.NFPROTO_IPV6}},
+				&expr.Cmp{
+					Op:       expr.CmpOpEq,
+					Register: 0x1,
+					Data:     binaryutil.NativeEndian.PutUint16(uint16(unix.NFPROTO_IPV6)),
+				},
 				&expr.Payload{
 					DestRegister: 0x1,
 					Base:         expr.PayloadBaseNetworkHeader,
@@ -991,10 +999,10 @@ func (n *nftState) applyPrefixes(chain *nftables.Chain, policyName string, peer 
 	if len(prefixes) > 0 {
 		offset := IPv4OffSet
 
-		nfProtocol := uint8(unix.NFPROTO_IPV4)
+		nfProtocol := uint16(unix.NFPROTO_IPV4)
 		if isV6 {
 			offset = IPv6OffSet
-			nfProtocol = uint8(unix.NFPROTO_IPV6)
+			nfProtocol = uint16(unix.NFPROTO_IPV6)
 		}
 		if !isIngressChain(chain) {
 			if !isV6 {
@@ -1024,8 +1032,16 @@ func (n *nftState) applyPrefixes(chain *nftables.Chain, policyName string, peer 
 				Chain:    chain,
 				UserData: userDataComment(ruleComment),
 				Exprs: []expr.Any{
-					&expr.Meta{Key: expr.MetaKeyNFPROTO, SourceRegister: false, Register: 0x1},
-					&expr.Cmp{Op: expr.CmpOpEq, Register: 0x1, Data: []byte{nfProtocol}},
+					&expr.Meta{
+						Key:            expr.MetaKeyNFPROTO,
+						SourceRegister: false,
+						Register:       0x1,
+					},
+					&expr.Cmp{
+						Op:       expr.CmpOpEq,
+						Register: 0x1,
+						Data:     binaryutil.NativeEndian.PutUint16(nfProtocol),
+					},
 					&expr.Payload{
 						DestRegister: 0x1,
 						Base:         expr.PayloadBaseNetworkHeader,
@@ -1066,7 +1082,11 @@ func (n *nftState) applyPrefixes(chain *nftables.Chain, policyName string, peer 
 			UserData: userDataComment(fmt.Sprintf("%s accept policy:%s cidr:%s", chain.Name, policyName, peer.IPBlock.CIDR)),
 			Exprs: []expr.Any{
 				&expr.Meta{Key: expr.MetaKeyNFPROTO, SourceRegister: false, Register: 0x1},
-				&expr.Cmp{Op: expr.CmpOpEq, Register: 0x1, Data: []byte{nfProtocol}},
+				&expr.Cmp{
+					Op:       expr.CmpOpEq,
+					Register: 0x1,
+					Data:     binaryutil.NativeEndian.PutUint16(nfProtocol),
+				},
 				&expr.Payload{
 					DestRegister: 0x1,
 					Base:         expr.PayloadBaseNetworkHeader,
@@ -1209,13 +1229,13 @@ func (n *nftState) addIPRule(addrs []string, chain *nftables.Chain, policyName s
 	payloadLen := uint32(net.IPv4len)
 	keyType := nftables.TypeIPAddr
 	protocol := protoIPv4
-	nfProtocol := uint8(unix.NFPROTO_IPV4)
+	nfProtocol := uint16(unix.NFPROTO_IPV4)
 	if net.ParseIP(addrs[0]).To4() == nil {
 		offset = IPv6OffSet
 		payloadLen = uint32(net.IPv6len)
 		keyType = nftables.TypeIP6Addr
 		protocol = protoIPv6
-		nfProtocol = uint8(unix.NFPROTO_IPV6)
+		nfProtocol = uint16(unix.NFPROTO_IPV6)
 	}
 
 	if !isIngressChain(chain) {
@@ -1254,7 +1274,11 @@ func (n *nftState) addIPRule(addrs []string, chain *nftables.Chain, policyName s
 		UserData: userDataComment(fmt.Sprintf("policy:%s selector-for:%s %s", policyName, selectorHash, protocol)),
 		Exprs: []expr.Any{
 			&expr.Meta{Key: expr.MetaKeyNFPROTO, SourceRegister: false, Register: 0x1},
-			&expr.Cmp{Op: expr.CmpOpEq, Register: 0x1, Data: []byte{nfProtocol}},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 0x1,
+				Data:     binaryutil.NativeEndian.PutUint16(nfProtocol),
+			},
 			&expr.Payload{
 				DestRegister: 0x1,
 				Base:         expr.PayloadBaseNetworkHeader,
