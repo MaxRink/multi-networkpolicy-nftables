@@ -1116,7 +1116,7 @@ func (n *nftState) applyPrefixes(chain *nftables.Chain, policyName string, peer 
 				},
 				&expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 0x1},
 				&expr.Verdict{
-					Kind: expr.VerdictAccept,
+					Kind: expr.VerdictReturn,
 				},
 			},
 		}, n.nft.AddRule, false); err != nil {
@@ -1295,7 +1295,7 @@ func (n *nftState) addIPRule(addrs []string, chain *nftables.Chain, policyName s
 			},
 			&expr.Counter{},
 			&expr.Verdict{
-				Kind: expr.VerdictAccept,
+				Kind: expr.VerdictReturn,
 			},
 		},
 	}, n.nft.AddRule, false)
