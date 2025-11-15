@@ -1507,6 +1507,13 @@ func (n *nftState) applyProtoPortsRules(chain *nftables.Chain, policyName string
 				Mask:           binaryutil.NativeEndian.PutUint32(^portRuleMark), // 0xfffeffff
 				Xor:            binaryutil.NativeEndian.PutUint32(portRuleMark),
 			},
+			&expr.Bitwise{
+				SourceRegister: 0x1,
+				DestRegister:   0x1,
+				Len:            4,
+				Mask:           binaryutil.NativeEndian.PutUint32(fullRuleMark),
+				Xor:            binaryutil.NativeEndian.PutUint32(portRuleMark), // 0x100000
+			},
 			&expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 0x1},
 		},
 	}, n.nft.AddRule, false)
@@ -1642,6 +1649,13 @@ func (n *nftState) applyPolicyPortsRules(chain *nftables.Chain, policyName strin
 					Len:            4,
 					Mask:           binaryutil.NativeEndian.PutUint32(^portRuleMark), // 0xfffeffff
 					Xor:            binaryutil.NativeEndian.PutUint32(portRuleMark),
+				},
+				&expr.Bitwise{
+					SourceRegister: 0x1,
+					DestRegister:   0x1,
+					Len:            4,
+					Mask:           binaryutil.NativeEndian.PutUint32(fullRuleMark),
+					Xor:            binaryutil.NativeEndian.PutUint32(portRuleMark), // 0x100000
 				},
 				&expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 0x1},
 			}}, n.nft.AddRule, false); err != nil {
