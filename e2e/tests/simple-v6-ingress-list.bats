@@ -3,7 +3,7 @@
 # Note:
 # These test cases, simple, will create simple (one policy for ingress) and test the 
 # traffic policying by ncat (nc) command. In addition, these cases also verifies that
-# simple ip6tables generation check by ip6tables-save and pod-iptable in multi-networkpolicy pod.
+# simple nftables generation check by nftables-save and pod-iptable in multi-networkpolicy pod.
 
 
 setup() {
