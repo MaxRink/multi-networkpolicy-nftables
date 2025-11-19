@@ -158,7 +158,8 @@ func (s *Server) Run(_ string, stopCh chan struct{}) {
 
 	// Delete all iptables by running the `syncMultiPolicy` with no MultiNetworkPolicies
 	s.policyMap = nil
-	s.syncMultiPolicy()
+	// Currently not interested in this error as it is already logged.
+	_ = s.syncMultiPolicy()
 }
 
 func (s *Server) setInitialized(value bool) {
