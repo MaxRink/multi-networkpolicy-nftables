@@ -32,27 +32,24 @@ kind export kubeconfig
 sleep 1
 
 # install calico
-kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.1/manifests/calico.yaml
+kubectl apply --wait --timeout=10s -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.1/manifests/calico.yaml
 kubectl -n kube-system set env daemonset/calico-node FELIX_IGNORELOOSERPF=true
 kubectl -n kube-system set env daemonset/calico-node FELIX_XDPENABLED=false
-
+sleep 3
 kubectl -n kube-system wait --for=condition=available deploy/coredns --timeout=300s
 
 #install multus
-kubectl create -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset.yml
-sleep 3
+kubectl apply --wait --timeout=10s -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset.yml
 kubectl -n kube-system wait --for=condition=ready -l name=multus pod --timeout=660s
-kubectl create -f cni-install.yml
-sleep 3
+kubectl apply --wait --timeout=10s -f cni-install.yml
 kubectl -n kube-system wait --for=condition=ready -l name=cni-plugins pod --timeout=300s
 
 #install bond-cni
-kubectl create -f  https://raw.githubusercontent.com/k8snetworkplumbingwg/bond-cni/refs/heads/master/manifests/bond-cni.yaml
+kubectl apply --wait --timeout=10s -f  https://raw.githubusercontent.com/k8snetworkplumbingwg/bond-cni/refs/heads/master/manifests/bond-cni.yaml
 
 # install multi-networkpolicy API
-kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multi-networkpolicy/master/scheme.yml
+kubectl apply --wait --timeout=10s -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multi-networkpolicy/master/scheme.yml
 
 # install multi-networkpolicy-nftables
-kubectl apply -f multi-network-policy-nftables-e2e.yml
-sleep 3
+kubectl apply --wait --timeout=10s -f multi-network-policy-nftables-e2e.yml
 kubectl -n kube-system wait --for=condition=ready -l name=multi-networkpolicy pod --timeout=300s

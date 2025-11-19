@@ -15,7 +15,7 @@ setup() {
 
 @test "setup ingress-ns-selector-no-pods test environments" {
 	# create test manifests
-	kubectl create -f ingress-ns-selector-no-pods.yml
+	kubectl apply --wait --timeout=${kubewait_timeout} -f ingress-ns-selector-no-pods.yml
 
 	# verify all pods are available
 	run kubectl -n test-ingress-ns-selector-no-pods wait --for=condition=ready -l app=test-ingress-ns-selector-no-pods pod --timeout=${kubewait_timeout}

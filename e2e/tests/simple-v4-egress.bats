@@ -15,7 +15,7 @@ setup() {
 
 @test "setup simple test environments" {
 	# create test manifests
-	kubectl create -f simple-v4-egress.yml
+	kubectl apply --wait --timeout=${kubewait_timeout} -f simple-v4-egress.yml
 
 	# verify all pods are available
 	run kubectl -n test-simple-v4-egress wait --for=condition=ready -l app=test-simple-v4-egress pod --timeout=${kubewait_timeout}

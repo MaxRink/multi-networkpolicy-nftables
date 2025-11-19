@@ -19,7 +19,7 @@ setup() {
 
 @test "setup simple test environments" {
 	# create test manifests
-	kubectl create -f simple-v6-ingress-multi.yml
+	kubectl apply --wait --timeout=${kubewait_timeout} -f simple-v6-ingress-multi.yml
 
 	# verify all pods are available
 	run kubectl -n test-simple-v6-ingress-multi wait --for=condition=ready -l app=test-simple-v6-ingress-multi pod --timeout=${kubewait_timeout}

@@ -14,7 +14,7 @@ setup() {
 
 @test "setup environments" {
 	# create test manifests
-	kubectl create -f protocol-only-ports.yml
+	kubectl apply --wait --timeout=${kubewait_timeout} -f protocol-only-ports.yml
 
 	# verify all pods are available
 	run kubectl -n test-protocol-only-ports wait --for=condition=ready -l app=test-protocol-only-ports pod --timeout=${kubewait_timeout}

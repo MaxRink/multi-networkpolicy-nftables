@@ -18,7 +18,7 @@ setup() {
 
 @test "setup multi-namespace test environments" {
 	# create test manifests
-	kubectl create -f multi-namespace-multinet.yml
+	kubectl apply --wait --timeout=${kubewait_timeout} -f multi-namespace-multinet.yml
 
 	# verify all pods in namespace A are available
 	run kubectl -n test-namespace-a wait --all --for=condition=ready pod --timeout=${kubewait_timeout}

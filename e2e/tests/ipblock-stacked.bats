@@ -15,7 +15,7 @@ setup() {
 }
 
 @test "setup ipblock-stacked test environments" {
-	kubectl create -f ipblock-stacked.yml
+	kubectl apply --wait --timeout=${kubewait_timeout} -f ipblock-stacked.yml
 	run kubectl -n test-ipblock-stacked wait --for=condition=ready -l app=test-ipblock-stacked pod --timeout=${kubewait_timeout}
 	[ "$status" -eq  "0" ]
 
