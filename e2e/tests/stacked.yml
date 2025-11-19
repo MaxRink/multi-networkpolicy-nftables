@@ -41,6 +41,7 @@ spec:
   containers:
   - name: macvlan-worker1
     image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
     command: ["nc", "-kl", "0.0.0.0", "5555"]
     securityContext:
       privileged: true
@@ -59,6 +60,7 @@ spec:
   containers:
   - name: macvlan-worker1
     image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
     command: ["nc", "-kl", "0.0.0.0", "5555"]
     securityContext:
       privileged: true
@@ -77,6 +79,7 @@ spec:
   containers:
   - name: macvlan-worker1
     image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
     command: ["nc", "-kl", "0.0.0.0", "5555"]
     securityContext:
       privileged: true
@@ -95,6 +98,7 @@ spec:
   containers:
   - name: macvlan-worker1
     image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
     command: ["nc", "-kl", "0.0.0.0", "5555"]
     securityContext:
       privileged: true
