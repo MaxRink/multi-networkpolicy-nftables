@@ -10,7 +10,7 @@ jobs:
   build:
     strategy:
       matrix:
-        go-version: [1.24.x, 1.25.x]
+        go-version: [1.24.x]
         goarch: [amd64, arm64]
     runs-on: ubuntu-latest
     env:
