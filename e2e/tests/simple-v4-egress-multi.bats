@@ -3,7 +3,7 @@
 # Note:
 # These test cases, simple, will create simple (one policy for ingress) and test the 
 # traffic policying by ncat (nc) command. In addition, these cases also verifies that
-# simple iptables generation check by iptables-save and pod-iptable in multi-networkpolicy pod.
+# simple nftables generation check by pod-iptable in multi-networkpolicy pod.
 
 setup() {
 	cd $BATS_TEST_DIRNAME
@@ -18,7 +18,7 @@ setup() {
 
 @test "setup simple test environments" {
 	# create test manifests
-	kubectl create -f simple-v4-egress-multi.yml
+	kubectl apply --wait --timeout=${kubewait_timeout} -f simple-v4-egress-multi.yml
 
 	# verify all pods are available
 	run kubectl -n test-simple-v4-egress-multi wait --for=condition=ready -l app=test-simple-v4-egress-multi pod --timeout=${kubewait_timeout}
@@ -29,23 +29,23 @@ setup() {
 }
 
 @test "check generated nft rules" {
-	# check pod-server has multi-networkpolicy iptables rules for ingress
+	# check pod-server has multi-networkpolicy nftables rules for ingress
 	run kubectl -n test-simple-v4-egress-multi exec pod-server -- sh -c "nft list ruleset | grep multi-egress-0"
 	[ "$status" -eq  "0" ]
-	# check pod-client-a has NO multi-networkpolicy iptables rules for ingress
+	# check pod-client-a has NO multi-networkpolicy nftables rules for ingress
 	run kubectl -n test-simple-v4-egress-multi exec pod-client-a -- sh -c "nft list ruleset | grep multi-egress-0"
 	[ "$status" -eq  "1" ]
-	# check pod-client-b has NO multi-networkpolicy iptables rules for ingress
+	# check pod-client-b has NO multi-networkpolicy nftables rules for ingress
 	run kubectl -n test-simple-v4-egress-multi exec pod-client-b -- sh -c "nft list ruleset | grep multi-egress-0"
 	[ "$status" -eq  "1" ]
 
-	# check pod-server has multi-networkpolicy iptables rules for ingress
+	# check pod-server has multi-networkpolicy nftables rules for ingress
 	run kubectl -n test-simple-v4-egress-multi exec pod-server -- sh -c "nft list ruleset | grep multi-egress-1"
 	[ "$status" -eq  "0" ]
-	# check pod-client-a has NO multi-networkpolicy iptables rules for ingress
+	# check pod-client-a has NO multi-networkpolicy nftables rules for ingress
 	run kubectl -n test-simple-v4-egress-multi exec pod-client-a -- sh -c "nft list ruleset | grep multi-egress-1"
 	[ "$status" -eq  "1" ]
-	# check pod-client-b has NO multi-networkpolicy iptables rules for ingress
+	# check pod-client-b has NO multi-networkpolicy nftables rules for ingress
 	run kubectl -n test-simple-v4-egress-multi exec pod-client-b -- sh -c "nft list ruleset | grep multi-egress-1"
 	[ "$status" -eq  "1" ]
 }
@@ -102,7 +102,7 @@ setup() {
 	[ "$status" -eq  "0" ]
 }
 
-@test "disable multi-networkpolicy and check iptables rules" {
+@test "disable multi-networkpolicy and check nftables rules" {
  	# disable multi-networkpolicy pods by adding invalid nodeSelector
 	kubectl -n kube-system patch daemonsets multi-networkpolicy-ds-amd64 -p '{"spec": {"template": {"spec": {"nodeSelector": {"non-existing": "true"}}}}}'
 	# check multi-networkpolicy pod is deleted

@@ -15,7 +15,7 @@ setup() {
 }
 
 @test "setup ipblock-stacked test environments" {
-	kubectl create -f ipblock-stacked.yml
+	kubectl apply --wait --timeout=${kubewait_timeout} -f ipblock-stacked.yml
 	run kubectl -n test-ipblock-stacked wait --for=condition=ready -l app=test-ipblock-stacked pod --timeout=${kubewait_timeout}
 	[ "$status" -eq  "0" ]
 
@@ -23,7 +23,7 @@ setup() {
 	sleep 5
 }
 
-@test "check generated iptables rules" {
+@test "check generated nftables rules" {
 	run kubectl -n test-ipblock-stacked exec pod-server -it -- sh -c "nft list ruleset | grep multi-ingress-0"
 	[ "$status" -eq  "0" ]
 	run kubectl -n test-ipblock-stacked exec pod-client-a -it -- sh -c "nft list ruleset | grep multi-ingress-0"

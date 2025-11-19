@@ -10,7 +10,7 @@ setup() {
 
 @test "setup resources" {
 	# create test manifests
-	kubectl create -f bond-cni.yml
+	kubectl apply --wait --timeout=${kubewait_timeout} -f bond-cni.yml
 
 	# verify all pods are available
 	run kubectl -n bond-testing wait --for=condition=ready -l app=bond-testing pod --timeout=${kubewait_timeout}

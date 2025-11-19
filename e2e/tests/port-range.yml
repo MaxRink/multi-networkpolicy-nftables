@@ -41,12 +41,14 @@ metadata:
 spec:
   containers:
   - name: netcat-tcp-5555
-    image: localhost:5000/multi-networkpolicy-iptables:e2e-test
+    image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
     command: ["nc", "-klp", "5555"]
     securityContext:
       privileged: true
   - name: netcat-tcp-6666
-    image: localhost:5000/multi-networkpolicy-iptables:e2e-test
+    image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
     command: ["nc", "-klp", "6666"]
     securityContext:
       privileged: true
@@ -64,12 +66,14 @@ metadata:
 spec:
   containers:
   - name: netcat-tcp-5555
-    image: localhost:5000/multi-networkpolicy-iptables:e2e-test
+    image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
     command: ["nc", "-klp", "5555"]
     securityContext:
       privileged: true
   - name: netcat-tcp-6666
-    image: localhost:5000/multi-networkpolicy-iptables:e2e-test
+    image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
     command: ["nc", "-klp", "6666"]
     securityContext:
       privileged: true

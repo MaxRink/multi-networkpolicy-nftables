@@ -1,4 +1,4 @@
-module github.com/k8snetworkplumbingwg/multi-networkpolicy-iptables
+module github.com/telekom/multi-networkpolicy-nftables
 
 go 1.21
 

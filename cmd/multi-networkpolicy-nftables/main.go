@@ -14,9 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// This is a Kubernetes controller to generate iptables rules for
+// This is a Kubernetes controller to generate nftables rules for
 // multi-networkpolicy.
-// It reads multiNetworkpolicy object and generates iptables rules into
+// It reads multiNetworkpolicy object and generates nftables rules into
 // container network namespaces.
 package main
 
@@ -28,9 +28,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/k8snetworkplumbingwg/multi-networkpolicy-iptables/pkg/server"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"github.com/telekom/multi-networkpolicy-nftables/pkg/server"
 
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog"

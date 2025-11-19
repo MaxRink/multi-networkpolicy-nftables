@@ -3,7 +3,7 @@
 # Note:
 # These test cases, simple, will create simple (one policy for ingress) and test the 
 # traffic policying by ncat (nc) command. In addition, these cases also verifies that
-# simple iptables generation check by iptables-save and pod-iptable in multi-networkpolicy pod.
+# simple nftables generation check by pod-iptable in multi-networkpolicy pod.
 
 setup() {
 	cd $BATS_TEST_DIRNAME
@@ -16,7 +16,7 @@ setup() {
 
 @test "setup simple test environments" {
 	# create test manifests
-	kubectl create -f simple-v4-egress-list.yml
+	kubectl apply --wait --timeout=${kubewait_timeout} -f simple-v4-egress-list.yml
 
 	# verify all pods are available
 	run kubectl -n test-simple-v4-egress-list wait --for=condition=ready -l app=test-simple-v4-egress-list pod --timeout=${kubewait_timeout}

@@ -6,7 +6,7 @@ include:
 
 variables:
   CONTAINER_IMAGE_DOCKERFILE: 'Dockerfile'
-  CONTAINER_IMAGE_NAME: 'multi-networkpolicy-iptables'
+  CONTAINER_IMAGE_NAME: 'multi-networkpolicy-nftables'
   CONTAINER_IMAGE_CONTEXT: '${CI_PROJECT_DIR}'
 
 image-push:

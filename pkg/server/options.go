@@ -21,8 +21,8 @@ import (
 	"net"
 	"strings"
 
-	"github.com/k8snetworkplumbingwg/multi-networkpolicy-iptables/pkg/controllers"
 	"github.com/spf13/pflag"
+	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
 
 	nodeutil "k8s.io/component-helpers/node/util"
 	"k8s.io/klog"

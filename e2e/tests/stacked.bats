@@ -15,7 +15,7 @@ setup() {
 }
 
 @test "setup stacked test environments" {
-	kubectl create -f stacked.yml
+	kubectl apply --wait --timeout=${kubewait_timeout} -f stacked.yml
 	run kubectl -n test-stacked wait --for=condition=ready -l app=test-stacked pod --timeout=${kubewait_timeout}
 	[ "$status" -eq  "0" ]
 

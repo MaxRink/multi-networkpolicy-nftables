@@ -3,7 +3,7 @@
 # Note:
 # These test cases, simple, will create simple (one policy for ingress) and test the 
 # traffic policying by ncat (nc) command. In addition, these cases also verifies that
-# simple ip6tables generation check by ip6tables-save and pod-iptable in multi-networkpolicy pod.
+# simple nftables generation check by nftables-save and pod-iptable in multi-networkpolicy pod.
 
 
 setup() {
@@ -17,7 +17,7 @@ setup() {
 
 @test "setup simple test environments" {
 	# create test manifests
-	kubectl create -f simple-v6-ingress-list.yml
+	kubectl apply --wait --timeout=${kubewait_timeout} -f simple-v6-ingress-list.yml
 
 	# verify all pods are available
 	run kubectl -n test-simple-v6-ingress-list wait --for=condition=ready -l app=test-simple-v6-ingress-list pod --timeout=${kubewait_timeout}

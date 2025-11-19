@@ -15,7 +15,7 @@ setup() {
 }
 
 @test "setup ipblock test environments" {
-	kubectl create -f ipblock.yml
+	kubectl apply --wait --timeout=${kubewait_timeout} -f ipblock.yml
 	run kubectl -n test-ipblock wait --for=condition=ready -l app=test-ipblock pod --timeout=${kubewait_timeout}
 	[ "$status" -eq  "0" ]
 

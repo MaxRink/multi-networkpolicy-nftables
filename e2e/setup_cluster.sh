@@ -9,11 +9,12 @@ OCI_BIN="${OCI_BIN:-docker}"
 
 kind_network='kind'
 
-$OCI_BIN build -t localhost:5000/multus-networkpolicy-iptables:e2e -f ../Dockerfile ..
-$OCI_BIN build -t localhost:5000/multi-networkpolicy-iptables:e2e-test -f Dockerfile .
+$OCI_BIN build -t localhost:5000/multus-networkpolicy-nftables:e2e -f ../Dockerfile ..
+$OCI_BIN build -t localhost:5000/multi-networkpolicy-nftables:e2e-test -f Dockerfile .
+$OCI_BIN build -t localhost:5000/install-cni:e2e -f cni.Dockerfile .
 
 # deploy cluster with kind
-cat <<EOF | kind create cluster --config=-
+cat <<EOF | HTTP_PROXY=$DOCKER_PROXY HTTPS_PROXY=$DOCKER_PROXY NO_PROXY="$DOCKER_NO_PROXY,$LOCAL_REGISTRY_NAME" kind create cluster --config=-
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
@@ -25,34 +26,34 @@ networking:
 EOF
 
 # load multus image from container host to kind node
-kind load docker-image localhost:5000/multus-networkpolicy-iptables:e2e
-kind load docker-image localhost:5000/multi-networkpolicy-iptables:e2e-test
+kind load docker-image localhost:5000/multus-networkpolicy-nftables:e2e
+kind load docker-image localhost:5000/multi-networkpolicy-nftables:e2e-test
+kind load docker-image localhost:5000/install-cni:e2e
 
 kind export kubeconfig
 sleep 1
 
 # install calico
-kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.1/manifests/calico.yaml
+kubectl apply --wait --timeout=10s -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.1/manifests/calico.yaml
 kubectl -n kube-system set env daemonset/calico-node FELIX_IGNORELOOSERPF=true
 kubectl -n kube-system set env daemonset/calico-node FELIX_XDPENABLED=false
-
+sleep 3
 kubectl -n kube-system wait --for=condition=available deploy/coredns --timeout=300s
 
 #install multus
-kubectl create -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset.yml
-sleep 3
+kubectl apply --wait --timeout=10s -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset.yml
 kubectl -n kube-system wait --for=condition=ready -l name=multus pod --timeout=660s
-kubectl create -f cni-install.yml
-sleep 3
+kubectl apply --wait --timeout=10s -f cni-install.yml
 kubectl -n kube-system wait --for=condition=ready -l name=cni-plugins pod --timeout=300s
 
 #install bond-cni
-kubectl create -f  https://raw.githubusercontent.com/k8snetworkplumbingwg/bond-cni/refs/heads/master/manifests/bond-cni.yaml
+kubectl apply --wait --timeout=10s -f  https://raw.githubusercontent.com/k8snetworkplumbingwg/bond-cni/refs/heads/master/manifests/bond-cni.yaml
 
 # install multi-networkpolicy API
-kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multi-networkpolicy/master/scheme.yml
+kubectl apply --wait --timeout=10s -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multi-networkpolicy/master/scheme.yml
 
-# install multi-networkpolicy-iptables
-kubectl apply -f multi-network-policy-iptables-e2e.yml
-sleep 3
+# install multi-networkpolicy-nftables
+kubectl apply --wait --timeout=10s -f multi-network-policy-nftables-e2e.yml
 kubectl -n kube-system wait --for=condition=ready -l name=multi-networkpolicy pod --timeout=300s
+
+echo "Kind cluster with multi-networkpolicy-nftables is ready"
