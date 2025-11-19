@@ -13,7 +13,7 @@ $OCI_BIN build -t localhost:5000/multus-networkpolicy-nftables:e2e -f ../Dockerf
 $OCI_BIN build -t localhost:5000/multi-networkpolicy-nftables:e2e-test -f Dockerfile .
 
 # deploy cluster with kind
-cat <<EOF | kind create cluster --config=-
+cat <<EOF | HTTP_PROXY=$DOCKER_PROXY HTTPS_PROXY=$DOCKER_PROXY NO_PROXY="$DOCKER_NO_PROXY,$LOCAL_REGISTRY_NAME" kind create cluster --config=-
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
