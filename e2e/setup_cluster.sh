@@ -9,8 +9,8 @@ OCI_BIN="${OCI_BIN:-docker}"
 
 kind_network='kind'
 
-$OCI_BIN build -t localhost:5000/multus-networkpolicy-iptables:e2e -f ../Dockerfile ..
-$OCI_BIN build -t localhost:5000/multi-networkpolicy-iptables:e2e-test -f Dockerfile .
+$OCI_BIN build -t localhost:5000/multus-networkpolicy-nftables:e2e -f ../Dockerfile ..
+$OCI_BIN build -t localhost:5000/multi-networkpolicy-nftables:e2e-test -f Dockerfile .
 
 # deploy cluster with kind
 cat <<EOF | kind create cluster --config=-
@@ -25,8 +25,8 @@ networking:
 EOF
 
 # load multus image from container host to kind node
-kind load docker-image localhost:5000/multus-networkpolicy-iptables:e2e
-kind load docker-image localhost:5000/multi-networkpolicy-iptables:e2e-test
+kind load docker-image localhost:5000/multus-networkpolicy-nftables:e2e
+kind load docker-image localhost:5000/multi-networkpolicy-nftables:e2e-test
 
 kind export kubeconfig
 sleep 1
@@ -52,7 +52,7 @@ kubectl create -f  https://raw.githubusercontent.com/k8snetworkplumbingwg/bond-c
 # install multi-networkpolicy API
 kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multi-networkpolicy/master/scheme.yml
 
-# install multi-networkpolicy-iptables
-kubectl apply -f multi-network-policy-iptables-e2e.yml
+# install multi-networkpolicy-nftables
+kubectl apply -f multi-network-policy-nftables-e2e.yml
 sleep 3
 kubectl -n kube-system wait --for=condition=ready -l name=multi-networkpolicy pod --timeout=300s

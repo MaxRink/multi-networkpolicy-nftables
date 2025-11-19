@@ -3,7 +3,7 @@
 # Note:
 # These test cases, simple, will create simple (one policy for ingress) and test the 
 # traffic policying by ncat (nc) command. In addition, these cases also verifies that
-# simple iptables generation check by iptables-save and pod-iptable in multi-networkpolicy pod.
+# simple nftables generation check by pod-iptable in multi-networkpolicy pod.
 
 setup() {
 	cd $BATS_TEST_DIRNAME
@@ -26,13 +26,13 @@ setup() {
 }
 
 @test "check generated nft rules" {
-	# check pod-server has multi-networkpolicy iptables rules for ingress
+	# check pod-server has multi-networkpolicy nftables rules for ingress
 	run kubectl -n test-simple-v4-egress exec pod-server -- sh -c "nft list ruleset | grep multi-egress-0"
 	[ "$status" -eq  "0" ]
-	# check pod-client-a has NO multi-networkpolicy iptables rules for ingress
+	# check pod-client-a has NO multi-networkpolicy nftables rules for ingress
 	run kubectl -n test-simple-v4-egress exec pod-client-a -- sh -c "nft list ruleset | grep multi-egress-0"
 	[ "$status" -eq  "1" ]
-	# check pod-client-b has NO multi-networkpolicy iptables rules for ingress
+	# check pod-client-b has NO multi-networkpolicy nftables rules for ingress
 	run kubectl -n test-simple-v4-egress exec pod-client-b -- sh -c "nft list ruleset | grep multi-egress-0"
 	[ "$status" -eq  "1" ]
 }
@@ -61,7 +61,7 @@ setup() {
 	[ "$status" -eq  "1" ]
 }
 
-@test "disable multi-networkpolicy and check iptables rules" {
+@test "disable multi-networkpolicy and check nftables rules" {
  	# disable multi-networkpolicy pods by adding invalid nodeSelector
 	kubectl -n kube-system patch daemonsets multi-networkpolicy-ds-amd64 -p '{"spec": {"template": {"spec": {"nodeSelector": {"non-existing": "true"}}}}}'
 	# check multi-networkpolicy pod is deleted

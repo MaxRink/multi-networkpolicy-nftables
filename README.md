@@ -1,7 +1,7 @@
-# multi-networkpolicy-iptables
-[![build](https://github.com/k8snetworkplumbingwg/multi-networkpolicy-iptables/actions/workflows/build.yml/badge.svg)](https://github.com/k8snetworkplumbingwg/multi-networkpolicy-iptables/actions/workflows/build.yml)[![test](https://github.com/k8snetworkplumbingwg/multi-networkpolicy-iptables/actions/workflows/test.yml/badge.svg)](https://github.com/k8snetworkplumbingwg/multi-networkpolicy-iptables/actions/workflows/test.yml)
+# multi-networkpolicy-nftables
+[![build](https://github.com/telekom/multi-networkpolicy-nftables/actions/workflows/build.yml/badge.svg)](https://github.com/telekom/multi-networkpolicy-nftables/actions/workflows/build.yml)[![test](https://github.com/telekom/multi-networkpolicy-nftables/actions/workflows/test.yml/badge.svg)](https://github.com/telekom/multi-networkpolicy-nftables/actions/workflows/test.yml)
 
-[multi-networkpolicy](https://github.com/k8snetworkplumbingwg/multi-networkpolicy) implementation with iptables
+[multi-networkpolicy](https://github.com/telekom/multi-networkpolicy) implementation with nftables
 
 ## Current Status of the Repository
 
@@ -10,7 +10,7 @@ It is now actively developping hence not stable yet. Bug report and feature requ
 ## Description
 
 Kubernetes provides [Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) for network security. Currently net-attach-def does not support Network Policies because net-attach-def is CRD, user defined resources, outside of Kubernetes.
-multi-network policy implements Network Policiy functionality for net-attach-def, by iptables and provies network security for net-attach-def networks.
+multi-network policy implements Network Policiy functionality for net-attach-def, by nftables and provies network security for net-attach-def networks.
 
 
 ![Multi NetworkPolicy Overview](docs/images/multi-networkpolicy-overview.png)
@@ -26,11 +26,11 @@ $ kubectl create -f scheme.yml
 customresourcedefinition.apiextensions.k8s.io/multi-networkpolicies.k8s.cni.cncf.io created
 ```
 
-Deploy multi-networkpolicie-iptables into Kubernetes.
+Deploy multi-networkpolicie-nftables into Kubernetes.
 
 ```
-$ git clone https://github.com/k8snetworkplumbingwg/multi-networkpolicy-iptables
-$ cd multi-networkpolicy-iptables
+$ git clone https://github.com/telekom/multi-networkpolicy-nftables
+$ cd multi-networkpolicy-nftables
 $ kubectl create -f deploy.yml
 clusterrole.rbac.authorization.k8s.io/multi-networkpolicy created
 clusterrolebinding.rbac.authorization.k8s.io/multi-networkpolicy created
@@ -57,7 +57,7 @@ See [Configurations](docs/configurations.md).
 
 ### MultiNetworkPolicy DaemonSet
 
-MultiNetworkPolicy creates DaemonSet and it runs `multi-networkpolicy-iptables` for each node. `multi-networkpolicy-iptables` watches MultiNetworkPolicy object and creates iptables rules into 'pod's network namespace', not container host and the iptables rules filters packets to interface, based on MultiNetworkPolicy.
+MultiNetworkPolicy creates DaemonSet and it runs `multi-networkpolicy-nftables` for each node. `multi-networkpolicy-nftables` watches MultiNetworkPolicy object and creates nftables rules into 'pod's network namespace', not container host and the nftables rules filters packets to interface, based on MultiNetworkPolicy.
 
 ## TODO
 

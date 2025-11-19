@@ -27,8 +27,6 @@ import (
 
 	"github.com/containernetworking/plugins/pkg/ns"
 
-	"github.com/k8snetworkplumbingwg/multi-networkpolicy-iptables/pkg/controllers"
-	multiutils "github.com/k8snetworkplumbingwg/multi-networkpolicy-iptables/pkg/utils"
 	multiv1beta1 "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/apis/k8s.cni.cncf.io/v1beta1"
 	multiclient "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/client/clientset/versioned"
 	multiinformer "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/client/informers/externalversions"
@@ -36,6 +34,8 @@ import (
 	netdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	netdefclient "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/client/clientset/versioned"
 	netdefinformerv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/client/informers/externalversions"
+	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
+	multiutils "github.com/telekom/multi-networkpolicy-nftables/pkg/utils"
 
 	nftables "github.com/google/nftables"
 	v1 "k8s.io/api/core/v1"

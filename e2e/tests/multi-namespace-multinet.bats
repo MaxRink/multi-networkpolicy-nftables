@@ -28,7 +28,7 @@ setup() {
 	run kubectl -n test-namespace-b wait --all --for=condition=ready pod --timeout=${kubewait_timeout}
 	[ "$status" -eq  "0" ]
 
-	# wait for the iptables to be synced
+	# wait for the nftables to be synced
 	sleep 3
 }
 

@@ -1,4 +1,4 @@
-## Multi-networkpolicy-iptables Configurations
+## Multi-networkpolicy-nftables Configurations
 
 
 ### Command Line Options
@@ -6,7 +6,7 @@
 Most command line options have description in help, so please execute with `--help` to see the option.
 
 ```
-$ ./multi-networkpolicy-iptables --help
+$ ./multi-networkpolicy-nftables --help
 ```
 
 ### Advanced Options

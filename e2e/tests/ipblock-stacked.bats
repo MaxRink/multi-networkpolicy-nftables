@@ -23,7 +23,7 @@ setup() {
 	sleep 5
 }
 
-@test "check generated iptables rules" {
+@test "check generated nftables rules" {
 	run kubectl -n test-ipblock-stacked exec pod-server -it -- sh -c "nft list ruleset | grep multi-ingress-0"
 	[ "$status" -eq  "0" ]
 	run kubectl -n test-ipblock-stacked exec pod-client-a -it -- sh -c "nft list ruleset | grep multi-ingress-0"
