@@ -1105,24 +1105,8 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *Server
 	if nftState == nil {
 		return nil, "", nil, podMockInfo, fmt.Errorf("bootstrapNetfilterRules() returned nil state")
 	}
-	mockServer := &Server{
-		Options: &Options{
-			acceptICMPv6:   true,
-			acceptICMP:     true,
-			allowSrcPrefix: []string{"fc00::/8", "fd00::/8", "10.0.0.1/32", "10.0.1.0/24"},
-			allowDstPrefix: []string{"fe00::/8", "ff00::/8", "10.0.0.2/32", "10.0.2.0/24"},
-		},
-	}
-
+	var mockServer *Server
 	testNs := "testns1"
-	err = nftState.applyCommonChainRules(mockServer)
-	if err != nil {
-		return nftState, testNs, mockServer, podMockInfo, fmt.Errorf("applyCommonChainRules() failed: %w", err)
-	}
-	err = nftState.nft.Flush()
-	if err != nil {
-		return nftState, testNs, mockServer, podMockInfo, fmt.Errorf("nftState.nft.Flush() failed: %w", err)
-	}
 	if createServer {
 		mockServer = NewFakeServer("server")
 		if err := AddNamespace(mockServer, testNs); err != nil {
@@ -1151,7 +1135,23 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *Server
 		if err := AddPod(mockServer, pod2); err != nil {
 			return nftState, testNs, mockServer, podMockInfo, fmt.Errorf("failed to add pod: %w", err)
 		}
+	} else {
+		mockServer = &Server{
+			Options: &Options{
+				acceptICMPv6:   true,
+				acceptICMP:     true,
+				allowSrcPrefix: []string{"fc00::/8", "fd00::/8", "10.0.0.1/32", "10.0.1.0/24"},
+				allowDstPrefix: []string{"fe00::/8", "ff00::/8", "10.0.0.2/32", "10.0.2.0/24"},
+			},
+		}
 	}
-
+	err = nftState.applyCommonChainRules(mockServer)
+	if err != nil {
+		return nftState, testNs, mockServer, podMockInfo, fmt.Errorf("applyCommonChainRules() failed: %w", err)
+	}
+	err = nftState.nft.Flush()
+	if err != nil {
+		return nftState, testNs, mockServer, podMockInfo, fmt.Errorf("nftState.nft.Flush() failed: %w", err)
+	}
 	return nftState, testNs, mockServer, podMockInfo, nil
 }
