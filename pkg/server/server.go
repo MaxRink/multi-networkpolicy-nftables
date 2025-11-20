@@ -93,8 +93,7 @@ type Server struct {
 
 	syncRunner       *runner.BoundedFrequencyRunner
 	syncRunnerStopCh chan struct{}
-
-	stopCh chan struct{}
+	shuttingDown     atomic.Bool
 }
 
 type internalPolicy struct {
@@ -121,7 +120,6 @@ func (s *Server) RunPodConfig() {
 
 // Run ...
 func (s *Server) Run(_ string, stopCh chan struct{}) {
-	s.stopCh = stopCh
 	if s.Broadcaster != nil {
 		s.Broadcaster.StartRecordingToSink(
 			&v1core.EventSinkImpl{Interface: s.Client.CoreV1().Events("")})
@@ -154,10 +152,14 @@ func (s *Server) Run(_ string, stopCh chan struct{}) {
 	s.birthCry()
 
 	// Wait for stop signal
-	<-s.stopCh
+	<-stopCh
+	klog.Info("Shutdown signal received, stopping server...")
+
+	// Signal that we are shutting down and prevent new syncs
+	s.shuttingDown.Store(true)
 
 	// Stop the sync runner loop
-	s.syncRunnerStopCh <- struct{}{}
+	close(s.syncRunnerStopCh)
 
 	// Delete all iptables by running the `syncMultiPolicy` with no MultiNetworkPolicies
 	s.policyMap = nil
@@ -295,17 +297,16 @@ func NewServer(o *Options) (*Server, error) {
 	server.syncRunner = runner.NewBoundedFrequencyRunner(
 		"sync-runner", server.syncMultiPolicy, minSyncPeriod, retryInterval, syncPeriod)
 	server.syncRunnerStopCh = make(chan struct{})
+	server.shuttingDown.Store(false)
 	return server, nil
 }
 
-// Sync ...
 func (s *Server) Sync() {
-	select {
-	case <-s.stopCh:
+	if s.shuttingDown.Load() {
 		klog.V(4).Info("Sync skipped, server is shutting down")
 		return
-	default:
 	}
+
 	if s.syncRunner != nil {
 		s.syncRunner.Run()
 	}

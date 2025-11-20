@@ -9,7 +9,7 @@ OCI_BIN="${OCI_BIN:-docker}"
 
 kind_network='kind'
 
-$OCI_BIN build -t localhost:5000/multus-networkpolicy-nftables:e2e -f ../Dockerfile ..
+$OCI_BIN build -t localhost:5000/multi-networkpolicy-nftables:e2e -f ../Dockerfile ..
 $OCI_BIN build -t localhost:5000/multi-networkpolicy-nftables:e2e-test -f Dockerfile .
 $OCI_BIN build -t localhost:5000/install-cni:e2e -f cni.Dockerfile .
 
@@ -26,7 +26,7 @@ networking:
 EOF
 
 # load multus image from container host to kind node
-kind load docker-image localhost:5000/multus-networkpolicy-nftables:e2e
+kind load docker-image localhost:5000/multi-networkpolicy-nftables:e2e
 kind load docker-image localhost:5000/multi-networkpolicy-nftables:e2e-test
 kind load docker-image localhost:5000/install-cni:e2e
 
