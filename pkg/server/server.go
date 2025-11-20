@@ -55,7 +55,7 @@ import (
 	nodeutil "k8s.io/component-helpers/node/util"
 	"k8s.io/klog"
 	api "k8s.io/kubernetes/pkg/apis/core"
-	"k8s.io/kubernetes/pkg/util/async"
+	"k8s.io/kubernetes/pkg/proxy/runner"
 )
 
 const defaultSyncPeriod = 30
@@ -91,8 +91,9 @@ type Server struct {
 	podLister    corelisters.PodLister
 	policyLister multilisterv1beta1.MultiNetworkPolicyLister
 
-	syncRunner       *async.BoundedFrequencyRunner
+	syncRunner       *runner.BoundedFrequencyRunner
 	syncRunnerStopCh chan struct{}
+	shuttingDown     atomic.Bool
 }
 
 type internalPolicy struct {
@@ -152,13 +153,18 @@ func (s *Server) Run(_ string, stopCh chan struct{}) {
 
 	// Wait for stop signal
 	<-stopCh
+	klog.Info("Shutdown signal received, stopping server...")
+
+	// Signal that we are shutting down and prevent new syncs
+	s.shuttingDown.Store(true)
 
 	// Stop the sync runner loop
-	s.syncRunnerStopCh <- struct{}{}
+	close(s.syncRunnerStopCh)
 
 	// Delete all iptables by running the `syncMultiPolicy` with no MultiNetworkPolicies
 	s.policyMap = nil
-	s.syncMultiPolicy()
+	// Currently not interested in this error as it is already logged.
+	_ = s.syncMultiPolicy()
 }
 
 func (s *Server) setInitialized(value bool) {
@@ -249,7 +255,7 @@ func NewServer(o *Options) (*Server, error) {
 
 	syncPeriod := time.Duration(o.syncPeriod) * time.Second
 	minSyncPeriod := 0 * time.Second
-	burstSyncs := 2
+	retryInterval := 5 * time.Second
 
 	policyChanges := controllers.NewPolicyChangeTracker()
 	if policyChanges == nil {
@@ -288,18 +294,23 @@ func NewServer(o *Options) (*Server, error) {
 		policyMap:     make(controllers.PolicyMap),
 		namespaceMap:  make(controllers.NamespaceMap),
 	}
-	server.syncRunner = async.NewBoundedFrequencyRunner(
-		"sync-runner", server.syncMultiPolicy, minSyncPeriod, syncPeriod, burstSyncs)
+	server.syncRunner = runner.NewBoundedFrequencyRunner(
+		"sync-runner", server.syncMultiPolicy, minSyncPeriod, retryInterval, syncPeriod)
 	server.syncRunnerStopCh = make(chan struct{})
+	server.shuttingDown.Store(false)
 	return server, nil
 }
 
-// Sync ...
 func (s *Server) Sync() {
-	klog.V(4).Infof("Sync Done!")
+	if s.shuttingDown.Load() {
+		klog.V(4).Info("Sync skipped, server is shutting down")
+		return
+	}
+
 	if s.syncRunner != nil {
 		s.syncRunner.Run()
 	}
+	klog.V(4).Infof("Sync Done!")
 }
 
 // AllSynced ...
@@ -446,7 +457,7 @@ func (s *Server) OnNamespaceSynced() {
 	}
 }
 
-func (s *Server) syncMultiPolicy() {
+func (s *Server) syncMultiPolicy() error {
 	klog.V(4).Infof("syncMultiPolicy")
 	s.namespaceMap.Update(s.nsChanges)
 	s.podMap.Update(s.podChanges)
@@ -455,6 +466,7 @@ func (s *Server) syncMultiPolicy() {
 	pods, err := s.podLister.Pods(metav1.NamespaceAll).List(labels.Everything())
 	if err != nil {
 		klog.Errorf("failed to get pods: %v", err)
+		return fmt.Errorf("failed to list pods for sync: %w", err)
 	}
 	for _, p := range pods {
 		s.podMap.Update(s.podChanges)
@@ -500,6 +512,7 @@ func (s *Server) syncMultiPolicy() {
 			klog.V(8).Infof("SYNC %s/%s: skipped", p.Namespace, p.Name)
 		}
 	}
+	return nil
 }
 
 func (s *Server) applyPolicyRulesForPod(pod *v1.Pod, podInfo *controllers.PodInfo, netNs ns.NetNS) error {

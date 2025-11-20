@@ -121,7 +121,7 @@ spec:
       serviceAccountName: multi-networkpolicy
       containers:
       - name: multi-networkpolicy
-        image: localhost:5000/multus-networkpolicy-nftables:e2e
+        image: localhost:5000/multi-networkpolicy-nftables:e2e
         command: ["/usr/bin/multi-networkpolicy-nftables"]
         args:
         - "--host-prefix=/host"
@@ -136,7 +136,7 @@ spec:
         # - "--accept-icmp"
         # - "--accept-icmpv6"
         - "--network-plugins=macvlan,bond"
-        - -v=8
+        - -v=10
         resources:
           requests:
             cpu: "100m"

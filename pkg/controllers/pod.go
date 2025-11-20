@@ -39,8 +39,8 @@ import (
 	coreinformers "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	pb "k8s.io/cri-api/pkg/apis/runtime/v1"
+	k8sutils "k8s.io/cri-client/pkg/util"
 	"k8s.io/klog"
-	k8sutils "k8s.io/kubernetes/pkg/kubelet/util"
 )
 
 // RuntimeKind is enum type variable for container runtime
@@ -563,6 +563,7 @@ func getRuntimeClientConnection(runtimeEndpoint, hostPrefix string) (*grpc.Clien
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	//nolint:staticcheck // ignore SA1019 : grpc.DialContext is deprecated
 	conn, err := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock(), grpc.WithContextDialer(dialer))
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to %s, make sure you are running as root and the runtime has been started: %v", HostRuntimeEndpoint, err)
