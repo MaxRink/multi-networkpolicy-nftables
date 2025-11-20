@@ -136,7 +136,7 @@ spec:
         # - "--accept-icmp"
         # - "--accept-icmpv6"
         - "--network-plugins=macvlan,bond"
-        - -v=8
+        - -v=1
         resources:
           requests:
             cpu: "100m"

@@ -93,6 +93,8 @@ type Server struct {
 
 	syncRunner       *runner.BoundedFrequencyRunner
 	syncRunnerStopCh chan struct{}
+
+	stopCh chan struct{}
 }
 
 type internalPolicy struct {
@@ -119,6 +121,7 @@ func (s *Server) RunPodConfig() {
 
 // Run ...
 func (s *Server) Run(_ string, stopCh chan struct{}) {
+	s.stopCh = stopCh
 	if s.Broadcaster != nil {
 		s.Broadcaster.StartRecordingToSink(
 			&v1core.EventSinkImpl{Interface: s.Client.CoreV1().Events("")})
@@ -151,7 +154,7 @@ func (s *Server) Run(_ string, stopCh chan struct{}) {
 	s.birthCry()
 
 	// Wait for stop signal
-	<-stopCh
+	<-s.stopCh
 
 	// Stop the sync runner loop
 	s.syncRunnerStopCh <- struct{}{}
@@ -297,10 +300,16 @@ func NewServer(o *Options) (*Server, error) {
 
 // Sync ...
 func (s *Server) Sync() {
-	klog.V(4).Infof("Sync Done!")
+	select {
+	case <-s.stopCh:
+		klog.V(4).Info("Sync skipped, server is shutting down")
+		return
+	default:
+	}
 	if s.syncRunner != nil {
 		s.syncRunner.Run()
 	}
+	klog.V(4).Infof("Sync Done!")
 }
 
 // AllSynced ...
@@ -458,7 +467,6 @@ func (s *Server) syncMultiPolicy() error {
 		klog.Errorf("failed to get pods: %v", err)
 		return fmt.Errorf("failed to list pods for sync: %w", err)
 	}
-	var syncError error
 	for _, p := range pods {
 		s.podMap.Update(s.podChanges)
 		if !controllers.IsMultiNetworkpolicyTarget(p) {
@@ -471,9 +479,6 @@ func (s *Server) syncMultiPolicy() error {
 			podInfo, err := s.podMap.GetPodInfo(p)
 			if err != nil {
 				klog.Errorf("cannot get %s/%s podInfo: %v", p.Namespace, p.Name, err)
-				if syncError == nil {
-					syncError = fmt.Errorf("failed to get pod info for %s/%s: %w", p.Namespace, p.Name, err)
-				}
 				continue
 			}
 			if len(podInfo.Interfaces) == 0 {
@@ -488,9 +493,6 @@ func (s *Server) syncMultiPolicy() error {
 			netns, err := ns.GetNS(netnsPath)
 			if err != nil {
 				klog.Errorf("cannot get pod (%s/%s:%s) netns (%s): %v", p.Namespace, p.Name, p.Status.Phase, netnsPath, err)
-				if syncError == nil {
-					syncError = fmt.Errorf("failed to get netns for %s/%s: %w", p.Namespace, p.Name, err)
-				}
 				continue
 			}
 			defer func() {
@@ -504,15 +506,12 @@ func (s *Server) syncMultiPolicy() error {
 			err = s.applyPolicyRulesForPod(p, podInfo, netns)
 			if err != nil {
 				klog.Errorf("can't apply netfilter rules for pod [%s]: %v", podNamespacedName(p), err)
-				if syncError == nil {
-					syncError = fmt.Errorf("can't apply netfilter rules for pod [%s]: %v", podNamespacedName(p), err)
-				}
 			}
 		} else {
 			klog.V(8).Infof("SYNC %s/%s: skipped", p.Namespace, p.Name)
 		}
 	}
-	return syncError
+	return nil
 }
 
 func (s *Server) applyPolicyRulesForPod(pod *v1.Pod, podInfo *controllers.PodInfo, netNs ns.NetNS) error {
