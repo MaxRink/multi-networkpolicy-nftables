@@ -1,6 +1,6 @@
 module github.com/telekom/multi-networkpolicy-nftables
 
-go 1.25.0
+go 1.25.5
 
 require (
 	github.com/containernetworking/cni v1.3.0
