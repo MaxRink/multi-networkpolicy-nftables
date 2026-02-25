@@ -92,18 +92,18 @@ func newConn(s *socket.Conn, config *Config) (*conn, uint32, error) {
 
 // SendMessages serializes multiple Messages and sends them to netlink.
 func (c *conn) SendMessages(messages []Message) error {
-	var buf []byte
-	for _, m := range messages {
+	buffers := make([][]byte, len(messages))
+	for i, m := range messages {
 		b, err := m.MarshalBinary()
 		if err != nil {
 			return err
 		}
 
-		buf = append(buf, b...)
+		buffers[i] = b
 	}
 
 	sa := &unix.SockaddrNetlink{Family: unix.AF_NETLINK}
-	_, err := c.s.Sendmsg(context.Background(), buf, nil, sa, 0)
+	_, err := c.s.SendmsgBuffers(context.Background(), buffers, nil, sa, 0)
 	return err
 }
 
@@ -211,6 +211,14 @@ func (c *conn) SetReadBuffer(bytes int) error { return c.s.SetReadBuffer(bytes) 
 // SetReadBuffer sets the size of the operating system's transmit buffer
 // associated with the Conn.
 func (c *conn) SetWriteBuffer(bytes int) error { return c.s.SetWriteBuffer(bytes) }
+
+// ReadBuffer reads the size of the operating system's receive buffer
+// associated with the Conn.
+func (c *conn) ReadBuffer() (int, error) { return c.s.ReadBuffer() }
+
+// WriteBuffer reads the size of the operating system's transmit buffer
+// associated with the Conn.
+func (c *conn) WriteBuffer() (int, error) { return c.s.WriteBuffer() }
 
 // SyscallConn returns a raw network connection.
 func (c *conn) SyscallConn() (syscall.RawConn, error) { return c.s.SyscallConn() }
