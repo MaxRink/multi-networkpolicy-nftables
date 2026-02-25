@@ -33,6 +33,9 @@ jobs:
     - name: Run go vet
       run: go vet ./...
 
+    - name: Run go env toolchain
+      run: go env -w GOTOOLCHAIN=go${{ matrix.go-version }}+auto
+
 
     - name: Test
       run: sudo modprobe nft_ct && sudo go test -v -coverprofile=profile.cov ./...
