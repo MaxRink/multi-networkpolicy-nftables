@@ -102,10 +102,12 @@ func (c *conn) SendMessages(messages []Message) error {
 
 		buffers[i] = b
 	}
-	for _, b := range buffers {
-		fmt.Printf("buffer[%d]: %x\n", len(b), b)
+	for index, b := range buffers {
+		fmt.Printf("%d: buffer (len(%d) cap(%d)): %x\n", index, len(b), cap(b), b)
 	}
 	sa := &unix.SockaddrNetlink{Family: unix.AF_NETLINK}
+	bufferSize, _ := c.s.GetsockoptInt(unix.SOL_SOCKET, unix.SO_SNDBUF)
+	fmt.Printf("PID [%d]: buffers size: %d, max buffer size: %d\n", sa.Pid, cap(buffers), bufferSize)
 	_, err := c.s.SendmsgBuffers(context.Background(), buffers, nil, sa, 0)
 	return err
 }

@@ -598,6 +598,7 @@ func (cc *Conn) enlargeWriteBuffer(conn *netlink.Conn) error {
 	}
 	fmt.Println("write buffer old size:", writeBuffer, "required size:", messageSize)
 	if writeBuffer < messageSize {
+		fmt.Println("enlarging the message size to", messageSize)
 		return conn.SetWriteBuffer(messageSize)
 	}
 
