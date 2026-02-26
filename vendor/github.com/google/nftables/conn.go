@@ -587,6 +587,7 @@ func (cc *Conn) canEnlargeBuffers() bool {
 // socket library supports multiple iovec entries.
 func (cc *Conn) enlargeWriteBuffer(conn *netlink.Conn) error {
 	if !cc.canEnlargeBuffers() {
+		fmt.Println("not possible to enlarge the buffer")
 		return nil
 	}
 
@@ -595,8 +596,8 @@ func (cc *Conn) enlargeWriteBuffer(conn *netlink.Conn) error {
 	if err != nil {
 		return err
 	}
+	fmt.Println("write buffer old size:", writeBuffer, "required size:", messageSize)
 	if writeBuffer < messageSize {
-		fmt.Println("enlarging write buffer to", messageSize)
 		return conn.SetWriteBuffer(messageSize)
 	}
 
@@ -620,6 +621,7 @@ func (cc *Conn) getDefaultEchoReadBuffer() int {
 // See https://git.netfilter.org/nftables/tree/src/mnl.c?id=713592c6008a8c589a00d3d3d2e49709ff2de62c#n426
 func (cc *Conn) enlargeReadBuffer(conn *netlink.Conn) error {
 	if !cc.canEnlargeBuffers() {
+		fmt.Println("not possible to enlarge the buffer")
 		return nil
 	}
 
