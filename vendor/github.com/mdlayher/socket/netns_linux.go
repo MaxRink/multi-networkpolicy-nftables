@@ -65,7 +65,7 @@ func withNetNS(fd int, fn func() (*Conn, error)) (*Conn, error) {
 		// No more thread-local state manipulation; return the new Conn.
 		runtime.UnlockOSThread()
 		conn = c
-		return err
+		return nil
 	})
 
 	if err := eg.Wait(); err != nil {

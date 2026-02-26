@@ -76,9 +76,6 @@ require (
 
 replace (
 	github.com/gogo/protobuf => github.com/gogo/protobuf v1.3.2
-	github.com/google/nftables => github.com/cellebyte/nftables v0.4.0-rc.1
-	github.com/mdlayher/netlink => github.com/cellebyte/netlink v1.9.0-rc.1
-	github.com/mdlayher/socket => github.com/cellebyte/socket v0.6.0-rc.0
 	golang.org/x/net => golang.org/x/net v0.50.0
 	golang.org/x/text => golang.org/x/text v0.3.8
 	k8s.io/api => k8s.io/api v0.35.1
