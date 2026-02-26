@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -44,8 +45,6 @@ const (
 	// https://git.netfilter.org/nftables/tree/include/linux/netfilter/nf_tables.h?id=d1289bff58e1878c3162f574c603da993e29b113#n429
 	NFTA_SET_ELEM_EXPRESSIONS = 0x11
 )
-
-var allocSetID uint32
 
 // SetDatatype represents a datatype declared by nft.
 type SetDatatype struct {
@@ -166,7 +165,9 @@ var (
 		TypeTimeDay,
 		TypeCGroupV2,
 	}
+)
 
+const (
 	// ctLabelBitSize is defined in https://git.netfilter.org/nftables/tree/src/ct.c.
 	ctLabelBitSize uint32 = 128
 
@@ -243,16 +244,17 @@ func ConcatSetTypeElements(t SetDatatype) []SetDatatype {
 // Set represents an nftables set. Anonymous sets are only valid within the
 // context of a single batch.
 type Set struct {
-	Table      *Table
-	ID         uint32
-	Name       string
-	Anonymous  bool
-	Constant   bool
-	Interval   bool
-	AutoMerge  bool
-	IsMap      bool
-	HasTimeout bool
-	Counter    bool
+	Table        *Table
+	ID           uint32
+	Name         string
+	Anonymous    bool
+	Constant     bool
+	Interval     bool
+	DataInterval bool
+	AutoMerge    bool
+	IsMap        bool
+	HasTimeout   bool
+	Counter      bool
 	// Can be updated per evaluation path, per `nft list ruleset`
 	// indicates that set contains "flags dynamic"
 	// https://git.netfilter.org/libnftnl/tree/include/linux/netfilter/nf_tables.h?id=84d12cfacf8ddd857a09435f3d982ab6250d250c#n298
@@ -291,6 +293,8 @@ type SetElement struct {
 
 	Counter *expr.Counter
 	Comment string
+	// Indicates an unbounded interval [start, ∞) with no end element.
+	IntervalOpen bool
 }
 
 func (s *SetElement) decode(fam byte) func(b []byte) error {
@@ -330,6 +334,9 @@ func (s *SetElement) decode(fam byte) func(b []byte) error {
 				// Try to extract comment from userdata if present
 				if comment, ok := userdata.GetString(userData, userdata.NFTNL_UDATA_SET_ELEM_COMMENT); ok {
 					s.Comment = comment
+				}
+				if userDataFlags, ok := userdata.GetUint32(userData, userdata.NFTNL_UDATA_SET_ELEM_FLAGS); ok {
+					s.IntervalOpen = (userDataFlags & userdata.NFTNL_UDATA_SET_ELEM_F_INTERVAL_OPEN) != 0
 				}
 			case unix.NFTA_SET_ELEM_EXPR:
 				elems, err := parseexprfunc.ParseExprBytesFunc(fam, ad)
@@ -374,119 +381,196 @@ func decodeElement(d []byte) ([]byte, error) {
 func (cc *Conn) SetAddElements(s *Set, vals []SetElement) error {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-	if s.Anonymous {
-		return errors.New("anonymous sets cannot be updated")
-	}
 
-	elements, err := s.makeElemList(vals, s.ID)
-	if err != nil {
+	if s.Anonymous {
+		err := errors.New("anonymous sets cannot be updated")
+		cc.setErr(err)
 		return err
 	}
-	cc.messages = append(cc.messages, netlink.Message{
-		Header: netlink.Header{
-			Type:  netlink.HeaderType((unix.NFNL_SUBSYS_NFTABLES << 8) | unix.NFT_MSG_NEWSETELEM),
-			Flags: netlink.Request | netlink.Acknowledge | netlink.Create,
-		},
-		Data: append(extraHeader(uint8(s.Table.Family), 0), cc.marshalAttr(elements)...),
-	})
+	err := cc.appendElemList(s, vals, nftMsgNewSetElem)
+	if err != nil {
+		cc.setErr(err)
+		return err
+	}
 
 	return nil
 }
 
-func (s *Set) makeElemList(vals []SetElement, id uint32) ([]netlink.Attribute, error) {
+// SetDeleteElements deletes data points from an nftables set.
+func (cc *Conn) SetDeleteElements(s *Set, vals []SetElement) error {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	if s.Anonymous {
+		err := errors.New("anonymous sets cannot be updated")
+		cc.setErr(err)
+		return err
+	}
+	if err := cc.appendElemList(s, vals, nftMsgDelSetElem); err != nil {
+		cc.setErr(err)
+		return err
+	}
+
+	return nil
+}
+
+// SetDestroyElements like SetDeleteElements, but not an error if setelement doesn't exists
+func (cc *Conn) SetDestroyElements(s *Set, vals []SetElement) error {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	if s.Anonymous {
+		err := errors.New("anonymous sets cannot be updated")
+		cc.setErr(err)
+		return err
+	}
+	return cc.appendElemList(s, vals, nftMsgDestroySetElem)
+}
+
+// maxElemBatchSize is the maximum size in bytes of encoded set elements which
+// are sent in one netlink message. The size field of a netlink attribute is a
+// uint16, and 1024 bytes is more than enough for the per-message headers.
+const maxElemBatchSize = math.MaxUint16 - 1024
+
+func (cc *Conn) appendElemList(s *Set, vals []SetElement, msgType nftMsgType) error {
+	if len(vals) == 0 {
+		return nil
+	}
 	var elements []netlink.Attribute
+	batchSize := 0
+	var batches [][]netlink.Attribute
 
 	for i, v := range vals {
-		item := make([]netlink.Attribute, 0)
-		var flags uint32
-		if v.IntervalEnd {
-			flags |= unix.NFT_SET_ELEM_INTERVAL_END
-			item = append(item, netlink.Attribute{Type: unix.NFTA_SET_ELEM_FLAGS | unix.NLA_F_NESTED, Data: binaryutil.BigEndian.PutUint32(flags)})
-		}
-
-		encodedKey, err := netlink.MarshalAttributes([]netlink.Attribute{{Type: unix.NFTA_DATA_VALUE, Data: v.Key}})
+		encodedItem, err := cc.marshalSetElement(s, &v)
 		if err != nil {
-			return nil, fmt.Errorf("marshal key %d: %v", i, err)
+			return fmt.Errorf("marshal item %d: %v", i, err)
 		}
 
-		item = append(item, netlink.Attribute{Type: unix.NFTA_SET_ELEM_KEY | unix.NLA_F_NESTED, Data: encodedKey})
-		if len(v.KeyEnd) > 0 {
-			encodedKeyEnd, err := netlink.MarshalAttributes([]netlink.Attribute{{Type: unix.NFTA_DATA_VALUE, Data: v.KeyEnd}})
-			if err != nil {
-				return nil, fmt.Errorf("marshal key end %d: %v", i, err)
-			}
-			item = append(item, netlink.Attribute{Type: NFTA_SET_ELEM_KEY_END | unix.NLA_F_NESTED, Data: encodedKeyEnd})
-		}
-		if s.HasTimeout && v.Timeout != 0 {
-			// Set has Timeout flag set, which means an individual element can specify its own timeout.
-			item = append(item, netlink.Attribute{Type: unix.NFTA_SET_ELEM_TIMEOUT, Data: binaryutil.BigEndian.PutUint64(uint64(v.Timeout.Milliseconds()))})
-		}
-		// The following switch statement deal with 3 different types of elements.
-		// 1. v is an element of vmap
-		// 2. v is an element of a regular map
-		// 3. v is an element of a regular set (default)
-		switch {
-		case v.VerdictData != nil:
-			// Since VerdictData is not nil, v is vmap element, need to add to the attributes
-			encodedVal := []byte{}
-			encodedKind, err := netlink.MarshalAttributes([]netlink.Attribute{
-				{Type: unix.NFTA_DATA_VALUE, Data: binaryutil.BigEndian.PutUint32(uint32(v.VerdictData.Kind))},
-			})
-			if err != nil {
-				return nil, fmt.Errorf("marshal item %d: %v", i, err)
-			}
-			encodedVal = append(encodedVal, encodedKind...)
-			if len(v.VerdictData.Chain) != 0 {
-				encodedChain, err := netlink.MarshalAttributes([]netlink.Attribute{
-					{Type: unix.NFTA_SET_ELEM_DATA, Data: []byte(v.VerdictData.Chain + "\x00")},
-				})
-				if err != nil {
-					return nil, fmt.Errorf("marshal item %d: %v", i, err)
-				}
-				encodedVal = append(encodedVal, encodedChain...)
-			}
-			encodedVerdict, err := netlink.MarshalAttributes([]netlink.Attribute{
-				{Type: unix.NFTA_SET_ELEM_DATA | unix.NLA_F_NESTED, Data: encodedVal}})
-			if err != nil {
-				return nil, fmt.Errorf("marshal item %d: %v", i, err)
-			}
-			item = append(item, netlink.Attribute{Type: unix.NFTA_SET_ELEM_DATA | unix.NLA_F_NESTED, Data: encodedVerdict})
-		case len(v.Val) > 0:
-			// Since v.Val's length is not 0 then, v is a regular map element, need to add to the attributes
-			encodedVal, err := netlink.MarshalAttributes([]netlink.Attribute{{Type: unix.NFTA_DATA_VALUE, Data: v.Val}})
-			if err != nil {
-				return nil, fmt.Errorf("marshal item %d: %v", i, err)
-			}
-
-			item = append(item, netlink.Attribute{Type: unix.NFTA_SET_ELEM_DATA | unix.NLA_F_NESTED, Data: encodedVal})
-		default:
-			// If niether of previous cases matche, it means 'e' is an element of a regular Set, no need to add to the attributes
-		}
-
-		// Add comment to userdata if present
-		if len(v.Comment) > 0 {
-			userData := userdata.AppendString(nil, userdata.NFTNL_UDATA_SET_ELEM_COMMENT, v.Comment)
-			item = append(item, netlink.Attribute{Type: unix.NFTA_SET_ELEM_USERDATA, Data: userData})
-		}
-
-		encodedItem, err := netlink.MarshalAttributes(item)
-		if err != nil {
-			return nil, fmt.Errorf("marshal item %d: %v", i, err)
+		itemSize := unix.NLA_HDRLEN + len(encodedItem)
+		if batchSize+itemSize > maxElemBatchSize {
+			batches = append(batches, elements)
+			elements = nil
+			batchSize = 0
 		}
 		elements = append(elements, netlink.Attribute{Type: uint16(i+1) | unix.NLA_F_NESTED, Data: encodedItem})
+		batchSize += itemSize
+	}
+	batches = append(batches, elements)
+
+	for _, batch := range batches {
+		encodedElem, err := netlink.MarshalAttributes(batch)
+		if err != nil {
+			return fmt.Errorf("marshal elements: %v", err)
+		}
+
+		message := []netlink.Attribute{
+			{Type: unix.NFTA_SET_ELEM_LIST_SET, Data: []byte(s.Name + "\x00")},
+			{Type: unix.NFTA_SET_ELEM_LIST_SET_ID, Data: binaryutil.BigEndian.PutUint32(s.ID)},
+			{Type: unix.NFTA_SET_ELEM_LIST_TABLE, Data: []byte(s.Table.Name + "\x00")},
+			{Type: unix.NFTA_SET_ELEM_LIST_ELEMENTS | unix.NLA_F_NESTED, Data: encodedElem},
+		}
+
+		cc.messages = append(cc.messages, netlinkMessage{
+			Header: netlink.Header{
+				Type:  msgType.HeaderType(),
+				Flags: netlink.Request | netlink.Create,
+			},
+			Data: append(extraHeader(uint8(s.Table.Family), 0), cc.marshalAttr(message)...),
+		})
+	}
+	return nil
+}
+
+func (cc *Conn) marshalSetElement(s *Set, e *SetElement) ([]byte, error) {
+	item := make([]netlink.Attribute, 0)
+	var flags uint32
+	if e.IntervalEnd {
+		flags |= unix.NFT_SET_ELEM_INTERVAL_END
+		item = append(item, netlink.Attribute{Type: unix.NFTA_SET_ELEM_FLAGS | unix.NLA_F_NESTED, Data: binaryutil.BigEndian.PutUint32(flags)})
 	}
 
-	encodedElem, err := netlink.MarshalAttributes(elements)
+	encodedKey, err := netlink.MarshalAttributes([]netlink.Attribute{{Type: unix.NFTA_DATA_VALUE, Data: e.Key}})
 	if err != nil {
-		return nil, fmt.Errorf("marshal elements: %v", err)
+		return nil, err
 	}
 
-	return []netlink.Attribute{
-		{Type: unix.NFTA_SET_NAME, Data: []byte(s.Name + "\x00")},
-		{Type: unix.NFTA_LOOKUP_SET_ID, Data: binaryutil.BigEndian.PutUint32(id)},
-		{Type: unix.NFTA_SET_TABLE, Data: []byte(s.Table.Name + "\x00")},
-		{Type: unix.NFTA_SET_ELEM_LIST_ELEMENTS | unix.NLA_F_NESTED, Data: encodedElem},
-	}, nil
+	item = append(item, netlink.Attribute{Type: unix.NFTA_SET_ELEM_KEY | unix.NLA_F_NESTED, Data: encodedKey})
+	if len(e.KeyEnd) > 0 {
+		encodedKeyEnd, err := netlink.MarshalAttributes([]netlink.Attribute{{Type: unix.NFTA_DATA_VALUE, Data: e.KeyEnd}})
+		if err != nil {
+			return nil, err
+		}
+		item = append(item, netlink.Attribute{Type: NFTA_SET_ELEM_KEY_END | unix.NLA_F_NESTED, Data: encodedKeyEnd})
+	}
+	if s.HasTimeout && e.Timeout != 0 {
+		// Set has Timeout flag set, which means an individual element can specify its own timeout.
+		item = append(item, netlink.Attribute{Type: unix.NFTA_SET_ELEM_TIMEOUT, Data: binaryutil.BigEndian.PutUint64(uint64(e.Timeout.Milliseconds()))})
+	}
+	// The following switch statement deal with 3 different types of elements.
+	// 1. v is an element of vmap
+	// 2. v is an element of a regular map
+	// 3. v is an element of a regular set (default)
+	switch {
+	case e.VerdictData != nil:
+		// Since VerdictData is not nil, v is vmap element, need to add to the attributes
+		encodedVal := []byte{}
+		encodedKind, err := netlink.MarshalAttributes([]netlink.Attribute{
+			{Type: unix.NFTA_DATA_VALUE, Data: binaryutil.BigEndian.PutUint32(uint32(e.VerdictData.Kind))},
+		})
+		if err != nil {
+			return nil, err
+		}
+		encodedVal = append(encodedVal, encodedKind...)
+		if len(e.VerdictData.Chain) != 0 {
+			encodedChain, err := netlink.MarshalAttributes([]netlink.Attribute{
+				{Type: unix.NFTA_SET_ELEM_DATA, Data: []byte(e.VerdictData.Chain + "\x00")},
+			})
+			if err != nil {
+				return nil, err
+			}
+			encodedVal = append(encodedVal, encodedChain...)
+		}
+		encodedVerdict, err := netlink.MarshalAttributes([]netlink.Attribute{
+			{Type: unix.NFTA_SET_ELEM_DATA | unix.NLA_F_NESTED, Data: encodedVal}})
+		if err != nil {
+			return nil, err
+		}
+		item = append(item, netlink.Attribute{Type: unix.NFTA_SET_ELEM_DATA | unix.NLA_F_NESTED, Data: encodedVerdict})
+	case len(e.Val) > 0:
+		// Since v.Val's length is not 0 then, v is a regular map element, need to add to the attributes
+		encodedVal, err := netlink.MarshalAttributes([]netlink.Attribute{{Type: unix.NFTA_DATA_VALUE, Data: e.Val}})
+		if err != nil {
+			return nil, err
+		}
+
+		item = append(item, netlink.Attribute{Type: unix.NFTA_SET_ELEM_DATA | unix.NLA_F_NESTED, Data: encodedVal})
+	default:
+		// If niether of previous cases matche, it means 'e' is an element of a regular Set, no need to add to the attributes
+	}
+
+	userData := []byte{}
+	// Add comment to userdata if present
+	if len(e.Comment) > 0 {
+		userData = userdata.AppendString(userData, userdata.NFTNL_UDATA_SET_ELEM_COMMENT, e.Comment)
+	}
+	if e.IntervalOpen {
+		userData = userdata.AppendUint32(userData, userdata.NFTNL_UDATA_SET_ELEM_FLAGS, userdata.NFTNL_UDATA_SET_ELEM_F_INTERVAL_OPEN)
+	}
+	if len(userData) > 0 {
+		item = append(item, netlink.Attribute{Type: unix.NFTA_SET_ELEM_USERDATA, Data: userData})
+	}
+
+	if e.Counter != nil {
+		counter, err := expr.Marshal(byte(s.Table.Family), e.Counter)
+		if err != nil {
+			return nil, err
+		}
+		item = append(item, netlink.Attribute{Type: unix.NFTA_SET_ELEM_EXPR | unix.NLA_F_NESTED, Data: counter})
+	}
+
+	encodedItem, err := netlink.MarshalAttributes(item)
+	if err != nil {
+		return nil, err
+	}
+	return encodedItem, nil
 }
 
 // AddSet adds the specified Set.
@@ -498,12 +582,13 @@ func (cc *Conn) AddSet(s *Set, vals []SetElement) error {
 	// Another reference: https://git.netfilter.org/nftables/tree/src
 
 	if s.Anonymous && !s.Constant {
-		return errors.New("anonymous structs must be constant")
+		err := errors.New("anonymous structs must be constant")
+		cc.setErr(err)
+		return err
 	}
 
 	if s.ID == 0 {
-		allocSetID++
-		s.ID = allocSetID
+		s.ID = cc.allocateTransactionID()
 		if s.Anonymous {
 			s.Name = "__set%d"
 			if s.IsMap {
@@ -545,7 +630,7 @@ func (cc *Conn) AddSet(s *Set, vals []SetElement) error {
 	if s.IsMap {
 		// Check if it is vmap case
 		if s.DataType.nftMagic == 1 {
-			// For Verdict data type, the expected magic is 0xfffff0
+			// For Verdict data type, the expected magic is 0xffffff00
 			tableInfo = append(tableInfo, netlink.Attribute{Type: unix.NFTA_SET_DATA_TYPE, Data: binaryutil.BigEndian.PutUint32(uint32(unix.NFT_DATA_VERDICT))},
 				netlink.Attribute{Type: unix.NFTA_SET_DATA_LEN, Data: binaryutil.BigEndian.PutUint32(s.DataType.Bytes)})
 		} else {
@@ -564,7 +649,9 @@ func (cc *Conn) AddSet(s *Set, vals []SetElement) error {
 			{Type: unix.NFTA_DATA_VALUE, Data: binaryutil.BigEndian.PutUint32(uint32(len(vals)))},
 		})
 		if err != nil {
-			return fmt.Errorf("fail to marshal number of elements %d: %v", len(vals), err)
+			err = fmt.Errorf("fail to marshal number of elements %d: %v", len(vals), err)
+			cc.setErr(err)
+			return err
 		}
 		tableInfo = append(tableInfo, netlink.Attribute{Type: unix.NLA_F_NESTED | unix.NFTA_SET_DESC, Data: numberOfElements})
 	}
@@ -577,7 +664,9 @@ func (cc *Conn) AddSet(s *Set, vals []SetElement) error {
 			{Type: unix.NFTA_SET_DESC_SIZE, Data: binaryutil.BigEndian.PutUint32(s.Size)},
 		})
 		if err != nil {
-			return fmt.Errorf("fail to marshal set size description: %w", err)
+			err = fmt.Errorf("fail to marshal set size description: %w", err)
+			cc.setErr(err)
+			return err
 		}
 
 		descBytes = append(descBytes, descSizeBytes...)
@@ -593,21 +682,27 @@ func (cc *Conn) AddSet(s *Set, vals []SetElement) error {
 				{Type: unix.NFTA_DATA_VALUE, Data: binaryutil.BigEndian.PutUint32(v.Bytes)},
 			})
 			if err != nil {
-				return fmt.Errorf("fail to marshal element key size %d: %v", i, err)
+				err = fmt.Errorf("fail to marshal element key size %d: %v", i, err)
+				cc.setErr(err)
+				return err
 			}
 			// Marshal base type size description
 			descSize, err := netlink.MarshalAttributes([]netlink.Attribute{
 				{Type: unix.NFTA_SET_DESC_SIZE, Data: valData},
 			})
 			if err != nil {
-				return fmt.Errorf("fail to marshal base type size description: %w", err)
+				err = fmt.Errorf("fail to marshal base type size description: %w", err)
+				cc.setErr(err)
+				return err
 			}
 			concatDefinition = append(concatDefinition, descSize...)
 		}
 		// Marshal all base type descriptions into concatenation size description
 		concatBytes, err := netlink.MarshalAttributes([]netlink.Attribute{{Type: unix.NLA_F_NESTED | NFTA_SET_DESC_CONCAT, Data: concatDefinition}})
 		if err != nil {
-			return fmt.Errorf("fail to marshal concat definition %v", err)
+			err = fmt.Errorf("fail to marshal concat definition %v", err)
+			cc.setErr(err)
+			return err
 		}
 
 		descBytes = append(descBytes, concatBytes...)
@@ -634,6 +729,10 @@ func (cc *Conn) AddSet(s *Set, vals []SetElement) error {
 		userData = userdata.AppendUint32(userData, userdata.NFTNL_UDATA_SET_MERGE_ELEMENTS, 1)
 	}
 
+	if s.DataInterval {
+		userData = userdata.AppendUint32(userData, userdata.NFTNL_UDATA_SET_DATA_INTERVAL, 1)
+	}
+
 	if len(s.Comment) != 0 {
 		userData = userdata.AppendString(userData, userdata.NFTNL_UDATA_SET_COMMENT, s.Comment)
 	}
@@ -648,33 +747,24 @@ func (cc *Conn) AddSet(s *Set, vals []SetElement) error {
 			{Type: unix.NFTA_SET_ELEM_PAD | unix.NFTA_SET_ELEM_DATA, Data: []byte{}},
 		})
 		if err != nil {
+			cc.setErr(err)
 			return err
 		}
 		tableInfo = append(tableInfo, netlink.Attribute{Type: unix.NLA_F_NESTED | NFTA_SET_ELEM_EXPRESSIONS, Data: data})
 	}
 
-	cc.messages = append(cc.messages, netlink.Message{
+	cc.messages = append(cc.messages, netlinkMessage{
 		Header: netlink.Header{
-			Type:  netlink.HeaderType((unix.NFNL_SUBSYS_NFTABLES << 8) | unix.NFT_MSG_NEWSET),
-			Flags: netlink.Request | netlink.Acknowledge | netlink.Create,
+			Type:  nftMsgNewSet.HeaderType(),
+			Flags: netlink.Request | netlink.Create,
 		},
 		Data: append(extraHeader(uint8(s.Table.Family), 0), cc.marshalAttr(tableInfo)...),
 	})
 
 	// Set the values of the set if initial values were provided.
-	if len(vals) > 0 {
-		hdrType := unix.NFT_MSG_NEWSETELEM
-		elements, err := s.makeElemList(vals, s.ID)
-		if err != nil {
-			return err
-		}
-		cc.messages = append(cc.messages, netlink.Message{
-			Header: netlink.Header{
-				Type:  netlink.HeaderType((unix.NFNL_SUBSYS_NFTABLES << 8) | hdrType),
-				Flags: netlink.Request | netlink.Acknowledge | netlink.Create,
-			},
-			Data: append(extraHeader(uint8(s.Table.Family), 0), cc.marshalAttr(elements)...),
-		})
+	if err := cc.appendElemList(s, vals, nftMsgNewSetElem); err != nil {
+		cc.setErr(err)
+		return err
 	}
 
 	return nil
@@ -688,36 +778,13 @@ func (cc *Conn) DelSet(s *Set) {
 		{Type: unix.NFTA_SET_TABLE, Data: []byte(s.Table.Name + "\x00")},
 		{Type: unix.NFTA_SET_NAME, Data: []byte(s.Name + "\x00")},
 	})
-	cc.messages = append(cc.messages, netlink.Message{
+	cc.messages = append(cc.messages, netlinkMessage{
 		Header: netlink.Header{
-			Type:  netlink.HeaderType((unix.NFNL_SUBSYS_NFTABLES << 8) | unix.NFT_MSG_DELSET),
-			Flags: netlink.Request | netlink.Acknowledge,
+			Type:  nftMsgDelSet.HeaderType(),
+			Flags: netlink.Request,
 		},
 		Data: append(extraHeader(uint8(s.Table.Family), 0), data...),
 	})
-}
-
-// SetDeleteElements deletes data points from an nftables set.
-func (cc *Conn) SetDeleteElements(s *Set, vals []SetElement) error {
-	cc.mu.Lock()
-	defer cc.mu.Unlock()
-	if s.Anonymous {
-		return errors.New("anonymous sets cannot be updated")
-	}
-
-	elements, err := s.makeElemList(vals, s.ID)
-	if err != nil {
-		return err
-	}
-	cc.messages = append(cc.messages, netlink.Message{
-		Header: netlink.Header{
-			Type:  netlink.HeaderType((unix.NFNL_SUBSYS_NFTABLES << 8) | unix.NFT_MSG_DELSETELEM),
-			Flags: netlink.Request | netlink.Acknowledge | netlink.Create,
-		},
-		Data: append(extraHeader(uint8(s.Table.Family), 0), cc.marshalAttr(elements)...),
-	})
-
-	return nil
 }
 
 // FlushSet deletes all data points from an nftables set.
@@ -728,18 +795,18 @@ func (cc *Conn) FlushSet(s *Set) {
 		{Type: unix.NFTA_SET_TABLE, Data: []byte(s.Table.Name + "\x00")},
 		{Type: unix.NFTA_SET_NAME, Data: []byte(s.Name + "\x00")},
 	})
-	cc.messages = append(cc.messages, netlink.Message{
+	cc.messages = append(cc.messages, netlinkMessage{
 		Header: netlink.Header{
-			Type:  netlink.HeaderType((unix.NFNL_SUBSYS_NFTABLES << 8) | unix.NFT_MSG_DELSETELEM),
-			Flags: netlink.Request | netlink.Acknowledge,
+			Type:  nftMsgDelSetElem.HeaderType(),
+			Flags: netlink.Request,
 		},
 		Data: append(extraHeader(uint8(s.Table.Family), 0), data...),
 	})
 }
 
 var (
-	newSetHeaderType = netlink.HeaderType((unix.NFNL_SUBSYS_NFTABLES << 8) | unix.NFT_MSG_NEWSET)
-	delSetHeaderType = netlink.HeaderType((unix.NFNL_SUBSYS_NFTABLES << 8) | unix.NFT_MSG_DELSET)
+	newSetHeaderType = nftMsgNewSet.HeaderType()
+	delSetHeaderType = nftMsgDelSet.HeaderType()
 )
 
 func setsFromMsg(msg netlink.Message) (*Set, error) {
@@ -783,9 +850,8 @@ func setsFromMsg(msg netlink.Message) (*Set, error) {
 		case unix.NFTA_SET_DATA_TYPE:
 			nftMagic := ad.Uint32()
 			// Special case for the data type verdict, in the message it is stored as 0xffffff00 but it is defined as 1
-			if nftMagic == 0xffffff00 {
-				set.KeyType = TypeVerdict
-				break
+			if nftMagic == unix.NFT_DATA_VERDICT {
+				nftMagic = 1
 			}
 			dt, err := parseSetDatatype(nftMagic)
 			if err != nil {
@@ -796,8 +862,16 @@ func setsFromMsg(msg netlink.Message) (*Set, error) {
 			set.DataType.Bytes = binary.BigEndian.Uint32(ad.Bytes())
 		case unix.NFTA_SET_USERDATA:
 			data := ad.Bytes()
-			value, ok := userdata.GetUint32(data, userdata.NFTNL_UDATA_SET_MERGE_ELEMENTS)
-			set.AutoMerge = ok && value == 1
+			if val, ok := userdata.GetString(data, userdata.NFTNL_UDATA_SET_COMMENT); ok {
+				set.Comment = val
+			}
+			if val, ok := userdata.GetUint32(data, userdata.NFTNL_UDATA_SET_MERGE_ELEMENTS); ok {
+				set.AutoMerge = val == 1
+			}
+			if val, ok := userdata.GetUint32(data, userdata.NFTNL_UDATA_SET_DATA_INTERVAL); ok {
+				set.DataInterval = val == 1
+			}
+
 		case unix.NFTA_SET_DESC:
 			nestedAD, err := netlink.NewAttributeDecoder(ad.Bytes())
 			if err != nil {
@@ -838,8 +912,8 @@ func parseSetDatatype(magic uint32) (SetDatatype, error) {
 }
 
 var (
-	newElemHeaderType = netlink.HeaderType((unix.NFNL_SUBSYS_NFTABLES << 8) | unix.NFT_MSG_NEWSETELEM)
-	delElemHeaderType = netlink.HeaderType((unix.NFNL_SUBSYS_NFTABLES << 8) | unix.NFT_MSG_DELSETELEM)
+	newElemHeaderType = nftMsgNewSetElem.HeaderType()
+	delElemHeaderType = nftMsgDelSetElem.HeaderType()
 )
 
 func elementsFromMsg(fam byte, msg netlink.Message) ([]SetElement, error) {
@@ -894,8 +968,8 @@ func (cc *Conn) GetSets(t *Table) ([]*Set, error) {
 
 	message := netlink.Message{
 		Header: netlink.Header{
-			Type:  netlink.HeaderType((unix.NFNL_SUBSYS_NFTABLES << 8) | unix.NFT_MSG_GETSET),
-			Flags: netlink.Request | netlink.Acknowledge | netlink.Dump,
+			Type:  nftMsgGetSet.HeaderType(),
+			Flags: netlink.Request | netlink.Dump,
 		},
 		Data: append(extraHeader(uint8(t.Family), 0), data...),
 	}
@@ -904,9 +978,9 @@ func (cc *Conn) GetSets(t *Table) ([]*Set, error) {
 		return nil, fmt.Errorf("SendMessages: %v", err)
 	}
 
-	reply, err := receiveAckAware(conn, message.Header.Flags)
+	reply, err := cc.receive(conn)
 	if err != nil {
-		return nil, fmt.Errorf("receiveAckAware: %v", err)
+		return nil, fmt.Errorf("receive: %w", err)
 	}
 	var sets []*Set
 	for _, msg := range reply {
@@ -939,8 +1013,8 @@ func (cc *Conn) GetSetByName(t *Table, name string) (*Set, error) {
 
 	message := netlink.Message{
 		Header: netlink.Header{
-			Type:  netlink.HeaderType((unix.NFNL_SUBSYS_NFTABLES << 8) | unix.NFT_MSG_GETSET),
-			Flags: netlink.Request | netlink.Acknowledge,
+			Type:  nftMsgGetSet.HeaderType(),
+			Flags: netlink.Request,
 		},
 		Data: append(extraHeader(uint8(t.Family), 0), data...),
 	}
@@ -949,13 +1023,13 @@ func (cc *Conn) GetSetByName(t *Table, name string) (*Set, error) {
 		return nil, fmt.Errorf("SendMessages: %w", err)
 	}
 
-	reply, err := receiveAckAware(conn, message.Header.Flags)
+	reply, err := cc.receive(conn)
 	if err != nil {
-		return nil, fmt.Errorf("receiveAckAware: %w", err)
+		return nil, fmt.Errorf("receive: %w", err)
 	}
 
 	if len(reply) != 1 {
-		return nil, fmt.Errorf("receiveAckAware: expected to receive 1 message but got %d", len(reply))
+		return nil, fmt.Errorf("receive: expected to receive 1 message but got %d", len(reply))
 	}
 	rs, err := setsFromMsg(reply[0])
 	if err != nil {
@@ -966,26 +1040,64 @@ func (cc *Conn) GetSetByName(t *Table, name string) (*Set, error) {
 	return rs, nil
 }
 
-// GetSetElements returns the elements in the specified set.
-func (cc *Conn) GetSetElements(s *Set) ([]SetElement, error) {
+// getSetElements retrieves elements from a set.
+// If e is empty, all elements are retrieved. Otherwise, only the specified
+// elements are retrieved if they exist in the set.
+// If reset is true, the stateful expressions (e.g., counters) of the elements
+// being retrieved are reset.
+func (cc *Conn) getSetElements(s *Set, e []SetElement, reset bool) ([]SetElement, error) {
 	conn, closer, err := cc.netlinkConn()
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = closer() }()
 
-	data, err := netlink.MarshalAttributes([]netlink.Attribute{
-		{Type: unix.NFTA_SET_TABLE, Data: []byte(s.Table.Name + "\x00")},
-		{Type: unix.NFTA_SET_NAME, Data: []byte(s.Name + "\x00")},
-	})
+	flags := netlink.Request
+	attrs := []netlink.Attribute{
+		{Type: unix.NFTA_SET_ELEM_LIST_TABLE, Data: []byte(s.Table.Name + "\x00")},
+	}
+
+	if s.Name != "" {
+		attrs = append(attrs, netlink.Attribute{Type: unix.NFTA_SET_ELEM_LIST_SET, Data: []byte(s.Name + "\x00")})
+	} else if s.ID > 0 {
+		attrs = append(attrs, netlink.Attribute{Type: unix.NFTA_SET_ELEM_LIST_SET_ID, Data: binaryutil.BigEndian.PutUint32(s.ID)})
+	} else {
+		return nil, fmt.Errorf("set must either have a valid name or ID")
+	}
+
+	if len(e) > 0 {
+		var listAttrs []netlink.Attribute
+		for i, elem := range e {
+			encodedElem, err := cc.marshalSetElement(s, &elem)
+			if err != nil {
+				return nil, err
+			}
+			listAttrs = append(listAttrs, netlink.Attribute{Type: uint16(i) | unix.NLA_F_NESTED, Data: encodedElem})
+		}
+
+		list, err := netlink.MarshalAttributes(listAttrs)
+		if err != nil {
+			return nil, err
+		}
+		attrs = append(attrs, netlink.Attribute{Type: unix.NFTA_SET_ELEM_LIST_ELEMENTS | unix.NLA_F_NESTED, Data: list})
+	} else {
+		flags |= netlink.Dump
+	}
+
+	data, err := netlink.MarshalAttributes(attrs)
 	if err != nil {
 		return nil, err
 	}
 
+	msgType := nftMsgGetSetElem
+	if reset {
+		msgType = nftMsgGetSetElemReset
+	}
+
 	message := netlink.Message{
 		Header: netlink.Header{
-			Type:  netlink.HeaderType((unix.NFNL_SUBSYS_NFTABLES << 8) | unix.NFT_MSG_GETSETELEM),
-			Flags: netlink.Request | netlink.Acknowledge | netlink.Dump,
+			Type:  msgType.HeaderType(),
+			Flags: flags,
 		},
 		Data: append(extraHeader(uint8(s.Table.Family), 0), data...),
 	}
@@ -994,9 +1106,9 @@ func (cc *Conn) GetSetElements(s *Set) ([]SetElement, error) {
 		return nil, fmt.Errorf("SendMessages: %v", err)
 	}
 
-	reply, err := receiveAckAware(conn, message.Header.Flags)
+	reply, err := cc.receive(conn)
 	if err != nil {
-		return nil, fmt.Errorf("receiveAckAware: %v", err)
+		return nil, fmt.Errorf("receive: %w", err)
 	}
 	var elems []SetElement
 	for _, msg := range reply {
@@ -1008,4 +1120,22 @@ func (cc *Conn) GetSetElements(s *Set) ([]SetElement, error) {
 	}
 
 	return elems, nil
+}
+
+// GetSetElements returns the elements in the specified set.
+func (cc *Conn) GetSetElements(s *Set) ([]SetElement, error) {
+	return cc.getSetElements(s, nil, false)
+}
+
+// FindSetElements returns the specified elements in the set.
+func (cc *Conn) FindSetElements(s *Set, e []SetElement) ([]SetElement, error) {
+	return cc.getSetElements(s, e, false)
+}
+
+// ResetSetElements resets the stateful expressions (e.g., counters) of all
+// elements in the specified set. The reset is applied immediately
+// (no Flush is required). The returned elements reflect their state prior to
+// the reset. Requires a kernel version >= 6.3.
+func (cc *Conn) ResetSetElements(s *Set) ([]SetElement, error) {
+	return cc.getSetElements(s, nil, true)
 }

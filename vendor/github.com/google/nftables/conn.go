@@ -17,9 +17,10 @@ package nftables
 import (
 	"errors"
 	"fmt"
+	"iter"
+	"math"
 	"os"
 	"sync"
-	"syscall"
 
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
@@ -38,12 +39,20 @@ type Conn struct {
 	TestDial nltest.Func // for testing only; passed to nltest.Dial
 	NetNS    int         // fd referencing the network namespace netlink will interact with.
 
-	lasting     bool       // establish a lasting connection to be used across multiple netlink operations.
-	mu          sync.Mutex // protects the following state
-	messages    []netlink.Message
-	err         error
-	nlconn      *netlink.Conn // netlink socket using NETLINK_NETFILTER protocol.
-	sockOptions []SockOption
+	lasting      bool       // establish a lasting connection to be used across multiple netlink operations.
+	mu           sync.Mutex // protects the following state
+	messages     []netlinkMessage
+	err          error
+	nlconn       *netlink.Conn // netlink socket using NETLINK_NETFILTER protocol.
+	sockOptions  []SockOption
+	lastID       uint32
+	allocatedIDs uint32
+}
+
+type netlinkMessage struct {
+	Header netlink.Header
+	Data   []byte
+	rule   *Rule
 }
 
 // ConnOption is an option to change the behavior of the nftables Conn returned by Open.
@@ -107,7 +116,9 @@ func WithTestDial(f nltest.Func) ConnOption {
 }
 
 // WithSockOptions sets the specified socket options when creating a new netlink
-// connection.
+// connection. Note that when using WithSockOptions, you are responsible for
+// providing a large-enough read and write buffer, whereas normally, the
+// nftables package automatically enlarges the buffers as needed.
 func WithSockOptions(opts ...SockOption) ConnOption {
 	return func(cc *Conn) {
 		cc.sockOptions = append(cc.sockOptions, opts...)
@@ -146,69 +157,86 @@ func (cc *Conn) netlinkConnUnderLock() (*netlink.Conn, netlinkCloser, error) {
 	return nlconn, func() error { return nlconn.Close() }, nil
 }
 
-func receiveAckAware(nlconn *netlink.Conn, sentMsgFlags netlink.HeaderFlags) ([]netlink.Message, error) {
-	if nlconn == nil {
-		return nil, errors.New("netlink conn is not initialized")
-	}
+// receiveSeq returns an iterator of messages to be read from the provided
+// netlink connection filtering out non-nftables messages. It will stop
+// iterating when the buffer is drained or in the case of a fatal error.
+// Non-fatal errors encountered while receiving messages are yielded along with
+// a zero-value message.
+func (cc *Conn) receiveSeq(conn *netlink.Conn) iter.Seq2[netlink.Message, error] {
+	return func(yield func(netlink.Message, error) bool) {
+		if conn == nil {
+			yield(netlink.Message{}, errors.New("netlink conn is not initialized"))
+			return
+		}
 
-	// first receive will be the message that we expect
-	reply, err := nlconn.Receive()
-	if err != nil {
-		return nil, err
-	}
-
-	if (sentMsgFlags & netlink.Acknowledge) == 0 {
-		// we did not request an ack
-		return reply, nil
-	}
-
-	if (sentMsgFlags & netlink.Dump) == netlink.Dump {
-		// sent message has Dump flag set, there will be no acks
-		// https://github.com/torvalds/linux/blob/7e062cda7d90543ac8c7700fc7c5527d0c0f22ad/net/netlink/af_netlink.c#L2387-L2390
-		return reply, nil
-	}
-
-	if len(reply) != 0 {
-		last := reply[len(reply)-1]
-		for re := last.Header.Type; (re&netlink.Overrun) == netlink.Overrun && (re&netlink.Done) != netlink.Done; re = last.Header.Type {
-			// we are not finished, the message is overrun
-			r, err := nlconn.Receive()
+		for {
+			ready, err := cc.isReadReady(conn)
 			if err != nil {
-				return nil, err
+				yield(netlink.Message{}, err)
+				return
 			}
-			reply = append(reply, r...)
-			last = reply[len(reply)-1]
+
+			// Since SendMessages is blocking and netlink communication is
+			// synchronous, the kernel has already processed the request and queued
+			// any responses by the time SendMessages returns. Therefore, if
+			// isReadReady returns false on the first call, it means there are no
+			// messages coming at all and we can safely exit.
+			if !ready {
+				break
+			}
+
+			replies, err := conn.Receive()
+			if err != nil {
+				// Yield the error but continue iterating
+				if !yield(netlink.Message{}, err) {
+					return
+				}
+				continue
+			}
+
+			if len(replies) == 0 && cc.TestDial != nil {
+				// When using a test dial function, we don't always get a reply for each
+				// sent message. Additionally, there is no buffer to poll for more data,
+				// so we stop here.
+				return
+			}
+
+			for _, msg := range replies {
+				// Filter out non-nftables messages.
+				// In practice, this would only be netlink.Error messages.
+				// Those are handled by the netlink library itself and should be
+				// reported as errors by conn.Receive().
+				subsystem := msg.Header.Type >> 8
+				if subsystem != unix.NFNL_SUBSYS_NFTABLES {
+					continue
+				}
+
+				// Stop iteration if yield returns false
+				if !yield(msg, nil) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// receive will drain the receive buffer of the provided netlink connection
+// and return all received messages, along with the first error encountered,
+// if any.
+func (cc *Conn) receive(conn *netlink.Conn) ([]netlink.Message, error) {
+	var allReplies []netlink.Message
+	var firstErr error
+
+	for msg, err := range cc.receiveSeq(conn) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+			continue
 		}
 
-		if last.Header.Type == netlink.Error && binaryutil.BigEndian.Uint32(last.Data[:4]) == 0 {
-			// we have already collected an ack
-			return reply, nil
-		}
+		allReplies = append(allReplies, msg)
 	}
 
-	// Now we expect an ack
-	ack, err := nlconn.Receive()
-	if err != nil {
-		return nil, err
-	}
-
-	if len(ack) == 0 {
-		// received an empty ack?
-		return reply, nil
-	}
-
-	msg := ack[0]
-	if msg.Header.Type != netlink.Error {
-		// acks should be delivered as NLMSG_ERROR
-		return nil, fmt.Errorf("expected header %v, but got %v", netlink.Error, msg.Header.Type)
-	}
-
-	if binaryutil.BigEndian.Uint32(msg.Data[:4]) != 0 {
-		// if errno field is not set to 0 (success), this is an error
-		return nil, fmt.Errorf("error delivered in message: %v", msg.Data)
-	}
-
-	return reply, nil
+	return allReplies, firstErr
 }
 
 // CloseLasting closes the lasting netlink connection that has been opened using
@@ -241,9 +269,24 @@ func (cc *Conn) CloseLasting() error {
 
 // Flush sends all buffered commands in a single batch to nftables.
 func (cc *Conn) Flush() error {
+	return cc.flush(0)
+}
+
+// FlushWithGenID sends all buffered commands in a single batch to nftables
+// along with the provided gen ID. If the ruleset has changed since the gen ID
+// was retrieved, an ERESTART error will be returned.
+func (cc *Conn) FlushWithGenID(genID uint32) error {
+	return cc.flush(genID)
+}
+
+// flush sends all buffered commands in a single batch to nftables. If genID is
+// non-zero, it will be included in the batch messages.
+func (cc *Conn) flush(genID uint32) error {
 	cc.mu.Lock()
 	defer func() {
 		cc.messages = nil
+		cc.allocatedIDs = 0
+		cc.err = nil
 		cc.mu.Unlock()
 	}()
 	if len(cc.messages) == 0 {
@@ -251,7 +294,7 @@ func (cc *Conn) Flush() error {
 		return nil
 	}
 	if cc.err != nil {
-		return cc.err // serialization error
+		return cc.err
 	}
 	conn, closer, err := cc.netlinkConnUnderLock()
 	if err != nil {
@@ -259,27 +302,125 @@ func (cc *Conn) Flush() error {
 	}
 	defer func() { _ = closer() }()
 
-	if _, err := conn.SendMessages(batch(cc.messages)); err != nil {
+	if err := cc.enlargeWriteBuffer(conn); err != nil {
+		return err
+	}
+	if err := cc.enlargeReadBuffer(conn); err != nil {
+		return err
+	}
+
+	batch, err := batch(cc.messages, genID)
+	if err != nil {
+		return err
+	}
+
+	sentMsgs, err := conn.SendMessages(batch)
+	if err != nil {
 		return fmt.Errorf("SendMessages: %w", err)
 	}
 
-	var errs error
-	// Fetch the requested acknowledgement for each message we sent.
-	for _, msg := range cc.messages {
-		if _, err := receiveAckAware(conn, msg.Header.Flags); err != nil {
-			if errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.ENOBUFS) {
-				// Kernel will only send one error to user space.
-				return err
+	var firstErr error
+
+	seqToMsgMap := cc.getSeqToMsgMap(sentMsgs)
+
+	for reply, err := range cc.receiveSeq(conn) {
+		if err != nil {
+			if firstErr == nil {
+				firstErr = cc.handleReceiveError(seqToMsgMap, err)
 			}
-			errs = errors.Join(errs, err)
+			// Continue receiving further messages even after an error.
+			continue
+		}
+
+		if err := cc.handleEchoReply(seqToMsgMap, reply); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
 
-	if errs != nil {
-		return fmt.Errorf("conn.Receive: %w", errs)
+	return firstErr
+}
+
+// withOpError inspects err to see if it is a *netlink.OpError. If it is, it
+// calls fn with the *netlink.OpError and returns the result. If it is not, it
+// simply returns the err.
+func (cc *Conn) withOpError(err error, fn func(*netlink.OpError) error) error {
+	if err == nil {
+		return nil
+	}
+
+	var opErr *netlink.OpError
+	if errors.As(err, &opErr) {
+		return fn(opErr)
+	}
+
+	return err
+}
+
+// handleReceiveError inspects err to see if it is a *netlink.OpError. If it is,
+// it finds the original sent message using the sequence number from the error,
+// parses its nftMsgType, and returns a new error that includes the nftMsgType
+// string representation. If err is not a *netlink.OpError, it is simply
+// returned as-is.
+func (cc *Conn) handleReceiveError(msgs map[uint32]netlinkMessage, err error) error {
+	if err := cc.withOpError(err, func(opErr *netlink.OpError) error {
+		msg, ok := msgs[opErr.Sequence]
+		if !ok {
+			return opErr
+		}
+		nftMsgType, parseErr := parseNftMsgType(msg.Header.Type)
+		if parseErr != nil {
+			return opErr
+		}
+		return fmt.Errorf("%s: %w", nftMsgType.String(), opErr)
+	}); err != nil {
+		return fmt.Errorf("receive: %w", err)
 	}
 
 	return nil
+}
+
+// getSeqToMsgMap returns a map of the cc.messages that were sent, indexed by
+// their sequence number as included in the sent netlink messages. The returned
+// map will not include the batch begin and end messages.
+func (cc *Conn) getSeqToMsgMap(sentMsgs []netlink.Message) map[uint32]netlinkMessage {
+	seqToMsgMap := make(map[uint32]netlinkMessage)
+	for i, msg := range sentMsgs {
+		if i == 0 || i == len(sentMsgs)-1 {
+			// Skip batch begin and end messages.
+			continue
+		}
+		if i-1 >= len(cc.messages) {
+			// Should not happen, but be defensive.
+			break
+		}
+		// Update the header in the original message, as the sequence number
+		// and possibly other fields have been updated by the the underlying
+		// netlink library.
+		cc.messages[i-1].Header = msg.Header
+		seqToMsgMap[msg.Header.Sequence] = cc.messages[i-1]
+	}
+
+	return seqToMsgMap
+}
+
+func (cc *Conn) handleEchoReply(seqToMsgMap map[uint32]netlinkMessage, reply netlink.Message) error {
+	sentMsg, ok := seqToMsgMap[reply.Header.Sequence]
+	if !ok {
+		// We don't have a record of sending this message, ignore.
+		return nil
+	}
+
+	if sentMsg.Header.Flags&netlink.Echo == 0 {
+		return nil
+	}
+
+	switch reply.Header.Type {
+	case newRuleHeaderType:
+		// The only messages which set the echo flag are rule create messages.
+		return sentMsg.rule.handleCreateReply(reply)
+	default:
+		return nil
+	}
 }
 
 // FlushRuleset flushes the entire ruleset. See also
@@ -287,10 +428,10 @@ func (cc *Conn) Flush() error {
 func (cc *Conn) FlushRuleset() {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-	cc.messages = append(cc.messages, netlink.Message{
+	cc.messages = append(cc.messages, netlinkMessage{
 		Header: netlink.Header{
 			Type:  netlink.HeaderType((unix.NFNL_SUBSYS_NFTABLES << 8) | unix.NFT_MSG_DELTABLE),
-			Flags: netlink.Request | netlink.Acknowledge | netlink.Create,
+			Flags: netlink.Request | netlink.Create,
 		},
 		Data: extraHeader(0, 0),
 	})
@@ -346,26 +487,184 @@ func (cc *Conn) marshalExpr(fam byte, e expr.Any) []byte {
 	return b
 }
 
-func batch(messages []netlink.Message) []netlink.Message {
-	batch := []netlink.Message{
-		{
-			Header: netlink.Header{
-				Type:  netlink.HeaderType(unix.NFNL_MSG_BATCH_BEGIN),
-				Flags: netlink.Request,
-			},
-			Data: extraHeader(0, unix.NFNL_SUBSYS_NFTABLES),
-		},
+// batch wraps the given messages in a batch begin and end message, and returns
+// the resulting slice of netlink messages. If the genID is non-zero, it will be
+// included in both batch messages.
+func batch(messages []netlinkMessage, genID uint32) ([]netlink.Message, error) {
+	batch := make([]netlink.Message, len(messages)+2)
+
+	data := extraHeader(0, unix.NFNL_SUBSYS_NFTABLES)
+
+	if genID > 0 {
+		attr, err := netlink.MarshalAttributes([]netlink.Attribute{
+			{Type: unix.NFNL_BATCH_GENID, Data: binaryutil.BigEndian.PutUint32(genID)},
+		})
+		if err != nil {
+			return nil, err
+		}
+		data = append(data, attr...)
 	}
 
-	batch = append(batch, messages...)
+	batch[0] = netlink.Message{
+		Header: netlink.Header{
+			Type:  netlink.HeaderType(unix.NFNL_MSG_BATCH_BEGIN),
+			Flags: netlink.Request,
+		},
+		Data: data,
+	}
 
-	batch = append(batch, netlink.Message{
+	for i, msg := range messages {
+		batch[i+1] = netlink.Message{
+			Header: msg.Header,
+			Data:   msg.Data,
+		}
+	}
+
+	batch[len(messages)+1] = netlink.Message{
 		Header: netlink.Header{
 			Type:  netlink.HeaderType(unix.NFNL_MSG_BATCH_END),
 			Flags: netlink.Request,
 		},
-		Data: extraHeader(0, unix.NFNL_SUBSYS_NFTABLES),
-	})
+		Data: data,
+	}
 
-	return batch
+	return batch, nil
+}
+
+// allocateTransactionID allocates an identifier which is only valid in the
+// current transaction.
+func (cc *Conn) allocateTransactionID() uint32 {
+	if cc.allocatedIDs == math.MaxUint32 {
+		panic(fmt.Sprintf("trying to allocate more than %d IDs in a single nftables transaction", math.MaxUint32))
+	}
+	// To make it more likely to catch when a transaction ID is erroneously used
+	// in a later transaction, cc.lastID is not reset after each transaction;
+	// instead it is only reset once it rolls over from math.MaxUint32 to 0.
+	cc.allocatedIDs++
+	cc.lastID++
+	if cc.lastID == 0 {
+		cc.lastID = 1
+	}
+	return cc.lastID
+}
+
+// getMessageSize returns the total size of all messages in the buffer.
+func (cc *Conn) getMessageSize() int {
+	var total int
+	for _, msg := range cc.messages {
+		total += len(msg.Data) + unix.NLMSG_HDRLEN
+	}
+	return total
+}
+
+// canEnlargeBuffers returns true if the connection can automatically enlarge
+// the write and read buffers of the netlink connection.
+func (cc *Conn) canEnlargeBuffers() bool {
+	// If there are sock options, we assume that the user has already set the
+	// buffers to a fixed size.
+	if len(cc.sockOptions) > 0 {
+		return false
+	}
+
+	if cc.TestDial != nil {
+		return false
+	}
+
+	return true
+}
+
+// enlargeWriteBuffer automatically sets the write buffer of the given
+// connection to the accumulated message size. This is only done if the current
+// write buffer is smaller than the message size.
+//
+// nftables actually handles this differently, it multiplies the number of
+// iovec entries by 2MB. This is not possible to do here as our underlying
+// netlink and socket libraries will only add a single iovec entry and
+// won't expose the number of entries.
+// https://git.netfilter.org/nftables/tree/src/mnl.c?id=713592c6008a8c589a00d3d3d2e49709ff2de62c#n262
+//
+// TODO: Update this function to mimic the behavior of nftables once our
+// socket library supports multiple iovec entries.
+func (cc *Conn) enlargeWriteBuffer(conn *netlink.Conn) error {
+	if !cc.canEnlargeBuffers() {
+		return nil
+	}
+
+	messageSize := cc.getMessageSize()
+	writeBuffer, err := conn.WriteBuffer()
+	if err != nil {
+		return err
+	}
+	if writeBuffer < messageSize {
+		return conn.SetWriteBuffer(messageSize)
+	}
+
+	return nil
+}
+
+// getDefaultEchoReadBuffer returns the minimum read buffer size for batches
+// with echo messages.
+//
+// See https://git.netfilter.org/libmnl/tree/include/libmnl/libmnl.h?id=03da98bcd284d55212bc79e91dfb63da0ef7b937#n20
+// and https://git.netfilter.org/nftables/tree/src/mnl.c?id=713592c6008a8c589a00d3d3d2e49709ff2de62c#n391
+func (cc *Conn) getDefaultEchoReadBuffer() int {
+	pageSize := os.Getpagesize()
+	return max(pageSize, 8192) * 1024
+}
+
+// enlargeReadBuffer automatically sets the read buffer of the given connection
+// to the required size. This is only done if the current read buffer is smaller
+// than the required size.
+//
+// See https://git.netfilter.org/nftables/tree/src/mnl.c?id=713592c6008a8c589a00d3d3d2e49709ff2de62c#n426
+func (cc *Conn) enlargeReadBuffer(conn *netlink.Conn) error {
+	if !cc.canEnlargeBuffers() {
+		return nil
+	}
+
+	var bufferSize int
+
+	// If there are any messages with the Echo flag, we initialize the buffer size
+	// to the default echo read buffer size.
+	for _, msg := range cc.messages {
+		if msg.Header.Flags&netlink.Echo == 0 {
+			bufferSize = cc.getDefaultEchoReadBuffer()
+			break
+		}
+	}
+
+	// Just like nftables, we allocate 1024 bytes for each message in the batch.
+	requiredSize := len(cc.messages) * 1024
+	if bufferSize < requiredSize {
+		bufferSize = requiredSize
+	}
+
+	currSize, err := conn.ReadBuffer()
+	if err != nil {
+		return err
+	}
+	if currSize < bufferSize {
+		return conn.SetReadBuffer(bufferSize)
+	}
+	return nil
+}
+
+// getPortIDUnderLock returns the netlink port ID associated with this
+// connection. It must be called while holding the Conn.mu lock.
+func (cc *Conn) getPortIDUnderLock() (uint32, error) {
+	conn, closer, err := cc.netlinkConnUnderLock()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = closer() }()
+
+	return conn.PID(), nil
+}
+
+// GetPortID returns the netlink port ID associated with this connection.
+func (cc *Conn) GetPortID() (uint32, error) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	pid, err := cc.getPortIDUnderLock()
+	return pid, err
 }

@@ -10,8 +10,8 @@ jobs:
   test:
     strategy:
       matrix:
-        go-version: [1.24.x]
-        os: [ubuntu-22.04, ubuntu-24.04]
+        go-version: ["1.25.5"]
+        os: [ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
     - name: Install Go
@@ -33,15 +33,19 @@ jobs:
     - name: Run go vet
       run: go vet ./...
 
+    - name: Run go env toolchain
+      run: go env -w GOTOOLCHAIN=go${{ matrix.go-version }}+auto
+
 
     - name: Test
       run: sudo modprobe nft_ct && sudo go test -v -coverprofile=profile.cov ./...
 
     - name: Send coverage
       uses: shogo82148/actions-goveralls@v1
+      continue-on-error: true
       with:
         path-to-profile: profile.cov
-        flag-name: Go-${{ matrix.go }}
+        flag-name: "Go-${{ matrix.go-version }}-${{ matrix.os }}"
         parallel: true
 
   # notifies that all test jobs are finished.
@@ -50,5 +54,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: shogo82148/actions-goveralls@v1
+        continue-on-error: true
         with:
           parallel-finished: true

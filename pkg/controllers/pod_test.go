@@ -58,7 +58,7 @@ func (f *FakePodConfigStub) OnPodSynced() {
 
 func NewFakePodConfig(stub *FakePodConfigStub) *PodConfig {
 	configSync := 15 * time.Minute
-	fakeClient := fake.NewSimpleClientset()
+	fakeClient := fake.NewClientset()
 	informerFactory := informers.NewSharedInformerFactoryWithOptions(fakeClient, configSync)
 	podConfig := NewPodConfig(informerFactory.Core().V1().Pods(), configSync)
 	podConfig.RegisterEventHandler(stub)

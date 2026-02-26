@@ -19,9 +19,9 @@ package controllers
 import (
 	"time"
 
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"k8s.io/api/core/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 
@@ -54,7 +54,7 @@ func (f *FakeNamespaceConfigStub) OnNamespaceSynced() {
 
 func NewFakeNamespaceConfig(stub *FakeNamespaceConfigStub) *NamespaceConfig {
 	configSync := 15 * time.Minute
-	fakeClient := fake.NewSimpleClientset()
+	fakeClient := fake.NewClientset()
 	informerFactory := informers.NewSharedInformerFactoryWithOptions(fakeClient, configSync)
 	nsConfig := NewNamespaceConfig(informerFactory.Core().V1().Namespaces(), configSync)
 	nsConfig.RegisterEventHandler(stub)

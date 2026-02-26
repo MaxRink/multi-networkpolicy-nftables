@@ -967,7 +967,7 @@ var informerFactory informers.SharedInformerFactory
 
 // NewFakeServer creates fake server object for unit-test
 func NewFakeServer(hostname string) *Server {
-	fakeClient := k8sfake.NewSimpleClientset()
+	fakeClient := k8sfake.NewClientset()
 	netClient := netfake.NewSimpleClientset()
 	policyClient := multifake.NewSimpleClientset()
 
