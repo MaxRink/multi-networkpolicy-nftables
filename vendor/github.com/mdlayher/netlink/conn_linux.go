@@ -93,22 +93,20 @@ func newConn(s *socket.Conn, config *Config) (*conn, uint32, error) {
 
 // SendMessages serializes multiple Messages and sends them to netlink.
 func (c *conn) SendMessages(messages []Message) error {
-	buffers := make([][]byte, len(messages))
-	for i, m := range messages {
+	var buf []byte
+	for _, m := range messages {
 		b, err := m.MarshalBinary()
 		if err != nil {
 			return err
 		}
 
-		buffers[i] = b
+		buf = append(buf, b...)
 	}
-	for index, b := range buffers {
-		fmt.Printf("%d: buffer (len(%d) cap(%d)): %x\n", index, len(b), cap(b), b)
-	}
+
 	sa := &unix.SockaddrNetlink{Family: unix.AF_NETLINK}
 	bufferSize, _ := c.s.GetsockoptInt(unix.SOL_SOCKET, unix.SO_SNDBUF)
-	fmt.Printf("PID [%d]: buffers size: %d, max buffer size: %d\n", sa.Pid, cap(buffers), bufferSize)
-	_, err := c.s.SendmsgBuffers(context.Background(), buffers, nil, sa, 0)
+	fmt.Printf("PID [%d]: buffers size: %d, max buffer size: %d\n", sa.Pid, cap(buf), bufferSize)
+	_, err := c.s.Sendmsg(context.Background(), buf, nil, sa, 0)
 	return err
 }
 

@@ -13,10 +13,10 @@ github.com/asaskevich/govalidator v0.0.0-20190424111038-f61b66f89f4a/go.mod h1:l
 github.com/aymanbagabas/go-osc52/v2 v2.0.1/go.mod h1:uYgXzlJ7ZpABp8OJ+exZzJJhRNQ2ASbcXHWsFqH8hp8=
 github.com/aymanbagabas/go-udiff v0.2.0/go.mod h1:RE4Ex0qsGkTAJoQdQQCA0uG+nAzJO/pI/QwceO5fgrA=
 github.com/bits-and-blooms/bitset v1.22.0/go.mod h1:7hO7Gc7Pp1vODcmWvKMRA9BNmbv6a/7QIWpPxHddWR8=
-github.com/cellebyte/netlink v1.9.0-rc.2 h1:jvXHLBon6QCnlljlZqn2txThfgpiM47AQrZEgG6Mm7M=
-github.com/cellebyte/netlink v1.9.0-rc.2/go.mod h1:JVS396/XsyadqrXigRedyb1Q7yEfSq95lheQxgyQ6xA=
-github.com/cellebyte/nftables v0.4.0-rc.3 h1:F+oguM64AkskWKWDNU2Rpanr2ueGohorbJLeR4QxXN8=
-github.com/cellebyte/nftables v0.4.0-rc.3/go.mod h1:bO66OgH2si7rfzbklkjSSVAdTgGC6i+ycq0WMF0xkZ0=
+github.com/cellebyte/netlink v1.9.0-rc.4 h1:80FDE3VvRage2zf7ETSUudGGtSZB/lOT6C41Eklp3oc=
+github.com/cellebyte/netlink v1.9.0-rc.4/go.mod h1:JVS396/XsyadqrXigRedyb1Q7yEfSq95lheQxgyQ6xA=
+github.com/cellebyte/nftables v0.4.0-rc.4 h1:Hq0W2yUQ+Tj467rxz5NRecDWbAm7vIc1XkXDFSzavLI=
+github.com/cellebyte/nftables v0.4.0-rc.4/go.mod h1:0L9aSnGjheT4IoTZ6gje9wijxXGRq/RsEk3S7QSpf5U=
 github.com/cellebyte/socket v0.6.0-rc.0 h1:b/YRSXa9RoOqLsXlX8Vnpg+5EJDn+LuFjAN3REd5U3I=
 github.com/cellebyte/socket v0.6.0-rc.0/go.mod h1:TjPLHI1UgwEv5J1B5q0zTZq12A/6H7nKmtTanQE37IQ=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
