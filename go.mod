@@ -5,7 +5,7 @@ go 1.25.5
 require (
 	github.com/containernetworking/cni v1.3.0
 	github.com/containernetworking/plugins v1.9.0
-	github.com/google/nftables v0.3.0
+	github.com/google/nftables v0.3.1-0.20251119083706-1db35da82052
 	github.com/k8snetworkplumbingwg/multi-networkpolicy v1.0.1
 	github.com/k8snetworkplumbingwg/network-attachment-definition-client v1.7.7
 	github.com/mdlayher/netlink v1.8.1-0.20251028132421-dcc6cab9a6eb
@@ -15,7 +15,7 @@ require (
 	github.com/spf13/pflag v1.0.10
 	github.com/vishvananda/netns v0.0.5
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
-	golang.org/x/net v0.50.0
+	golang.org/x/net v0.51.0
 	golang.org/x/sys v0.41.0
 	google.golang.org/grpc v1.79.1
 	k8s.io/api v0.35.1
@@ -76,8 +76,8 @@ require (
 
 replace (
 	github.com/gogo/protobuf => github.com/gogo/protobuf v1.3.2
-	github.com/google/nftables => github.com/cellebyte/nftables v0.4.0-rc.0
-	github.com/mdlayher/netlink => github.com/cellebyte/netlink v1.9.0-rc.0
+	github.com/google/nftables => github.com/cellebyte/nftables v0.4.0-rc.1
+	github.com/mdlayher/netlink => github.com/cellebyte/netlink v1.9.0-rc.1
 	github.com/mdlayher/socket => github.com/cellebyte/socket v0.6.0-rc.0
 	golang.org/x/net => golang.org/x/net v0.50.0
 	golang.org/x/text => golang.org/x/text v0.3.8
