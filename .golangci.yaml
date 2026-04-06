@@ -7,7 +7,6 @@ linters:
     - errcheck
     - gocyclo
     - gosec
-    - gosimple
     - govet
     - ineffassign
     - misspell
