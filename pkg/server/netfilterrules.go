@@ -136,7 +136,7 @@ func bootstrapNetfilterChains(nftState *nftState) {
 func addTable(nft *nftables.Conn, table *nftables.Table) (*nftables.Table, error) {
 	t, err := nft.ListTableOfFamily(table.Name, table.Family)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("failed to check existance of table %q: %w", table.Name, err)
+		return nil, fmt.Errorf("failed to check existence of table %q: %w", table.Name, err)
 	} else if err != nil && errors.Is(err, os.ErrNotExist) {
 		klog.V(8).Infof("adding table %q", table.Name)
 		t = nft.AddTable(table)
@@ -348,7 +348,7 @@ func (n *nftState) updateRule(rule *nftables.Rule, action func(r *nftables.Rule)
 			}
 		}
 		if err := n.nft.DelRule(existingRule); err != nil {
-			return isNew, fmt.Errorf("failed to delete exsting rule: %w", err)
+			return isNew, fmt.Errorf("failed to delete existing rule: %w", err)
 		}
 		action(rule)
 	} else {
@@ -474,7 +474,7 @@ func (n *nftState) updateSet(set *nftables.Set, elements []nftables.SetElement) 
 
 	klog.V(8).Infof("adding set %q, table %q", set.Name, set.Table.Name)
 	if err := n.nft.AddSet(set, elements); err != nil {
-		return fmt.Errorf("failed to add interface set: %v", err)
+		return fmt.Errorf("failed to add interface set: %w", err)
 	}
 
 	n.sets[fmt.Sprintf("%s-%s", set.Table.Name, set.Name)] = set
@@ -1765,7 +1765,9 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 			for _, rule := range rules {
 				key, err := hash(rule)
 				if err != nil {
-					klog.Warning("failed to get key for rule: %w", err)
+					comment, _ := userdata.GetString(rule.UserData, userdata.TypeComment)
+					klog.Warningf("failed to get key for rule %q in chain %q: %v", comment, rule.Chain.Name, err)
+					continue
 				}
 				if _, exists := n.rules[key]; !exists {
 					comment, _ := userdata.GetString(rule.UserData, userdata.TypeComment)
