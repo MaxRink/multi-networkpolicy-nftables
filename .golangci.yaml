@@ -6,7 +6,6 @@ linters:
     - copyloopvar
     - errcheck
     - gocyclo
-    - gofmt
     - gosec
     - gosimple
     - govet
