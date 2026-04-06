@@ -49,7 +49,7 @@ $ kubectl create -f scheme.yml
 customresourcedefinition.apiextensions.k8s.io/multi-networkpolicies.k8s.cni.cncf.io created
 ```
 
-Deploy multi-networkpolicie-nftables into Kubernetes.
+Deploy multi-networkpolicy-nftables into Kubernetes.
 
 ```
 $ git clone https://github.com/telekom/multi-networkpolicy-nftables
