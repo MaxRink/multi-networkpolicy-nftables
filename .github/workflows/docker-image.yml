@@ -12,6 +12,7 @@ jobs:
     name: Docker build
     runs-on: ${{ matrix.runner }}
     permissions:
+      contents: read
       packages: write
     strategy:
       matrix:
@@ -73,6 +74,7 @@ jobs:
   publish-image:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       packages: write
     needs:
       - build-images
