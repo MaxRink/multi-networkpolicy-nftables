@@ -603,12 +603,8 @@ func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controlle
 	}
 
 	// Stable sort by policy name
-	slices.SortFunc(ingressPolicies, func(a, b internalPolicy) int {
-		return strings.Compare(fmt.Sprintf("%s/%s", a.policy.GetNamespace(), a.policy.GetName()), fmt.Sprintf("%s/%s", b.policy.GetNamespace(), b.policy.GetName()))
-	})
-	slices.SortFunc(egressPolicies, func(a, b internalPolicy) int {
-		return strings.Compare(fmt.Sprintf("%s/%s", a.policy.GetNamespace(), a.policy.GetName()), fmt.Sprintf("%s/%s", b.policy.GetNamespace(), b.policy.GetName()))
-	})
+	slices.SortStableFunc(ingressPolicies, CompareInternalPolicy)
+	slices.SortStableFunc(egressPolicies, CompareInternalPolicy)
 
 	if len(ingressPolicies) > 0 {
 		forceUpdate := false
