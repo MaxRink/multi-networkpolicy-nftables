@@ -558,10 +558,9 @@ func getRuntimeClientConnection(runtimeEndpoint, hostPrefix string) (*grpc.Clien
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	//nolint:staticcheck // ignore SA1019 : grpc.DialContext is deprecated
-	conn, err := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock(), grpc.WithContextDialer(dialer))
+	// grpc.NewClient establishes a lazy connection (no blocking dial).
+	// Connection errors surface on the first RPC call, not here.
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(dialer))
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to %s, make sure you are running as root and the runtime has been started: %v", HostRuntimeEndpoint, err)
 	}
