@@ -57,6 +57,22 @@ wait_for_net1_ip() {
 	return 1
 }
 
+wait_for_net1_ip6() {
+	local ns="$1" pod="$2" ip="" attempts=0
+	while [ $attempts -lt 30 ]; do
+		ip=$(kubectl exec -n "$ns" "$pod" -- ip -j a show 2>/dev/null | jq -r \
+			'.[]|select(.ifname=="net1")|.addr_info[]|select(.family=="inet6" and .scope=="global").local' 2>/dev/null)
+		if [ -n "$ip" ]; then
+			echo "$ip"
+			return 0
+		fi
+		sleep 1
+		attempts=$((attempts + 1))
+	done
+	echo "ERROR: could not resolve net1 IPv6 address for $ns/$pod after 30s" >&2
+	return 1
+}
+
 # wait_for_nft_rule polls until the given pod has an nft rule matching the pattern.
 # Usage: wait_for_nft_rule <namespace> <pod> <grep-pattern> [timeout_seconds]
 wait_for_nft_rule() {

@@ -8,11 +8,11 @@
 setup() {
 	cd $BATS_TEST_DIRNAME
 	load "common"
-	pod_a1_net1=$(get_net1_ip "test-namespace-a" "pod-a-1")
-	pod_a2_net1=$(get_net1_ip "test-namespace-a" "pod-a-2")
+	pod_a1_net1=$(wait_for_net1_ip "test-namespace-a" "pod-a-1")
+	pod_a2_net1=$(wait_for_net1_ip "test-namespace-a" "pod-a-2")
 
-	pod_b1_net1=$(get_net1_ip "test-namespace-b" "pod-b-1")
-	pod_b2_net1=$(get_net1_ip "test-namespace-b" "pod-b-2")
+	pod_b1_net1=$(wait_for_net1_ip "test-namespace-b" "pod-b-1")
+	pod_b2_net1=$(wait_for_net1_ip "test-namespace-b" "pod-b-2")
 	
 }
 

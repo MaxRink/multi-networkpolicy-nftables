@@ -9,9 +9,9 @@
 setup() {
 	cd $BATS_TEST_DIRNAME
 	load "common"
-	server_net1=$(get_net1_ip6 "test-simple-v6-ingress" "pod-server")
-	client_a_net1=$(get_net1_ip6 "test-simple-v6-ingress" "pod-client-a")
-	client_b_net1=$(get_net1_ip6 "test-simple-v6-ingress" "pod-client-b")
+	server_net1=$(wait_for_net1_ip6 "test-simple-v6-ingress" "pod-server")
+	client_a_net1=$(wait_for_net1_ip6 "test-simple-v6-ingress" "pod-client-a")
+	client_b_net1=$(wait_for_net1_ip6 "test-simple-v6-ingress" "pod-client-b")
 }
 
 @test "setup simple test environments" {
