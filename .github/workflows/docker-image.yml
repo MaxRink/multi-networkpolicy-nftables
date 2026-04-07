@@ -13,7 +13,6 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
-      actions: write
       packages: write
     strategy:
       matrix:

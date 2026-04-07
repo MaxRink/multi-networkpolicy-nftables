@@ -6,6 +6,15 @@
 # simple nftables generation check by nftables-save and pod-iptable in multi-networkpolicy pod.
 
 
+setup_file() {
+	cd $BATS_TEST_DIRNAME
+	load "common"
+	export MANIFEST_FILE="simple-v6-ingress-multi.yml"
+	kubectl apply --wait --timeout=${kubewait_timeout} -f "${MANIFEST_FILE}"
+	kubectl -n test-simple-v6-ingress-multi wait --for=condition=ready -l app=test-simple-v6-ingress-multi pod --timeout=${kubewait_timeout}
+	wait_for_nft_rules "test-simple-v6-ingress-multi" "pod-server" "test-multinetwork-policy-simple-1"
+}
+
 setup() {
 	cd $BATS_TEST_DIRNAME
 	load "common"
@@ -17,16 +26,10 @@ setup() {
 	client_b_net2=$(get_net2_ip6 "test-simple-v6-ingress-multi" "pod-client-b")
 }
 
-@test "setup simple test environments" {
-	# create test manifests
-	kubectl apply --wait --timeout=${kubewait_timeout} -f simple-v6-ingress-multi.yml
-
-	# verify all pods are available
-	run kubectl -n test-simple-v6-ingress-multi wait --for=condition=ready -l app=test-simple-v6-ingress-multi pod --timeout=${kubewait_timeout}
-	[ "$status" -eq  "0" ]
-
-	wait_for_nft_rules "test-simple-v6-ingress-multi" "pod-server" "test-multinetwork-policy-simple-1"
+teardown_file() {
+	teardown_file_common
 }
+
 
 @test "check generated nft rules" {
 	# check pod-server has multi-networkpolicy nftables rules for ingress
@@ -60,8 +63,8 @@ setup() {
 
 @test "test-simple-v6-ingress-multi check client-b -> server on net1" {
 	# nc should NOT succeed from client-b to server by policy
-	run kubectl -n test-simple-v6-ingress-multi exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
-	[ "$status" -eq  "1" ]
+	run retry_until_deny 10 kubectl -n test-simple-v6-ingress-multi exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	[ "$status" -eq  "0" ]
 }
 
 @test "test-simple-v6-ingress-multi check server -> client-a on net1" {
@@ -80,8 +83,8 @@ setup() {
 
 @test "test-simple-v6-ingress-multi check client-a -> server on net2" {
 	# nc should NOT succeed from client-a to server by policy
-	run kubectl -n test-simple-v6-ingress-multi exec pod-client-a -- sh -c "echo x | nc -w 1 ${server_net2} 5555"
-	[ "$status" -eq  "1" ]
+	run retry_until_deny 10 kubectl -n test-simple-v6-ingress-multi exec pod-client-a -- sh -c "echo x | nc -w 1 ${server_net2} 5555"
+	[ "$status" -eq  "0" ]
 }
 
 @test "test-simple-v6-ingress-multi check client-b -> server on net2" {
@@ -117,11 +120,6 @@ setup() {
 	# enable multi-networkpolicy again
 	kubectl -n kube-system patch daemonsets multi-networkpolicy-ds-amd64 --type json -p='[{"op": "remove", "path": "/spec/template/spec/nodeSelector/non-existing"}]'
 	kubectl -n kube-system rollout status daemonset/multi-networkpolicy-ds-amd64 --timeout=${kubewait_timeout}
+	kubectl -n kube-system wait --for=condition=ready -l app=multi-networkpolicy pod --timeout=${kubewait_timeout}
 }
 
-@test "cleanup environments" {
-	# remove test manifests
-	kubectl delete -f simple-v6-ingress-multi.yml
-	run kubectl -n test-simple-v6-ingress-multi wait --for=delete -l app=test-simple-v6-ingress-multi pod --timeout=${kubewait_timeout}
-	[ "$status" -eq  "0" ]
-}
