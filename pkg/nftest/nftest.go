@@ -128,7 +128,7 @@ func MatchRulesetBytes(t *testing.T, fillRuleset func(c *nftables.Conn), want []
 func nfdump(b []byte) string {
 	var buf bytes.Buffer
 	i := 0
-	for ; i < len(b); i += 4 {
+	for ; i+3 < len(b); i += 4 {
 		var ascii [4]byte
 		for j := 0; j < 4; j++ {
 			if b[i+j] >= 0x20 && b[i+j] < 0x7f {

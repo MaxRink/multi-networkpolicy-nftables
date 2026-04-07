@@ -297,7 +297,9 @@ func (pct *PodChangeTracker) getPodNetNSPath(pod *v1.Pod) (string, error) {
 				ContainerId: containerID,
 				Verbose:     true,
 			}
-			r, err := pct.criClient.ContainerStatus(context.TODO(), request)
+			rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer rpcCancel()
+			r, err := pct.criClient.ContainerStatus(rpcCtx, request)
 			if err != nil {
 				return "", fmt.Errorf("cannot get containerStatus: %v", err)
 			}
@@ -562,7 +564,7 @@ func getRuntimeClientConnection(runtimeEndpoint, hostPrefix string) (*grpc.Clien
 	// Connection errors surface on the first RPC call, not here.
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(dialer))
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to %s, make sure you are running as root and the runtime has been started: %v", HostRuntimeEndpoint, err)
+		return nil, fmt.Errorf("failed to create gRPC client for %s, make sure you are running as root and the runtime has been started: %v", HostRuntimeEndpoint, err)
 	}
 	return conn, nil
 }
