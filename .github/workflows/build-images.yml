@@ -5,6 +5,9 @@ permissions:
 jobs:
   build-images:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     env:
       REPOSITORY: ghcr.io/${{ github.repository }}
     steps:
@@ -18,4 +21,6 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: ghcr.io/${{ github.repository }}:latest-amd64

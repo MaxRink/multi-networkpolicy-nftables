@@ -13,6 +13,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
+      actions: write
       packages: write
     strategy:
       matrix:
@@ -52,6 +53,8 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           outputs: type=image,push-by-digest=true,name-canonical=true,push=true
           tags: ghcr.io/${{ github.repository }}
           labels: ${{ steps.meta.outputs.labels }}
