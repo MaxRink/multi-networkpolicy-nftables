@@ -16,7 +16,7 @@ It is now being actively developed and is not stable yet. Bug reports and featur
 
 ## Description
 
-Kubernetes provides [Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) for network security. Currently net-attach-def does not support Network Policies because net-attach-def is CRD, user defined resources, outside of Kubernetes.
+Kubernetes provides [Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) for network security. Currently net-attach-def does not support Network Policies because net-attach-def is a CRD (user-defined resource) outside of Kubernetes.
 multi-networkpolicy implements Network Policy functionality for net-attach-def, by nftables and provides network security for net-attach-def networks.
 
 ## Architecture
@@ -63,7 +63,7 @@ daemonset.apps/multi-networkpolicy-ds-amd64 created
 
 ## Requirements
 
-This project leverages `nftables` hence the netfilter module need to be loaded on the container host:
+This project leverages `nftables` hence the netfilter module needs to be loaded on the container host:
 
 ```
 # modprobe nf_ct
