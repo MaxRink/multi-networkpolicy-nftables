@@ -1765,7 +1765,13 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 			for _, rule := range rules {
 				key, err := hash(rule)
 				if err != nil {
-					klog.Warningf("failed to get key for rule: %v", err)
+					comment, _ := userdata.GetString(rule.UserData, userdata.TypeComment)
+					klog.Warningf("failed to get key for rule %q in chain %q: %v — deleting as stale", comment, rule.Chain.Name, err)
+					if delErr := n.nft.DelRule(rule); delErr != nil {
+						klog.Errorf("failed to delete unhashable rule %q in chain %q: %v", comment, rule.Chain.Name, delErr)
+					} else {
+						performFlush = true
+					}
 					continue
 				}
 				if _, exists := n.rules[key]; !exists {
