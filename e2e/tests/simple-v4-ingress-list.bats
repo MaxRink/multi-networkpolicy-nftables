@@ -67,3 +67,4 @@ teardown_file() {
 	run retry_until_success 15 kubectl -n test-simple-v4-ingress-list exec pod-server -- sh -c "echo x | nc -w 1 ${client_c_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
+
