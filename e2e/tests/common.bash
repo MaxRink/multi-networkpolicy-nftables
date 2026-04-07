@@ -146,7 +146,6 @@ retry_until_deny() {
 	local attempt=1
 	while [ $attempt -le $max_retries ]; do
 		local rc
-		local last_output
 		if last_output=$("$@" 2>&1); then
 			rc=0
 		else
@@ -191,51 +190,6 @@ wait_for_nft_rules() {
 	local pattern=$3
 	local max_retries=${4:-30}
 	retry_until_success "$max_retries" kubectl -n "$ns" exec "$pod" -- sh -c "nft list ruleset | grep -q '$pattern'"
-}
-
-# wait_for_connectivity_blocked polls until a connection attempt from src_pod to dst_ip:port fails.
-# Use this in setup to confirm policy enforcement is active before testing the blocked direction.
-# Usage: wait_for_connectivity_blocked <namespace> <src_pod> <dst_ip> <port> [timeout_seconds]
-# Returns non-zero if the connection is still succeeding after the timeout.
-wait_for_connectivity_blocked() {
-	local ns="$1" pod="$2" dst_ip="$3" port="$4" timeout="${5:-30}" attempts=0
-	while [ $attempts -lt $timeout ]; do
-		# First verify the pod is reachable via exec (prevents false positives from
-		# transient API errors being misinterpreted as "traffic blocked").
-		if ! kubectl -n "$ns" exec "$pod" -- true 2>/dev/null; then
-			sleep 1
-			attempts=$((attempts + 1))
-			continue
-		fi
-		if ! kubectl -n "$ns" exec "$pod" -- sh -c "echo x | nc -w 1 $dst_ip $port" 2>/dev/null; then
-			return 0
-		fi
-		sleep 1
-		attempts=$((attempts + 1))
-	done
-	return 1
-}
-
-# wait_for_nft_rule_absent polls until the given pod no longer has an nft rule matching the pattern.
-# Usage: wait_for_nft_rule_absent <namespace> <pod> <grep-pattern> [timeout_seconds]
-# Returns non-zero if the rule is still present after the timeout.
-wait_for_nft_rule_absent() {
-	local ns="$1" pod="$2" pattern="$3" timeout="${4:-30}" attempts=0
-	while [ $attempts -lt $timeout ]; do
-		# First verify the pod is reachable via exec (prevents false positives from
-		# transient API errors being misinterpreted as "rule absent").
-		if ! kubectl -n "$ns" exec "$pod" -- true 2>/dev/null; then
-			sleep 1
-			attempts=$((attempts + 1))
-			continue
-		fi
-		if ! kubectl -n "$ns" exec "$pod" -- sh -c "nft list ruleset 2>/dev/null | grep -q '$pattern'" 2>/dev/null; then
-			return 0
-		fi
-		sleep 1
-		attempts=$((attempts + 1))
-	done
-	return 1
 }
 
 # setup_file — called by BATS before any test in a file runs.
