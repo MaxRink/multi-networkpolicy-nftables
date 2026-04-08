@@ -36,14 +36,15 @@ for f in ./tests/*.bats; do
     test_name="$(basename "$f" .bats)"
     echo "=== Running: ${test_name} ==="
 
-    bats "$f"
-    retval=$?
-
+    # Check if bats supports JUnit reporting to avoid running tests twice
     bats_help="$(bats --help 2>&1)"
     if printf '%s\n' "$bats_help" | grep -q -- "--report-formatter" &&
         printf '%s\n' "$bats_help" | grep -q -- "junit"; then
-        bats --report-formatter junit --output "./artifacts/junit" "$f" || true
+        bats --report-formatter junit --output "./artifacts/junit" "$f"
+    else
+        bats "$f"
     fi
+    retval=$?
 
     if [ "$retval" -ne 0 ]; then
         suite_failed=1
