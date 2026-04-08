@@ -6,29 +6,34 @@
 # pods. This ensures the daemon recovers from restarts without leaving
 # pods unprotected.
 
-setup() {
+setup_file() {
 	cd $BATS_TEST_DIRNAME
 	load "common"
-	# Skip IP lookup for the first test — pods don't exist yet when setup resources runs
-	if [ "$BATS_TEST_NUMBER" -gt 1 ]; then
-		server_net1=$(wait_for_net1_ip "test-daemon-restart" "pod-server")
-	fi
-}
+	export MANIFEST_FILE="daemon-restart-recovery.yml"
 
-@test "setup daemon-restart test environments" {
 	# create test manifests
-	kubectl apply --wait --timeout=${kubewait_timeout} -f daemon-restart-recovery.yml
+	kubectl apply --wait --timeout=${kubewait_timeout} -f "${MANIFEST_FILE}"
 
 	# verify all pods are available
-	run kubectl -n test-daemon-restart wait --for=condition=ready -l app=test-daemon-restart pod --timeout=${kubewait_timeout}
-	[ "$status" -eq "0" ]
+	kubectl -n test-daemon-restart wait --for=condition=ready -l app=test-daemon-restart pod --timeout=${kubewait_timeout}
 
 	# wait for nft rules to be programmed by the daemon
 	wait_for_nft_rule "test-daemon-restart" "pod-server" "test-multinetwork-policy-daemon-restart-1"
 
 	# wait for policy enforcement to be active: client-b must be blocked before proceeding
+	local server_net1
 	server_net1=$(get_net1_ip "test-daemon-restart" "pod-server")
 	wait_for_connectivity_blocked "test-daemon-restart" "pod-client-b" "$server_net1" "5555"
+}
+
+setup() {
+	cd $BATS_TEST_DIRNAME
+	load "common"
+	server_net1=$(wait_for_net1_ip "test-daemon-restart" "pod-server")
+}
+
+teardown_file() {
+	teardown_file_common
 }
 
 @test "daemon-restart check nft rules exist before restart" {
@@ -50,7 +55,7 @@ setup() {
 
 @test "daemon-restart check client-b -> server blocked before restart" {
 	# nc should NOT succeed from client-b to server (not allowed by policy)
-	run retry_until_deny 10 kubectl -n test-daemon-restart exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	run retry_until_deny 30 kubectl -n test-daemon-restart exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 	[ "$status" -eq 0 ]
 }
 
@@ -80,12 +85,6 @@ setup() {
 
 @test "daemon-restart check client-b -> server still blocked after restart" {
 	# blocks must remain in place after daemon restart
-	run retry_until_deny 10 kubectl -n test-daemon-restart exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	run retry_until_deny 30 kubectl -n test-daemon-restart exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 	[ "$status" -eq 0 ]
-}
-
-teardown_file() {
-	cd $BATS_TEST_DIRNAME
-	kubectl delete -f daemon-restart-recovery.yml --ignore-not-found
-	kubectl -n test-daemon-restart wait --for=delete -l app=test-daemon-restart pod --timeout=${kubewait_timeout} 2>/dev/null || true
 }

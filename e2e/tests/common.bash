@@ -146,6 +146,7 @@ retry_until_deny() {
 	local attempt=1
 	while [ $attempt -le $max_retries ]; do
 		local rc
+		local last_output
 		if last_output=$("$@" 2>&1); then
 			rc=0
 		else

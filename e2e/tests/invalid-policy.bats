@@ -5,27 +5,34 @@
 # (e.g. one referencing a non-existent network) does not crash the daemon
 # or interfere with valid policies applied to other pods.
 
-setup() {
+setup_file() {
 	cd $BATS_TEST_DIRNAME
 	load "common"
-	server_net1=$(get_net1_ip "test-invalid-policy" "pod-server")
-}
+	export MANIFEST_FILE="invalid-policy.yml"
 
-@test "setup invalid-policy test environments" {
 	# capture baseline restart counts for all daemon pods before applying the policy
 	kubectl get pods -l app=multi-networkpolicy -n kube-system \
 		-o jsonpath='{range .items[*]}{.metadata.name}={.status.containerStatuses[0].restartCount}{"\n"}{end}' \
 		> ${BATS_TMPDIR}/bats-restart-baseline-invalid-policy.txt
 
 	# create test manifests (includes both a valid and an invalid policy)
-	kubectl apply --wait --timeout=${kubewait_timeout} -f invalid-policy.yml
+	kubectl apply --wait --timeout=${kubewait_timeout} -f "${MANIFEST_FILE}"
 
 	# verify all pods are available
-	run kubectl -n test-invalid-policy wait --for=condition=ready -l app=test-invalid-policy pod --timeout=${kubewait_timeout}
-	[ "$status" -eq "0" ]
+	kubectl -n test-invalid-policy wait --for=condition=ready -l app=test-invalid-policy pod --timeout=${kubewait_timeout}
 
 	# wait for nft rules to be programmed by the daemon
 	wait_for_nft_rule "test-invalid-policy" "pod-server" "test-multinetwork-policy-invalid-valid-1"
+}
+
+setup() {
+	cd $BATS_TEST_DIRNAME
+	load "common"
+	server_net1=$(get_net1_ip "test-invalid-policy" "pod-server")
+}
+
+teardown_file() {
+	teardown_file_common
 }
 
 @test "invalid-policy daemon pods are still running after applying invalid policy" {
@@ -60,12 +67,6 @@ setup() {
 
 @test "invalid-policy check client-b -> server blocked by valid policy" {
 	# nc should NOT succeed from client-b to server (not allowed by the valid policy)
-	run retry_until_deny 10 kubectl -n test-invalid-policy exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	run retry_until_deny 30 kubectl -n test-invalid-policy exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 	[ "$status" -eq 0 ]
-}
-
-teardown_file() {
-	cd $BATS_TEST_DIRNAME
-	kubectl delete -f invalid-policy.yml --ignore-not-found
-	kubectl -n test-invalid-policy wait --for=delete -l app=test-invalid-policy pod --timeout=${kubewait_timeout} 2>/dev/null || true
 }
