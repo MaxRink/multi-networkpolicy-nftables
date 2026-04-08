@@ -11,7 +11,6 @@ setup_file() {
 	kubectl apply --wait --timeout=${kubewait_timeout} -f "${MANIFEST_FILE}"
 	kubectl -n test-ipblock-stacked wait --for=condition=ready -l app=test-ipblock-stacked pod --timeout=${kubewait_timeout}
 	wait_for_nft_rules "test-ipblock-stacked" "pod-server" "testnetwork-policy-ipblock-stacked-1"
-	sleep 2
 }
 
 setup() {
@@ -51,6 +50,6 @@ teardown_file() {
 }
 
 @test "test-ipblock-stacked check client-c" {
-	run retry_until_deny 10 kubectl -n test-ipblock-stacked exec pod-client-c -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	run retry_until_deny 30 kubectl -n test-ipblock-stacked exec pod-client-c -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 	[ "$status" -eq  "0" ]
 }

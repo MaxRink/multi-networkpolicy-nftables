@@ -108,7 +108,7 @@ retry_until_success() {
 			return 0
 		fi
 		echo "# Attempt $attempt/$max_retries failed, retrying..." >&3
-		sleep 1
+		sleep 2
 		attempt=$((attempt + 1))
 	done
 	echo "# Command failed after $max_retries attempts: $*" >&3

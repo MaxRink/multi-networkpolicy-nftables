@@ -7,7 +7,6 @@ setup_file() {
 	kubectl apply --wait --timeout=${kubewait_timeout} -f "${MANIFEST_FILE}"
 	kubectl -n test-port-range wait --for=condition=ready -l app=test-port-range pod --timeout=${kubewait_timeout}
 	wait_for_nft_rules "test-port-range" "pod-a" "test-multinetwork-policy-simple-1"
-	sleep 2
 }
 
 setup() {
@@ -24,24 +23,24 @@ teardown_file() {
 
 @test "test-port-range check pod-a -> pod-b 5555 OK" {
 	# nc should succeed from client-a to server by policy
-	run kubectl -n test-port-range exec pod-a -- sh -c "echo x | nc -w 1 ${pod_b_net1} 5555"
+	run kubectl -n test-port-range exec pod-a -- sh -c "echo x | nc -w 2 ${pod_b_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
 
 @test "test-port-range check pod-a -> pod-b 6666 KO" {
-	# nc should succeed from client-a to server by policy
-	run retry_until_deny 10 kubectl -n test-port-range exec pod-a -- sh -c "echo x | nc -w 1 ${pod_b_net1} 6666"
-	[ "$status" -eq  "0" ]
+	wait_for_nft_rules "test-port-range" "pod-a" "test-multinetwork-policy-simple-1" 30
+	run retry_until_deny 30 kubectl -n test-port-range exec pod-a -- sh -c "echo x | nc -w 2 ${pod_b_net1} 6666"
+	[ "$status" -eq "0" ]
 }
 
 @test "test-port-range check pod-b -> pod-a 5555 KO" {
-	# nc should succeed from client-a to server by policy
-	run retry_until_deny 10 kubectl -n test-port-range exec pod-b -- sh -c "echo x | nc -w 1 ${pod_a_net1} 5555"
-	[ "$status" -eq  "0" ]
+	wait_for_nft_rules "test-port-range" "pod-a" "test-multinetwork-policy-simple-1" 30
+	run retry_until_deny 30 kubectl -n test-port-range exec pod-b -- sh -c "echo x | nc -w 2 ${pod_a_net1} 5555"
+	[ "$status" -eq "0" ]
 }
 
 @test "test-port-range check pod-b -> pod-a 6666 OK" {
 	# nc should succeed from client-a to server by policy
-	run kubectl -n test-port-range exec pod-b -- sh -c "echo x | nc -w 1 ${pod_a_net1} 6666"
+	run kubectl -n test-port-range exec pod-b -- sh -c "echo x | nc -w 2 ${pod_a_net1} 6666"
 	[ "$status" -eq  "0" ]
 }

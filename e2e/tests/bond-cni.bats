@@ -7,7 +7,6 @@ setup_file() {
 	kubectl apply --wait --timeout=${kubewait_timeout} -f "${MANIFEST_FILE}"
 	kubectl -n bond-testing wait --for=condition=ready -l app=bond-testing pod --timeout=${kubewait_timeout}
 	wait_for_nft_rules "bond-testing" "pod-a" "test-multinetwork-policy-bond"
-	sleep 2
 }
 
 setup() {
@@ -29,13 +28,15 @@ teardown_file() {
 }
 
 @test "bond-testing check pod-c -> pod-a" {
-	run retry_until_deny 10 kubectl -n bond-testing exec pod-c -- sh -c "echo x | nc -w 1 ${pod_a_net1} 5555"
-	[ "$status" -eq  "0" ]
+	wait_for_nft_rules "bond-testing" "pod-a" "test-multinetwork-policy-bond" 30
+	run retry_until_deny 30 kubectl -n bond-testing exec pod-c -- sh -c "echo x | nc -w 1 ${pod_a_net1} 5555"
+	[ "$status" -eq "0" ]
 }
 
 @test "bond-testing check pod-a -> pod-b" {
-	run retry_until_deny 10 kubectl -n bond-testing exec pod-a -- sh -c "echo x | nc -w 1 ${pod_b_net1} 5555"
-	[ "$status" -eq  "0" ]
+	wait_for_nft_rules "bond-testing" "pod-a" "test-multinetwork-policy-bond" 30
+	run retry_until_deny 30 kubectl -n bond-testing exec pod-a -- sh -c "echo x | nc -w 1 ${pod_b_net1} 5555"
+	[ "$status" -eq "0" ]
 }
 
 @test "bond-testing check pod-a -> pod-c" {

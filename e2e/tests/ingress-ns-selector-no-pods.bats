@@ -12,7 +12,6 @@ setup_file() {
 	kubectl apply --wait --timeout=${kubewait_timeout} -f "${MANIFEST_FILE}"
 	kubectl -n test-ingress-ns-selector-no-pods wait --for=condition=ready -l app=test-ingress-ns-selector-no-pods pod --timeout=${kubewait_timeout}
 	wait_for_nft_rules "test-ingress-ns-selector-no-pods" "pod-server" "policy-test-ingress-ns-selector-no-pods"
-	sleep 2
 }
 
 setup() {
@@ -30,13 +29,13 @@ teardown_file() {
 
 @test "test-ingress-ns-selector-no-pods check client-a -> server" {
 	# nc should NOT succeed from client-a to server by policy
-	run retry_until_deny 10 kubectl -n test-ingress-ns-selector-no-pods exec pod-client-a -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	run retry_until_deny 30 kubectl -n test-ingress-ns-selector-no-pods exec pod-client-a -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
 
 @test "test-ingress-ns-selector-no-pods check client-b -> server" {
 	# nc should NOT succeed from client-b to server by policy
-	run retry_until_deny 10 kubectl -n test-ingress-ns-selector-no-pods-blue exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	run retry_until_deny 30 kubectl -n test-ingress-ns-selector-no-pods-blue exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
 

@@ -74,7 +74,7 @@ teardown_file() {
 
 @test "test-simple-v4-egress-multi check server -> client-b on net1" {
 	# nc should NOT succeed from server to client-b by policy definition
-	run retry_until_deny 10 kubectl -n test-simple-v4-egress-multi exec pod-server -- sh -c "echo x | nc -w 1 ${client_b_net1} 5555"
+	run retry_until_deny 30 kubectl -n test-simple-v4-egress-multi exec pod-server -- sh -c "echo x | nc -w 1 ${client_b_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
 
@@ -94,7 +94,7 @@ teardown_file() {
 
 @test "test-simple-v4-egress-multi check server -> client-a on net2" {
 	# nc should NOT succeed from server to client-a by policy definition
-	run retry_until_deny 10 kubectl -n test-simple-v4-egress-multi exec pod-server -- sh -c "echo x | nc -w 1 ${client_a_net2} 5555"
+	run retry_until_deny 30 kubectl -n test-simple-v4-egress-multi exec pod-server -- sh -c "echo x | nc -w 1 ${client_a_net2} 5555"
 	[ "$status" -eq  "0" ]
 }
 
@@ -120,5 +120,7 @@ teardown_file() {
 	kubectl -n kube-system patch daemonsets multi-networkpolicy-ds-amd64 --type json -p='[{"op": "remove", "path": "/spec/template/spec/nodeSelector/non-existing"}]'
 	kubectl -n kube-system rollout status daemonset/multi-networkpolicy-ds-amd64 --timeout=${kubewait_timeout}
 	kubectl -n kube-system wait --for=condition=ready -l app=multi-networkpolicy pod --timeout=${kubewait_timeout}
+	# wait for nft rules to be restored after multi-networkpolicy is back
+	wait_for_nft_rules "test-simple-v4-egress-multi" "pod-server" "test-multinetwork-policy-simple-1" 20
 }
 
