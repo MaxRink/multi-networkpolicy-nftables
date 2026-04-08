@@ -31,6 +31,7 @@ import (
 	multiutils "github.com/telekom/multi-networkpolicy-nftables/pkg/utils"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 
 	v1 "k8s.io/api/core/v1"
@@ -561,11 +562,33 @@ func getRuntimeClientConnection(runtimeEndpoint, hostPrefix string) (*grpc.Clien
 	}
 
 	// grpc.NewClient establishes a lazy connection (no blocking dial).
-	// Connection errors surface on the first RPC call, not here.
+	// We explicitly trigger the connection and wait until it reaches READY
+	// (or the deadline expires) so that CRI socket availability is verified
+	// at startup rather than on the first RPC call.
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(dialer))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gRPC client for %s, make sure you are running as root and the runtime has been started: %v", HostRuntimeEndpoint, err)
 	}
+
+	// Trigger the connection attempt (moves state from IDLE to CONNECTING).
+	conn.Connect()
+
+	// Wait up to 30 s for the connection to become READY.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for {
+		state := conn.GetState()
+		if state == connectivity.Ready {
+			break
+		}
+		if !conn.WaitForStateChange(ctx, state) {
+			// Context expired before READY was reached.
+			_ = conn.Close()
+			return nil, fmt.Errorf("timed out waiting for gRPC connection to %s to become ready (last state: %s)", HostRuntimeEndpoint, state)
+		}
+	}
+
 	return conn, nil
 }
 
