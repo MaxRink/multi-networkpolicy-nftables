@@ -50,6 +50,6 @@ teardown_file() {
 }
 
 @test "test-ipblock check client-c" {
-	run retry_until_deny 10 kubectl -n test-ipblock exec pod-client-c -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	run retry_until_deny 30 kubectl -n test-ipblock exec pod-client-c -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 	[ "$status" -eq  "0" ]
 }

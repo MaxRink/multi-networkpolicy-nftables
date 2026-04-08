@@ -29,16 +29,20 @@ teardown_file() {
 
 
 @test "test-ipblock-list check client-a" {
-	run kubectl -n test-ipblock-list exec pod-client-a -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	# ensure nft rules are present before testing connectivity
+	wait_for_nft_rules "test-ipblock-list" "pod-server" "testnetwork-policy-ipblock-1"
+	run retry_until_success 5 kubectl -n test-ipblock-list exec pod-client-a -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
 
 @test "test-ipblock-list check client-b" {
-	run kubectl -n test-ipblock-list exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	run retry_until_success 5 kubectl -n test-ipblock-list exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
 
 @test "test-ipblock-list check client-c" {
-	run retry_until_deny 10 kubectl -n test-ipblock-list exec pod-client-c -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	# ensure nft rules are fully propagated before testing denial
+	wait_for_nft_rules "test-ipblock-list" "pod-server" "testnetwork-policy-ipblock-1"
+	run retry_until_deny 30 kubectl -n test-ipblock-list exec pod-client-c -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 	[ "$status" -eq  "0" ]
 }

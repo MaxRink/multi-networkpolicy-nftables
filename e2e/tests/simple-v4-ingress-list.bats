@@ -29,14 +29,18 @@ teardown_file() {
 
 
 @test "test-simple-v4-ingress-list check client-a -> server" {
+	# ensure nft rules are present before testing connectivity
+	wait_for_nft_rules "test-simple-v4-ingress-list" "pod-server" "test-multinetwork-policy-simple-1"
 	# nc should succeed from client-a to server by policy
 	run retry_until_allow 10 kubectl -n test-simple-v4-ingress-list exec pod-client-a -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
 
 @test "test-simple-v4-ingress-list check client-b -> server" {
+	# ensure nft rules are fully propagated before testing denial
+	wait_for_nft_rules "test-simple-v4-ingress-list" "pod-server" "test-multinetwork-policy-simple-1"
 	# nc should NOT succeed from client-b to server by policy
-	run retry_until_deny 10 kubectl -n test-simple-v4-ingress-list exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	run retry_until_deny 30 kubectl -n test-simple-v4-ingress-list exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
 
