@@ -522,15 +522,15 @@ func (s *Server) applyPolicyRulesForPod(pod *v1.Pod, podInfo *controllers.PodInf
 		return fmt.Errorf("netns file descriptor %d overflows int", fd)
 	}
 	nft, err := nftables.New(nftables.WithNetNSFd(int(fd)), nftables.AsLasting())
+	if err != nil {
+		return fmt.Errorf("failed to open nftables: %v", err)
+	}
 	var closeErr error
 	defer func() {
 		if err := nft.CloseLasting(); err != nil {
 			closeErr = fmt.Errorf("closing lasting netlink connection failed for pod [%s]: %w", podNamespacedName(pod), err)
 		}
 	}()
-	if err != nil {
-		return fmt.Errorf("failed to open nftables: %v", err)
-	}
 	err = s.applyPolicyRulesForPodAndFamily(pod, podInfo, nft)
 	if err != nil {
 		return fmt.Errorf("can't apply nftables inet rules for pod [%s]: %w", podNamespacedName(pod), err)
