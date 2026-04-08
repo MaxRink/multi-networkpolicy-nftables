@@ -49,8 +49,7 @@ teardown_file() {
 
 @test "daemon-restart check client-a -> server allowed before restart" {
 	# nc should succeed from client-a to server (allowed by policy)
-	run kubectl -n test-daemon-restart exec pod-client-a -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
-	[ "$status" -eq "0" ]
+	retry_until_success 10 kubectl -n test-daemon-restart exec pod-client-a -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 }
 
 @test "daemon-restart check client-b -> server blocked before restart" {
@@ -79,8 +78,7 @@ teardown_file() {
 
 @test "daemon-restart check client-a -> server still allowed after restart" {
 	# policy enforcement must survive daemon restart
-	run kubectl -n test-daemon-restart exec pod-client-a -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
-	[ "$status" -eq "0" ]
+	retry_until_success 10 kubectl -n test-daemon-restart exec pod-client-a -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 }
 
 @test "daemon-restart check client-b -> server still blocked after restart" {

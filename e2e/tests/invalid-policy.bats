@@ -41,6 +41,8 @@ teardown_file() {
 	[ "$status" -eq "0" ]
 
 	# verify no restarts occurred compared to baseline
+	# guard: baseline file must be non-empty (at least one daemon pod must exist)
+	[ -s "${BATS_TMPDIR}/bats-restart-baseline-invalid-policy.txt" ]
 	while IFS='=' read -r pod_name baseline_count; do
 		current_count=$(kubectl get pod "$pod_name" -n kube-system \
 			-o jsonpath='{.status.containerStatuses[0].restartCount}')

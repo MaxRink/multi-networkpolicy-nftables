@@ -58,8 +58,7 @@ teardown_file() {
 
 @test "conflicting-policies client-b -> server:6666 allowed (policy 2)" {
 	# policy 2 allows client-b on port 6666
-	run kubectl -n test-conflicting-policies exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 6666"
-	[ "$status" -eq "0" ]
+	retry_until_success 10 kubectl -n test-conflicting-policies exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 6666"
 }
 
 @test "conflicting-policies client-b -> server:5555 blocked (policy 1 allows client-a only)" {

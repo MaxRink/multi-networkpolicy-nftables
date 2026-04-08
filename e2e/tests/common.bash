@@ -200,6 +200,13 @@ wait_for_nft_rules() {
 wait_for_connectivity_blocked() {
 	local ns="$1" pod="$2" dst_ip="$3" port="$4" timeout="${5:-30}" attempts=0
 	while [ $attempts -lt $timeout ]; do
+		# First verify the pod is reachable via exec (prevents false positives from
+		# transient API errors being misinterpreted as "traffic blocked").
+		if ! kubectl -n "$ns" exec "$pod" -- true 2>/dev/null; then
+			sleep 1
+			attempts=$((attempts + 1))
+			continue
+		fi
 		if ! kubectl -n "$ns" exec "$pod" -- sh -c "echo x | nc -w 1 $dst_ip $port" 2>/dev/null; then
 			return 0
 		fi
@@ -215,6 +222,13 @@ wait_for_connectivity_blocked() {
 wait_for_nft_rule_absent() {
 	local ns="$1" pod="$2" pattern="$3" timeout="${4:-30}" attempts=0
 	while [ $attempts -lt $timeout ]; do
+		# First verify the pod is reachable via exec (prevents false positives from
+		# transient API errors being misinterpreted as "rule absent").
+		if ! kubectl -n "$ns" exec "$pod" -- true 2>/dev/null; then
+			sleep 1
+			attempts=$((attempts + 1))
+			continue
+		fi
 		if ! kubectl -n "$ns" exec "$pod" -- sh -c "nft list ruleset 2>/dev/null | grep -q '$pattern'" 2>/dev/null; then
 			return 0
 		fi
