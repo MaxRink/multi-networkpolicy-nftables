@@ -78,3 +78,4 @@ teardown_file() {
 	run kubectl -n test-namespace-b exec pod-b-2 -- sh -c "echo x | nc -w 1 ${pod_b1_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
+

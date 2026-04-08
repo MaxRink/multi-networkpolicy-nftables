@@ -67,3 +67,4 @@ teardown_file() {
 	run kubectl -n test-simple-v4-egress-list exec pod-server -- sh -c "echo x | nc -w 1 ${client_c_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
+

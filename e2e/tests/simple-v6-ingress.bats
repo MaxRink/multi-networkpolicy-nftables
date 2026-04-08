@@ -29,8 +29,8 @@ teardown_file() {
 
 
 @test "check generated nft rules" {
-	# check pod-server has multi-networkpolicy nftables rules for ingress
-	run kubectl -n test-simple-v6-ingress exec pod-server -- sh -c "nft list ruleset | grep test-multinetwork-policy-simple-1"
+	# wait for pod-server to have multi-networkpolicy nftables rules for ingress
+	run wait_for_nft_rules test-simple-v6-ingress pod-server test-multinetwork-policy-simple-1
 	[ "$status" -eq  "0" ]
 	# check pod-client-a has NO multi-networkpolicy nftables rules for ingress
 	run kubectl -n test-simple-v6-ingress exec pod-client-a -- sh -c "nft list ruleset | grep test-multinetwork-policy-simple-1"
@@ -71,14 +71,13 @@ teardown_file() {
 	kubectl -n kube-system wait --for=delete -l app=multi-networkpolicy pod --timeout=${kubewait_timeout}
 
 	# check nft rules in pod-server
-	run kubectl -n test-simple-v6-ingress exec pod-server -it -- sh -c "nft list ruleset | grep test-multinetwork-policy-simple-1"
-	[ "$status" -eq  "1" ]
+	wait_for_nft_rule_absent "test-simple-v6-ingress" "pod-server" "test-multinetwork-policy-simple-1"
 
 	# enable multi-networkpolicy again
 	kubectl -n kube-system patch daemonsets multi-networkpolicy-ds-amd64 --type json -p='[{"op": "remove", "path": "/spec/template/spec/nodeSelector/non-existing"}]'
 	kubectl -n kube-system rollout status daemonset/multi-networkpolicy-ds-amd64 --timeout=${kubewait_timeout}
 	kubectl -n kube-system wait --for=condition=ready -l app=multi-networkpolicy pod --timeout=${kubewait_timeout}
-	# wait for nft rules to be restored after multi-networkpolicy is back
 	wait_for_nft_rules "test-simple-v6-ingress" "pod-server" "test-multinetwork-policy-simple-1"
 }
+
 

@@ -83,6 +83,26 @@ wait_for_net1_ip() {
 	return 1
 }
 
+# wait_for_net1_ip6 waits for a non-empty net1 global IPv6 address on the given pod.
+# IPv6 addresses may take time to appear due to DAD (Duplicate Address Detection).
+# Usage: ip=$(wait_for_net1_ip6 <namespace> <pod-name>)
+# Returns non-zero if the IP cannot be resolved within the timeout.
+wait_for_net1_ip6() {
+	local ns="$1" pod="$2" ip="" attempts=0
+	while [ $attempts -lt 30 ]; do
+		ip=$(kubectl exec -n "$ns" "$pod" -- ip -j a show 2>/dev/null | jq -r \
+			'.[]|select(.ifname=="net1")|.addr_info[]|select(.family=="inet6" and .scope=="global").local' 2>/dev/null)
+		if [ -n "$ip" ]; then
+			echo "$ip"
+			return 0
+		fi
+		sleep 1
+		attempts=$((attempts + 1))
+	done
+	echo "ERROR: could not resolve net1 IPv6 address for $ns/$pod after 30s" >&2
+	return 1
+}
+
 # wait_for_nft_rule polls until the given pod has an nft rule matching the pattern.
 # Usage: wait_for_nft_rule <namespace> <pod> <grep-pattern> [timeout_seconds]
 wait_for_nft_rule() {
@@ -115,6 +135,7 @@ retry_until_success() {
 	return 1
 }
 
+
 # retry_until_deny retries a command until it exits with non-zero status (i.e., traffic is blocked).
 # This is needed because nft rules appearing in 'nft list ruleset' does not guarantee they are
 # immediately effective for packet filtering (kernel asynchrony on bond/vlan interfaces).
@@ -124,7 +145,13 @@ retry_until_deny() {
 	shift
 	local attempt=1
 	while [ $attempt -le $max_retries ]; do
-		if ! "$@" 2>/dev/null; then
+		local rc
+		if last_output=$("$@" 2>&1); then
+			rc=0
+		else
+			rc=$?
+		fi
+		if [ $rc -ne 0 ]; then
 			return 0
 		fi
 		echo "# Deny attempt $attempt/$max_retries - traffic still allowed, retrying..." >&3
@@ -163,6 +190,37 @@ wait_for_nft_rules() {
 	local pattern=$3
 	local max_retries=${4:-30}
 	retry_until_success "$max_retries" kubectl -n "$ns" exec "$pod" -- sh -c "nft list ruleset | grep -q '$pattern'"
+}
+
+# wait_for_connectivity_blocked polls until a connection attempt from src_pod to dst_ip:port fails.
+# Use this in setup to confirm policy enforcement is active before testing the blocked direction.
+# Usage: wait_for_connectivity_blocked <namespace> <src_pod> <dst_ip> <port> [timeout_seconds]
+# Returns non-zero if the connection is still succeeding after the timeout.
+wait_for_connectivity_blocked() {
+	local ns="$1" pod="$2" dst_ip="$3" port="$4" timeout="${5:-30}" attempts=0
+	while [ $attempts -lt $timeout ]; do
+		if ! kubectl -n "$ns" exec "$pod" -- sh -c "echo x | nc -w 1 $dst_ip $port" 2>/dev/null; then
+			return 0
+		fi
+		sleep 1
+		attempts=$((attempts + 1))
+	done
+	return 1
+}
+
+# wait_for_nft_rule_absent polls until the given pod no longer has an nft rule matching the pattern.
+# Usage: wait_for_nft_rule_absent <namespace> <pod> <grep-pattern> [timeout_seconds]
+# Returns non-zero if the rule is still present after the timeout.
+wait_for_nft_rule_absent() {
+	local ns="$1" pod="$2" pattern="$3" timeout="${4:-30}" attempts=0
+	while [ $attempts -lt $timeout ]; do
+		if ! kubectl -n "$ns" exec "$pod" -- sh -c "nft list ruleset 2>/dev/null | grep -q '$pattern'" 2>/dev/null; then
+			return 0
+		fi
+		sleep 1
+		attempts=$((attempts + 1))
+	done
+	return 1
 }
 
 # setup_file — called by BATS before any test in a file runs.

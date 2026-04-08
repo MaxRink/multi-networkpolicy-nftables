@@ -43,3 +43,4 @@ teardown_file() {
 	run kubectl -n bond-testing exec pod-a -- sh -c "echo x | nc -w 1 ${pod_c_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
+

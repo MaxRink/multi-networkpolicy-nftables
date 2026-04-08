@@ -1,0 +1,111 @@
+---
+apiVersion: "k8s.cni.cncf.io/v1"
+kind: NetworkAttachmentDefinition
+metadata:
+  namespace: default
+  name: macvlan1-daemon-restart
+spec:
+  config: '{
+            "cniVersion": "0.3.1",
+            "name": "macvlan1-daemon-restart",
+            "plugins": [
+                {
+                    "type": "macvlan",
+                    "mode": "bridge",
+                    "ipam":{
+                      "type":"host-local",
+                      "subnet":"2.2.20.0/24",
+                      "rangeStart":"2.2.20.8",
+                      "rangeEnd":"2.2.20.67"
+                    }
+                }]
+          }'
+---
+# namespace for MultiNetworkPolicy
+apiVersion: v1
+kind: Namespace
+metadata:
+    name: test-daemon-restart
+---
+# Pods
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-server
+  namespace: test-daemon-restart
+  annotations:
+    k8s.v1.cni.cncf.io/networks: default/macvlan1-daemon-restart
+  labels:
+    app: test-daemon-restart
+    name: pod-server
+spec:
+  terminationGracePeriodSeconds: 0
+  containers:
+  - name: macvlan-worker1
+    image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
+    command: ["nc", "-klp", "5555"]
+    securityContext:
+      privileged: true
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-client-a
+  namespace: test-daemon-restart
+  annotations:
+    k8s.v1.cni.cncf.io/networks: default/macvlan1-daemon-restart
+  labels:
+    app: test-daemon-restart
+    name: pod-client-a
+spec:
+  terminationGracePeriodSeconds: 0
+  containers:
+  - name: macvlan-worker1
+    image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
+    command: ["nc", "-klp", "5555"]
+    securityContext:
+      privileged: true
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-client-b
+  namespace: test-daemon-restart
+  annotations:
+    k8s.v1.cni.cncf.io/networks: default/macvlan1-daemon-restart
+  labels:
+    app: test-daemon-restart
+    name: pod-client-b
+spec:
+  terminationGracePeriodSeconds: 0
+  containers:
+  - name: macvlan-worker1
+    image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
+    command: ["nc", "-klp", "5555"]
+    securityContext:
+      privileged: true
+---
+# MultiNetworkPolicies
+# This policy allows ingress to pod-server from pod-client-a only.
+# Used to verify that nft rules are re-applied after a daemon restart.
+apiVersion: k8s.cni.cncf.io/v1beta1
+kind: MultiNetworkPolicy
+metadata:
+  name: test-multinetwork-policy-daemon-restart-1
+  namespace: test-daemon-restart
+  annotations:
+    k8s.v1.cni.cncf.io/policy-for: default/macvlan1-daemon-restart
+spec:
+  podSelector:
+    matchLabels:
+      name: pod-server
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          name: pod-client-a

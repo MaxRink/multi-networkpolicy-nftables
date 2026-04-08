@@ -49,3 +49,5 @@ teardown_file() {
 	run kubectl -n test-protocol-only-ports exec pod-b -- sh -c "echo x | nc --udp -w 2 ${pod_a_net1} 6666"
 	[ "$status" -eq  "0" ]
 }
+
+
