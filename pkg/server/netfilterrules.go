@@ -1549,14 +1549,14 @@ func (n *nftState) applyPolicyPortsRules(chainName string, chain *nftables.Chain
 				Key: binaryutil.BigEndian.PutUint16(portVal),
 			})
 			if port.EndPort != nil && *port.EndPort > int32(port.Port.IntValue()) { //nolint:gosec // G115: value validated in range [1, 65535] above
-				if *port.EndPort < 1 || *port.EndPort > 65535 {
+				if *port.EndPort < 1 || *port.EndPort > math.MaxUint16 {
 					return fmt.Errorf("port %d out of range, must be between 1 and %d", port.Port.IntValue(), math.MaxUint16)
 				}
 				// keep the half open interval semantics of nftables
 				// e.g. 1000-2000 becomes [1000, 2001)
 				// so we need to add 1 to the end port
 				portElements = append(portElements, nftables.SetElement{
-					Key:         binaryutil.BigEndian.PutUint16(uint16(*port.EndPort) + 1),
+					Key:         binaryutil.BigEndian.PutUint16(uint16(*port.EndPort) + 1), //nolint:gosec // G115: wrapping to 0 when EndPort==65535 is the correct nftables past-max sentinel for inet_service interval sets
 					IntervalEnd: true,
 				})
 			} else {
@@ -1564,7 +1564,7 @@ func (n *nftState) applyPolicyPortsRules(chainName string, chain *nftables.Chain
 				// e.g. 1000 becomes [1000, 1001)
 				// so we need to add 1 to the port
 				portElements = append(portElements, nftables.SetElement{
-					Key:         binaryutil.BigEndian.PutUint16(portVal + 1),
+					Key:         binaryutil.BigEndian.PutUint16(portVal + 1), //nolint:gosec // G115: portVal is validated in [1,65535] but +1 wrap at 65535 is the correct nftables past-max sentinel
 					IntervalEnd: true,
 				})
 			}
