@@ -1,8 +1,8 @@
 #!/bin/bash
 
-E2E="$( cd -- "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+E2E="$(dirname "$(realpath "$0")")"
 
-pushd ${E2E}
+cd "${E2E}" || exit
 
 suite_failed=0
 
@@ -30,13 +30,25 @@ trap 'cleanup_on_exit $? EXIT' EXIT
 trap 'cleanup_on_exit $? INT' INT
 trap 'cleanup_on_exit $? TERM' TERM
 
+mkdir -p ./artifacts/junit
+
 for f in ./tests/*.bats; do
-    echo "=== Running: $(basename $f) ==="
-    bats $f
+    test_name="$(basename "$f" .bats)"
+    echo "=== Running: ${test_name} ==="
+
+    bats "$f"
     retval=$?
-    if [ $retval -ne 0 ]; then
+
+    bats_help="$(bats --help 2>&1)"
+    if printf '%s\n' "$bats_help" | grep -q -- "--report-formatter" &&
+        printf '%s\n' "$bats_help" | grep -q -- "junit"; then
+        bats --report-formatter junit --output "./artifacts/junit" "$f" || true
+    fi
+
+    if [ "$retval" -ne 0 ]; then
         suite_failed=1
-        ./bin/kind export logs ./artifacts/`basename $f`.test/kind-logs
+        kind_logs_dir="./artifacts/$(basename "$f" .bats).test/kind-logs"
+        ./bin/kind export logs "$kind_logs_dir"
     fi
 done
 

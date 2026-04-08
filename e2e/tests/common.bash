@@ -156,6 +156,7 @@ wait_for_nft_rule() {
 	return 1
 }
 
+
 # retry_until_success retries a command up to $1 times with 1-second intervals.
 # Usage: retry_until_success <max_retries> <command...>
 retry_until_success() {

@@ -11,6 +11,9 @@ on:
 jobs:
   e2e-kind:
     runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
     steps:
       - name: Install bats
         run: sudo apt install bats
@@ -40,3 +43,23 @@ jobs:
         with:
           name: kind-logs-e2e
           path: ./e2e/artifacts/
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-test-results
+          path: ./e2e/artifacts/junit/
+          if-no-files-found: ignore
+
+      - name: Publish test report
+        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
+        if: always() && hashFiles('./e2e/artifacts/junit/*.xml') != ''
+        continue-on-error: true
+        with:
+          name: E2E Test Results
+          path: ./e2e/artifacts/junit/*.xml
+          reporter: java-junit
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fail-on-error: false
+          fail-on-empty: 'false'
