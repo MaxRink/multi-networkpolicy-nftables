@@ -561,13 +561,13 @@ func getRuntimeClientConnection(runtimeEndpoint, hostPrefix string) (*grpc.Clien
 		return nil, err
 	}
 
-	// grpc.NewClient establishes a lazy connection (no blocking dial).
-	// We explicitly trigger the connection and wait until it reaches READY
-	// (or the deadline expires) so that CRI socket availability is verified
-	// at startup rather than on the first RPC call.
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(dialer))
+	// grpc.NewClient uses name resolution by default; "passthrough" skips
+	// the resolver so the address is handed directly to the custom dialer,
+	// matching the semantics of the former grpc.DialContext.
+	target := "passthrough:///" + addr
+	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(dialer))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create gRPC client for %s, make sure you are running as root and the runtime has been started: %v", HostRuntimeEndpoint, err)
+		return nil, fmt.Errorf("failed to create gRPC client for %s: %w", HostRuntimeEndpoint, err)
 	}
 
 	// Trigger the connection attempt (moves state from IDLE to CONNECTING).
