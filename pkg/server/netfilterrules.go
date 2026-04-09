@@ -41,6 +41,12 @@ const (
 	// Using a dedicated name avoids conflicts with other tools that use
 	// the generic "nat" table.
 	tableNat = "mnp-nat"
+
+	// oldTableFilter and oldTableNat are the generic table names used before
+	// the daemon switched to its own dedicated tables. They are referenced
+	// only during upgrade migration to remove chains the daemon created there.
+	oldTableFilter = "filter"
+	oldTableNat    = "nat"
 )
 
 type nftState struct {
@@ -81,7 +87,7 @@ func bootstrapNetfilterChains(nftState *nftState) {
 	// the netfilter hook system
 	// ref: https://wiki.nftables.org/wiki-nftables/index.php/Netfilter_hooks
 	// Create our chains if they don't already exist
-	// nft add chain inet filter input { type filter hook input priority 0 \; }
+	// nft add chain inet mnp-filter input { type filter hook input priority 0 \; }
 	var err error
 	if nftState.input, err = nftState.addChain(&nftables.Chain{
 		Name:     "input",
@@ -92,7 +98,7 @@ func bootstrapNetfilterChains(nftState *nftState) {
 	}); err != nil {
 		klog.Errorf("failed to create chain: %v", err)
 	}
-	// nft add chain inet filter output { type filter hook output priority 0 \; }
+	// nft add chain inet mnp-filter output { type filter hook output priority 0 \; }
 	if nftState.output, err = nftState.addChain(&nftables.Chain{
 		Name:     "output",
 		Table:    nftState.filter,
@@ -102,7 +108,7 @@ func bootstrapNetfilterChains(nftState *nftState) {
 	}); err != nil {
 		klog.Errorf("failed to create chain: %v", err)
 	}
-	// nft add chain inet filter prerouting { type filter hook prerouting priority 0 \; }
+	// nft add chain inet mnp-nat prerouting { type nat hook prerouting priority dstnat \; }
 	if nftState.prerouting, err = nftState.addChain(&nftables.Chain{
 		Name:     "prerouting",
 		Table:    nftState.nat,
@@ -112,28 +118,28 @@ func bootstrapNetfilterChains(nftState *nftState) {
 	}); err != nil {
 		klog.Errorf("failed to create chain: %v", err)
 	}
-	// add chain inet filter MULTI-INGRESS
+	// nft add chain inet mnp-filter multi-ingress
 	if nftState.ingressChain, err = nftState.addChain(&nftables.Chain{
 		Name:  ingressChain,
 		Table: nftState.filter,
 	}); err != nil {
 		klog.Errorf("failed to create chain: %v", err)
 	}
-	// add chain inet filter MULTI-EGRESS
+	// nft add chain inet mnp-filter multi-egress
 	if nftState.egressChain, err = nftState.addChain(&nftables.Chain{
 		Name:  egressChain,
 		Table: nftState.filter,
 	}); err != nil {
 		klog.Errorf("failed to create chain: %v", err)
 	}
-	// nft add chain inet filter MULTI-INGRESS-COMMON
+	// nft add chain inet mnp-filter multi-ingress-common
 	if nftState.commonIngressChain, err = nftState.addChain(&nftables.Chain{
 		Name:  fmt.Sprintf("%s-%s", ingressChain, common),
 		Table: nftState.filter,
 	}); err != nil {
 		klog.Errorf("failed to create chain: %v", err)
 	}
-	// nft add chain inet filter MULTI-EGRESS-COMMON
+	// nft add chain inet mnp-filter multi-egress-common
 	if nftState.commonEgressChain, err = nftState.addChain(&nftables.Chain{
 		Name:  fmt.Sprintf("%s-%s", egressChain, common),
 		Table: nftState.filter,
@@ -673,7 +679,7 @@ func (n *nftState) applyCommonPrefixRules(chain *nftables.Chain, prefixes []stri
 		// Add rule to accept traffic from allowed IPv4 source prefixes
 		// destination address offset is 16, source address offset is 12
 		// for ingress chain use offset 12, for egress chain use offset 16
-		// nft add rule inet filter MULTI-INGRESS-COMMON ip saddr @allowed_src_prefix_ipv4 accept
+		// nft add rule inet mnp-filter multi-ingress-common ip saddr @allowed_src_prefix_ipv4 accept
 		offset := IPv4OffSet
 		if !isIngressChain(chain.Name) {
 			offset = IPv4OffSet + net.IPv4len
@@ -754,7 +760,7 @@ func (n *nftState) applyCommonPrefixRules(chain *nftables.Chain, prefixes []stri
 }
 
 func (n *nftState) allowConntracked(chain *nftables.Chain) error {
-	// nft add rule inet filter MULTI-<chain>-COMMON ct state related,established accept
+	// nft add rule inet mnp-filter multi-<chain>-common ct state related,established accept
 	_, err := n.updateRule(&nftables.Rule{
 		Table:    n.filter,
 		Chain:    chain,
@@ -1650,7 +1656,7 @@ func (n *nftState) applyPolicyPortsRules(chainName string, chain *nftables.Chain
 
 // s *Server, podInfo *controllers.PodInfo, pIndex, iIndex int, from []multiv1beta1.MultiNetworkPolicyPeer, policyNetworks []string
 func (n *nftState) applyPodRules(s *Server, chain *nftables.Chain, podInfo *controllers.PodInfo, policy *multiv1beta1.MultiNetworkPolicy, policyNetworks []string) (bool, error) {
-	// add chain inet filter <chainName>-<idx>
+	// nft add chain inet mnp-filter <chainName>-<idx>
 	entryChainName := chain.Name
 	policyChainName := fmt.Sprintf("%s-%s", entryChainName, policyRuleNamespacedName(policy))
 	policyChain, err := n.addChain(&nftables.Chain{
@@ -1824,6 +1830,11 @@ func (n *nftState) cleanupChains() error {
 
 	performFlush := false
 	for _, chain := range chains {
+		// Only clean up chains in daemon-owned tables to avoid interfering
+		// with other tools that may use the generic inet tables.
+		if chain.Table.Name != tableFilter && chain.Table.Name != tableNat {
+			continue
+		}
 		rules, err := n.nft.GetRules(chain.Table, chain)
 		if err != nil {
 			return fmt.Errorf("failed to get rules for table %q, chain %q: %w", chain.Table.Name, chain.Name, err)
@@ -1841,5 +1852,56 @@ func (n *nftState) cleanupChains() error {
 		}
 	}
 
+	return nil
+}
+
+// migrateOldTables removes daemon-owned chains from the old generic inet tables
+// ("filter" and "nat") that were used before the daemon switched to its own
+// dedicated tables. This is a one-time migration: it only deletes chains whose
+// names begin with daemon-owned prefixes (ingressChain or egressChain), leaving
+// all other chains in those tables untouched so that other tools are unaffected.
+func migrateOldTables(nft *nftables.Conn) error {
+	daemonPrefixes := []string{ingressChain, egressChain}
+
+	for _, oldTableName := range []string{oldTableFilter, oldTableNat} {
+		table, err := nft.ListTableOfFamily(oldTableName, nftables.TableFamilyINet)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("failed to check old table %q: %w", oldTableName, err)
+		}
+		if table == nil {
+			continue
+		}
+
+		chains, err := nft.ListChainsOfTableFamily(nftables.TableFamilyINet)
+		if err != nil {
+			return fmt.Errorf("failed to list chains for migration: %w", err)
+		}
+
+		performFlush := false
+		for _, chain := range chains {
+			if chain.Table.Name != oldTableName {
+				continue
+			}
+			isDaemonChain := false
+			for _, prefix := range daemonPrefixes {
+				if strings.HasPrefix(chain.Name, prefix) {
+					isDaemonChain = true
+					break
+				}
+			}
+			if !isDaemonChain {
+				continue
+			}
+			klog.Infof("migration: removing stale daemon chain %q from old table %q", chain.Name, oldTableName)
+			nft.DelChain(chain)
+			performFlush = true
+		}
+
+		if performFlush {
+			if err := nft.Flush(); err != nil {
+				return fmt.Errorf("failed to flush migration changes for table %q: %w", oldTableName, err)
+			}
+		}
+	}
 	return nil
 }

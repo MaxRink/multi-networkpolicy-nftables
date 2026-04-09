@@ -541,7 +541,13 @@ func (s *Server) applyPolicyRulesForPod(pod *v1.Pod, podInfo *controllers.PodInf
 func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controllers.PodInfo, nft *nftables.Conn) error {
 	klog.V(4).Infof("Generate rules for Pod: [%s]\n", podNamespacedName(pod))
 
-	// nft add table inet filter
+	// Run upgrade migration once per pod netns to remove any daemon-owned chains
+	// that may still exist in the old generic inet tables from a previous version.
+	if err := migrateOldTables(nft); err != nil {
+		klog.Warningf("upgrade migration for pod [%s] failed (non-fatal): %v", podNamespacedName(pod), err)
+	}
+
+	// nft add table inet mnp-filter / inet mnp-nat
 	nftState, err := bootstrapNetfilterRules(nft, podInfo)
 	if err != nil {
 		return fmt.Errorf("bootstrap netfilter rules failed for pod [%s]: %w", podNamespacedName(pod), err)
