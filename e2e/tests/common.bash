@@ -156,6 +156,7 @@ wait_for_nft_rule() {
 	return 1
 }
 
+
 # retry_until_success retries a command up to $1 times with 1-second intervals.
 # Usage: retry_until_success <max_retries> <command...>
 retry_until_success() {
@@ -219,6 +220,21 @@ retry_until_allow() {
 		attempt=$((attempt + 1))
 	done
 	echo "# Allow failed after $max_retries attempts: traffic still not allowed by: $*" >&3
+	return 1
+}
+
+# wait_for_nft_rule_absent polls until the given pod no longer has an nft rule matching the pattern.
+# Usage: wait_for_nft_rule_absent <namespace> <pod> <grep-pattern> [timeout_seconds]
+# Returns non-zero if the rule is still present after the timeout.
+wait_for_nft_rule_absent() {
+	local ns="$1" pod="$2" pattern="$3" timeout="${4:-30}" attempts=0
+	while [ $attempts -lt $timeout ]; do
+		if ! kubectl -n "$ns" exec "$pod" -- sh -c "nft list ruleset 2>/dev/null | grep -q '$pattern'" 2>/dev/null; then
+			return 0
+		fi
+		sleep 1
+		attempts=$((attempts + 1))
+	done
 	return 1
 }
 
