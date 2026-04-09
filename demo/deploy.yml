@@ -106,7 +106,7 @@ spec:
             memory: "50Mi"
         securityContext:
           capabilities:
-            add: ["SYS_ADMIN", "SYS_NET_ADMIN"]
+            add: ["SYS_ADMIN", "NET_ADMIN"]
         volumeMounts:
         - name: host
           mountPath: /host
