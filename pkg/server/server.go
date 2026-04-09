@@ -601,9 +601,13 @@ func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controlle
 		}
 	}
 
-	err = nftState.applyCommonChainRules(s)
-	if err != nil {
-		return fmt.Errorf("failed to apply common chain rules for pod [%s]: %w", podNamespacedName(pod), err)
+	// Skip common chain rules during shutdown — they would repopulate chains
+	// that cleanup(force=true) needs to find empty in order to delete them.
+	if !s.shuttingDown.Load() {
+		err = nftState.applyCommonChainRules(s)
+		if err != nil {
+			return fmt.Errorf("failed to apply common chain rules for pod [%s]: %w", podNamespacedName(pod), err)
+		}
 	}
 
 	// Stable sort by policy name
