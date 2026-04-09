@@ -132,8 +132,8 @@ spec:
         # change this if runtime is different that crio default
         - "--container-runtime-endpoint=/run/crio/crio.sock"
         # uncomment this if you need to accept link-local address traffic
-        #- "--allow-ipv6-src-prefix=fe80::/10"
-        #- "--allow-ipv6-dst-prefix=fe80::/10"
+        #- "--allow-src-prefix=fe80::/10"
+        #- "--allow-dst-prefix=fe80::/10"
         # uncomment if you want to accept ICMP/ICMPv6 traffic
         #- "--accept-icmp"
         #- "--accept-icmpv6"

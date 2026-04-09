@@ -68,8 +68,8 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&o.syncPeriod, "sync-period", defaultSyncPeriod, "sync period for multi-networkpolicy syncRunner")
 	fs.BoolVar(&o.acceptICMP, "accept-icmp", false, "accept all ICMP traffic")
 	fs.BoolVar(&o.acceptICMPv6, "accept-icmpv6", false, "accept all ICMPv6 traffic")
-	fs.StringVar(&o.allowSrcPrefixText, "allow-src-prefix", "", "Accept source IPv6 prefix list, comma separated (e.g. \"fe80::/10\")")
-	fs.StringVar(&o.allowDstPrefixText, "allow-dst-prefix", "", "Accept destination IPv6 prefix list, comma separated (e.g. \"fe80:/10,ff00::/8\")")
+	fs.StringVar(&o.allowSrcPrefixText, "allow-src-prefix", "", "Accept source IP prefix list, comma separated CIDRs (e.g. \"fe80::/10\")")
+	fs.StringVar(&o.allowDstPrefixText, "allow-dst-prefix", "", "Accept destination IP prefix list, comma separated CIDRs (e.g. \"fe80::/10,ff00::/8\")")
 	fs.AddGoFlagSet(flag.CommandLine)
 }
 
@@ -91,12 +91,10 @@ func parseIPPrefixText(prefixText string, prefixList *[]string) error {
 // Validate checks several options and fill processed value
 func (o *Options) Validate() error {
 
-	// Validate IPv6 source prefix list
 	if err := parseIPPrefixText(o.allowSrcPrefixText, &o.allowSrcPrefix); err != nil {
 		return err
 	}
 
-	// Validate IPv6 destination prefix list
 	if err := parseIPPrefixText(o.allowDstPrefixText, &o.allowDstPrefix); err != nil {
 		return err
 	}
@@ -117,7 +115,6 @@ func (o *Options) Run() error {
 	klog.Infof("hostname: %v", hostname)
 	klog.Infof("container-runtime: %v", o.containerRuntime)
 
-	// validate option and update it (check v6prefix list)
 	err = o.Validate()
 	if err != nil {
 		return err
