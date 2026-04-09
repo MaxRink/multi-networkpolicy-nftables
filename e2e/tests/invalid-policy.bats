@@ -28,7 +28,7 @@ setup_file() {
 setup() {
 	cd $BATS_TEST_DIRNAME
 	load "common"
-	server_net1=$(get_net1_ip "test-invalid-policy" "pod-server")
+	server_net1=$(wait_for_net1_ip "test-invalid-policy" "pod-server")
 }
 
 teardown_file() {
@@ -63,7 +63,7 @@ teardown_file() {
 
 @test "invalid-policy check client-a -> server allowed by valid policy" {
 	# nc should succeed from client-a to server (allowed by the valid policy)
-	run kubectl -n test-invalid-policy exec pod-client-a -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	run retry_until_success 30 kubectl -n test-invalid-policy exec pod-client-a -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 	[ "$status" -eq "0" ]
 }
 
