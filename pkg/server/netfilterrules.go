@@ -1280,7 +1280,7 @@ func (n *nftState) addIPRule(chainName string, addrs []string, chain *nftables.C
 	if peer.PodSelector != nil {
 		selectorStr = peer.PodSelector.String()
 	} else {
-		selectorStr = "<all>"
+		selectorStr = "<none>"
 	}
 	selectorHash, err := hash(selectorStr)
 	if err != nil {
