@@ -1524,20 +1524,18 @@ func (n *nftState) applyPolicyPeersRulesSelector(ctx context.Context, deps contr
 				if !sPodIntf.CheckPolicyNetwork(policyNetworks) {
 					continue
 				}
-
-				for _, ip := range podIntf.IPs {
-					podIntfsIPsMap[ip] = nil
-				}
-
 				for _, ip := range sPodIntf.IPs {
-					podIntfsIPsMap[ip] = nil
-				}
-
-				for ip := range podIntfsIPsMap {
-					podIntfIPs = append(podIntfIPs, ip)
+					if _, isProtected := protectedIPs[ip]; !isProtected {
+						globalPeerIPs[ip] = struct{}{}
+					}
 				}
 			}
 		}
+	}
+
+	var podIntfIPs []string
+	for ip := range globalPeerIPs {
+		podIntfIPs = append(podIntfIPs, ip)
 	}
 
 	if err := n.addIPRules(chainName, podIntfIPs, chain, policyName, peer, peerIndex); err != nil {
