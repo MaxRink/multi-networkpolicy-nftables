@@ -537,28 +537,38 @@ func (s *Server) applyPolicyRulesForPod(pod *v1.Pod, podInfo *controllers.PodInf
 	return closeErr
 }
 
+// initNftState returns the appropriate nftState for the current lifecycle phase.
+// During shutdown it returns a minimal state (empty desired-state maps) so that
+// cleanup removes all existing rules and bootstrap chains. During normal
+// operation it delegates to bootstrapNetfilterRules.
+func (s *Server) initNftState(nft *nftables.Conn, podInfo *controllers.PodInfo, pod *v1.Pod) (*nftState, error) {
+	if s.shuttingDown.Load() {
+		// Empty desired-state maps cause cleanupRules to delete all existing
+		// rules, leaving chains empty for cleanupChains(force=true) to remove.
+		state, err := shutdownNftState(nft)
+		if err != nil {
+			return nil, fmt.Errorf("shutdown nft state failed for pod [%s]: %w", podNamespacedName(pod), err)
+		}
+		return state, nil
+	}
+
+	state, err := bootstrapNetfilterRules(nft, podInfo)
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap netfilter rules failed for pod [%s]: %w", podNamespacedName(pod), err)
+	}
+	if state == nil {
+		return nil, fmt.Errorf("bootstrap netfilter rules returned nil state for pod [%s]", podNamespacedName(pod))
+	}
+	return state, nil
+}
+
 func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controllers.PodInfo, nft *nftables.Conn) error {
 	klog.V(4).Infof("Generate rules for Pod: [%s]\n", podNamespacedName(pod))
 
 	// nft add table inet filter
-	var nftState *nftState
-	var err error
-	if s.shuttingDown.Load() {
-		// During shutdown, create minimal state with only table references.
-		// Empty desired-state maps cause cleanupRules to delete all existing
-		// rules, leaving chains empty for cleanupChains(force=true) to remove.
-		nftState, err = shutdownNftState(nft)
-		if err != nil {
-			return fmt.Errorf("shutdown nft state failed for pod [%s]: %w", podNamespacedName(pod), err)
-		}
-	} else {
-		nftState, err = bootstrapNetfilterRules(nft, podInfo)
-		if err != nil {
-			return fmt.Errorf("bootstrap netfilter rules failed for pod [%s]: %w", podNamespacedName(pod), err)
-		}
-		if nftState == nil {
-			return fmt.Errorf("bootstrap netfilter rules returned nil state for pod [%s]", podNamespacedName(pod))
-		}
+	nftState, err := s.initNftState(nft, podInfo, pod)
+	if err != nil {
+		return err
 	}
 
 	var ingressPolicies []internalPolicy
