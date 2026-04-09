@@ -170,4 +170,23 @@ var _ = Describe("networkpolicy controller", func() {
 		Expect(policyTest1.Name()).To(Equal("test1"))
 		Expect(policyTest1.Namespace()).To(Equal("testns1"))
 	})
+
+	It("Update returns false when no items are pending (equal previous and current)", func() {
+		policyChanges := NewPolicyChangeTracker()
+		result := policyChanges.Update(NewNetworkPolicy("testns1", "test1"), NewNetworkPolicy("testns1", "test1"))
+		Expect(result).To(BeFalse())
+	})
+
+	It("Update returns true when an item is added", func() {
+		policyChanges := NewPolicyChangeTracker()
+		result := policyChanges.Update(nil, NewNetworkPolicy("testns1", "test1"))
+		Expect(result).To(BeTrue())
+	})
+
+	It("Update returns false when item is deleted (previous equals current after tracking)", func() {
+		policyChanges := NewPolicyChangeTracker()
+		policyChanges.Update(nil, NewNetworkPolicy("testns1", "test1"))
+		result := policyChanges.Update(NewNetworkPolicy("testns1", "test1"), nil)
+		Expect(result).To(BeFalse())
+	})
 })

@@ -499,7 +499,7 @@ func (pct *PodChangeTracker) Update(previous, current *v1.Pod) bool {
 	if reflect.DeepEqual(change.previous, change.current) {
 		delete(pct.items, namespacedName)
 	}
-	return len(pct.items) >= 0
+	return len(pct.items) > 0
 }
 
 // PodMap ...
