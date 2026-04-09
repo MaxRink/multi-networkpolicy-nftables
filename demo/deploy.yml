@@ -6,9 +6,12 @@ metadata:
 rules:
   - apiGroups: ["k8s.cni.cncf.io"]
     resources:
-      - '*'
+      - multinetworkpolicies
+      - network-attachment-definitions
     verbs:
-      - '*'
+      - get
+      - list
+      - watch
   - apiGroups:
       - ""
     resources:
@@ -102,12 +105,12 @@ spec:
             cpu: "100m"
             memory: "50Mi"
         securityContext:
-          privileged: true
           capabilities:
             add: ["SYS_ADMIN", "SYS_NET_ADMIN"]
         volumeMounts:
         - name: host
           mountPath: /host
+          readOnly: true
       volumes:
         - name: host
           hostPath:
