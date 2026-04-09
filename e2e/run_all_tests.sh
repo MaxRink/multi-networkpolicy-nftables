@@ -2,7 +2,7 @@
 
 E2E="$(dirname "$(realpath "$0")")"
 
-pushd "${E2E}" > /dev/null || exit
+pushd "${E2E}"
 
 suite_failed=0
 
