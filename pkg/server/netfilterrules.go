@@ -1862,6 +1862,7 @@ func (n *nftState) cleanupChains() error {
 // all other chains in those tables untouched so that other tools are unaffected.
 func migrateOldTables(nft *nftables.Conn) error {
 	daemonPrefixes := []string{ingressChain, egressChain}
+	baseChainNames := []string{"input", "output", "prerouting"}
 
 	for _, oldTableName := range []string{oldTableFilter, oldTableNat} {
 		table, err := nft.ListTableOfFamily(oldTableName, nftables.TableFamilyINet)
@@ -1877,6 +1878,50 @@ func migrateOldTables(nft *nftables.Conn) error {
 			return fmt.Errorf("failed to list chains for migration: %w", err)
 		}
 
+		// Step 1: Remove jump/goto rules in old base chains that target daemon chains.
+		for _, chain := range chains {
+			if chain.Table.Name != oldTableName {
+				continue
+			}
+			isBase := false
+			for _, baseName := range baseChainNames {
+				if chain.Name == baseName {
+					isBase = true
+					break
+				}
+			}
+			if !isBase {
+				continue
+			}
+			rules, err := nft.GetRules(table, chain)
+			if err != nil {
+				return fmt.Errorf("migration: failed to get rules from base chain %q in table %q: %w", chain.Name, oldTableName, err)
+			}
+			for _, rule := range rules {
+				for _, e := range rule.Exprs {
+					v, ok := e.(*expr.Verdict)
+					if !ok {
+						continue
+					}
+					if v.Kind != expr.VerdictJump && v.Kind != expr.VerdictGoto {
+						continue
+					}
+					isDaemonTarget := false
+					for _, prefix := range daemonPrefixes {
+						if strings.HasPrefix(v.Chain, prefix) {
+							isDaemonTarget = true
+							break
+						}
+					}
+					if isDaemonTarget {
+						klog.Infof("migration: removing stale jump rule to %q from base chain %q in old table %q", v.Chain, chain.Name, oldTableName)
+						nft.DelRule(rule)
+					}
+				}
+			}
+		}
+
+		// Step 2: Flush daemon chains before deleting them so DelChain succeeds.
 		performFlush := false
 		for _, chain := range chains {
 			if chain.Table.Name != oldTableName {
@@ -1893,6 +1938,7 @@ func migrateOldTables(nft *nftables.Conn) error {
 				continue
 			}
 			klog.Infof("migration: removing stale daemon chain %q from old table %q", chain.Name, oldTableName)
+			nft.FlushChain(chain)
 			nft.DelChain(chain)
 			performFlush = true
 		}

@@ -58,11 +58,11 @@ func TestBootstrap(t *testing.T) {
 
 		filterTable, err := c.ListTableOfFamily(tableFilter, nftables.TableFamilyINet)
 		if err != nil {
-			t.Fatalf("c.ListTable(\"filter\") failed: %v", err)
+			t.Fatalf("c.ListTable(%q) failed: %v", tableFilter, err)
 		}
 		natTable, err := c.ListTableOfFamily(tableNat, nftables.TableFamilyINet)
 		if err != nil {
-			t.Fatalf("c.ListTable(\"nat\") failed: %v", err)
+			t.Fatalf("c.ListTable(%q) failed: %v", tableNat, err)
 		}
 		if filterTable == nil || natTable == nil {
 			t.Errorf("filterTable or natTable is nil %v, %v", filterTable, natTable)
@@ -172,7 +172,7 @@ func TestApplyCommonChainRules(t *testing.T) {
 	checkCommon := func() bool {
 		filterTable, err := c.ListTableOfFamily(tableFilter, nftables.TableFamilyINet)
 		if err != nil {
-			t.Fatalf("c.ListTable(\"filter\") failed: %v", err)
+			t.Fatalf("c.ListTable(%q) failed: %v", tableFilter, err)
 		}
 		if filterTable == nil {
 			t.Errorf("filterTable is nil")
