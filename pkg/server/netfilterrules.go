@@ -1759,7 +1759,7 @@ func chainID(c *nftables.Chain) string {
 	return fmt.Sprintf("%s-%s", c.Table.Name, c.Name)
 }
 
-func (n *nftState) cleanup() error {
+func (n *nftState) cleanup(force bool) error {
 	defer func() {
 		n.rules = make(map[string]*nftables.Rule)
 		n.sets = make(map[string]*nftables.Set)
@@ -1774,7 +1774,7 @@ func (n *nftState) cleanup() error {
 		return fmt.Errorf("failed to cleanup %q table: %w", n.nat.Name, err)
 	}
 
-	if err := n.cleanupChains(); err != nil {
+	if err := n.cleanupChains(force); err != nil {
 		return fmt.Errorf("failed to cleanup chains: %w", err)
 	}
 
@@ -1839,7 +1839,31 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 	return nil
 }
 
-func (n *nftState) cleanupChains() error {
+// isBootstrapChain reports whether the given chain name and table name identify
+// one of the bootstrap chains that are created unconditionally on startup.
+// These chains are normally preserved across syncs but should be removed on
+// graceful shutdown once they have no remaining rules.
+func isBootstrapChain(name, tableName string) bool {
+	switch {
+	case tableName == "filter" && name == "input":
+		return true
+	case tableName == "filter" && name == "output":
+		return true
+	case tableName == "nat" && name == "prerouting":
+		return true
+	case tableName == "filter" && name == ingressChain:
+		return true
+	case tableName == "filter" && name == egressChain:
+		return true
+	case tableName == "filter" && name == fmt.Sprintf("%s-%s", ingressChain, common):
+		return true
+	case tableName == "filter" && name == fmt.Sprintf("%s-%s", egressChain, common):
+		return true
+	}
+	return false
+}
+
+func (n *nftState) cleanupChains(force bool) error {
 	chains, err := n.nft.ListChainsOfTableFamily(nftables.TableFamilyINet)
 	if err != nil {
 		return fmt.Errorf("failed to list chains: %w", err)
@@ -1851,8 +1875,13 @@ func (n *nftState) cleanupChains() error {
 		if err != nil {
 			return fmt.Errorf("failed to get rules for table %q, chain %q: %w", chain.Table.Name, chain.Name, err)
 		}
-		if _, used := n.chains[chainID(chain)]; !used && len(rules) < 1 {
+		_, used := n.chains[chainID(chain)]
+		if !used && len(rules) < 1 {
 			klog.V(8).Infof("deleting chain %q in table %q", chain.Name, chain.Table.Name)
+			n.nft.DelChain(chain)
+			performFlush = true
+		} else if used && force && len(rules) == 0 && isBootstrapChain(chain.Name, chain.Table.Name) {
+			klog.V(8).Infof("force-deleting bootstrap chain %q in table %q on shutdown", chain.Name, chain.Table.Name)
 			n.nft.DelChain(chain)
 			performFlush = true
 		}
