@@ -1865,6 +1865,9 @@ func (n *nftState) applyPolicyPortsRules(chainName string, chain *nftables.Chain
 
 		// validate port range
 		if port.Port != nil {
+			if port.Port.Type == intstr.String {
+				return fmt.Errorf("named port %q is not supported; numeric ports are required", port.Port.StrVal)
+			}
 			if port.Port.IntValue() < 1 || port.Port.IntValue() > math.MaxUint16 {
 				return fmt.Errorf("port %d out of range, must be between 1 and %d", port.Port.IntValue(), math.MaxUint16)
 			}
