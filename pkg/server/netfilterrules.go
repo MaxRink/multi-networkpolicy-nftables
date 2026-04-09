@@ -1879,6 +1879,7 @@ func migrateOldTables(nft *nftables.Conn) error {
 		}
 
 		// Step 1: Remove jump/goto rules in old base chains that target daemon chains.
+		performFlush := false
 		for _, chain := range chains {
 			if chain.Table.Name != oldTableName {
 				continue
@@ -1916,13 +1917,13 @@ func migrateOldTables(nft *nftables.Conn) error {
 					if isDaemonTarget {
 						klog.Infof("migration: removing stale jump rule to %q from base chain %q in old table %q", v.Chain, chain.Name, oldTableName)
 						nft.DelRule(rule)
+						performFlush = true
 					}
 				}
 			}
 		}
 
 		// Step 2: Flush daemon chains before deleting them so DelChain succeeds.
-		performFlush := false
 		for _, chain := range chains {
 			if chain.Table.Name != oldTableName {
 				continue

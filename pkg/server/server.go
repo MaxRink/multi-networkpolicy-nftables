@@ -543,8 +543,10 @@ func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controlle
 
 	// Run upgrade migration once per pod netns to remove any daemon-owned chains
 	// that may still exist in the old generic inet tables from a previous version.
+	// Migration failure is fatal because old hooked base chains would remain active
+	// alongside the new dedicated tables, causing unpredictable dual enforcement.
 	if err := migrateOldTables(nft); err != nil {
-		klog.Warningf("upgrade migration for pod [%s] failed (non-fatal): %v", podNamespacedName(pod), err)
+		return fmt.Errorf("upgrade migration for pod [%s] failed: %w", podNamespacedName(pod), err)
 	}
 
 	// nft add table inet mnp-filter / inet mnp-nat
