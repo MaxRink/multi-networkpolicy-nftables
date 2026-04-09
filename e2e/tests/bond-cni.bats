@@ -23,8 +23,8 @@ teardown_file() {
 
 
 @test "bond-testing check pod-b -> pod-a" {
-	run kubectl -n bond-testing exec pod-b -- sh -c "echo x | nc -w 1 ${pod_a_net1} 5555"
-	[ "$status" -eq  "0" ]
+	run retry_until_success 30 kubectl -n bond-testing exec pod-b -- sh -c "echo x | nc -w 1 ${pod_a_net1} 5555"
+	[ "$status" -eq "0" ]
 }
 
 @test "bond-testing check pod-c -> pod-a" {
@@ -40,6 +40,7 @@ teardown_file() {
 }
 
 @test "bond-testing check pod-a -> pod-c" {
-	run kubectl -n bond-testing exec pod-a -- sh -c "echo x | nc -w 1 ${pod_c_net1} 5555"
-	[ "$status" -eq  "0" ]
+	run retry_until_success 30 kubectl -n bond-testing exec pod-a -- sh -c "echo x | nc -w 1 ${pod_c_net1} 5555"
+	[ "$status" -eq "0" ]
 }
+

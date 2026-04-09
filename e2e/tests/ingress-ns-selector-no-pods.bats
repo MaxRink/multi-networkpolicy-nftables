@@ -50,3 +50,4 @@ teardown_file() {
 	run kubectl -n test-ingress-ns-selector-no-pods exec pod-server -- sh -c "echo x | nc -w 1 ${client_b_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
+

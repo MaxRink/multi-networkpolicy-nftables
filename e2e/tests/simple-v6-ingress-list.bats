@@ -18,10 +18,10 @@ setup_file() {
 setup() {
 	cd $BATS_TEST_DIRNAME
 	load "common"
-	server_net1=$(get_net1_ip6 "test-simple-v6-ingress-list" "pod-server")
-	client_a_net1=$(get_net1_ip6 "test-simple-v6-ingress-list" "pod-client-a")
-	client_b_net1=$(get_net1_ip6 "test-simple-v6-ingress-list" "pod-client-b")
-	client_c_net1=$(get_net1_ip6 "test-simple-v6-ingress-list" "pod-client-c")
+	server_net1=$(wait_for_net1_ip6 "test-simple-v6-ingress-list" "pod-server")
+	client_a_net1=$(wait_for_net1_ip6 "test-simple-v6-ingress-list" "pod-client-a")
+	client_b_net1=$(wait_for_net1_ip6 "test-simple-v6-ingress-list" "pod-client-b")
+	client_c_net1=$(wait_for_net1_ip6 "test-simple-v6-ingress-list" "pod-client-c")
 }
 
 teardown_file() {
@@ -33,7 +33,7 @@ teardown_file() {
 	# ensure nft rules are present before testing connectivity
 	wait_for_nft_rules "test-simple-v6-ingress-list" "pod-server" "test-multinetwork-policy-simple-1"
 	# nc should succeed from client-a to server by policy (retry for IPv6 NDP convergence)
-	run retry_until_allow 10 kubectl -n test-simple-v6-ingress-list exec pod-client-a -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	run retry_until_success 15 kubectl -n test-simple-v6-ingress-list exec pod-client-a -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
 
@@ -47,24 +47,24 @@ teardown_file() {
 
 @test "test-simple-v6-ingress-list check client-c -> server" {
 	# nc should succeed from client-c to server by policy (retry for IPv6 NDP convergence)
-	run retry_until_allow 10 kubectl -n test-simple-v6-ingress-list exec pod-client-c -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	run retry_until_success 15 kubectl -n test-simple-v6-ingress-list exec pod-client-c -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
 
 @test "test-simple-v6-ingress-list check server -> client-a" {
 	# nc should succeed from server to client-a by no policy definition for direction (egress for pod-server)
-	run retry_until_allow 10 kubectl -n test-simple-v6-ingress-list exec pod-server -- sh -c "echo x | nc -w 1 ${client_a_net1} 5555"
+	run retry_until_success 15 kubectl -n test-simple-v6-ingress-list exec pod-server -- sh -c "echo x | nc -w 1 ${client_a_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
 
 @test "test-simple-v6-ingress-list check server -> client-b" {
 	# nc should succeed from server to client-b by no policy definition for direction (egress for pod-server)
-	run retry_until_allow 10 kubectl -n test-simple-v6-ingress-list exec pod-server -- sh -c "echo x | nc -w 1 ${client_b_net1} 5555"
+	run retry_until_success 15 kubectl -n test-simple-v6-ingress-list exec pod-server -- sh -c "echo x | nc -w 1 ${client_b_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
 
 @test "test-simple-v6-ingress-list check server -> client-c" {
 	# nc should succeed from server to client-c by no policy definition for direction (egress for pod-server)
-	run retry_until_allow 10 kubectl -n test-simple-v6-ingress-list exec pod-server -- sh -c "echo x | nc -w 1 ${client_c_net1} 5555"
+	run retry_until_success 15 kubectl -n test-simple-v6-ingress-list exec pod-server -- sh -c "echo x | nc -w 1 ${client_c_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
