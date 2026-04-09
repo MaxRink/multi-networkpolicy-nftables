@@ -333,6 +333,36 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 	return nftState, nil
 }
 
+// shutdownNftState creates a minimal nftState for shutdown cleanup.
+// It resolves table references but registers no desired rules, sets, or chains,
+// causing cleanup to remove all existing nftables state.
+func shutdownNftState(nft *nftables.Conn) (*nftState, error) {
+	filterTable, err := addTable(nft, &nftables.Table{
+		Family: nftables.TableFamilyINet,
+		Name:   "filter",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to add table: %w", err)
+	}
+
+	natTable, err := addTable(nft, &nftables.Table{
+		Family: nftables.TableFamilyINet,
+		Name:   "nat",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to add table: %w", err)
+	}
+
+	return &nftState{
+		nft:    nft,
+		filter: filterTable,
+		nat:    natTable,
+		rules:  make(map[string]*nftables.Rule),
+		sets:   make(map[string]*nftables.Set),
+		chains: make(map[string]*nftables.Chain),
+	}, nil
+}
+
 func (n *nftState) updateRule(rule *nftables.Rule, action func(r *nftables.Rule) *nftables.Rule, forceUpdate bool) (bool, error) {
 	comment, _ := userdata.GetString(rule.UserData, userdata.TypeComment)
 
@@ -1880,7 +1910,7 @@ func (n *nftState) cleanupChains(force bool) error {
 			klog.V(8).Infof("deleting chain %q in table %q", chain.Name, chain.Table.Name)
 			n.nft.DelChain(chain)
 			performFlush = true
-		} else if used && force && len(rules) == 0 && isBootstrapChain(chain.Name, chain.Table.Name) {
+		} else if force && len(rules) == 0 && isBootstrapChain(chain.Name, chain.Table.Name) {
 			klog.V(8).Infof("force-deleting bootstrap chain %q in table %q on shutdown", chain.Name, chain.Table.Name)
 			n.nft.DelChain(chain)
 			performFlush = true

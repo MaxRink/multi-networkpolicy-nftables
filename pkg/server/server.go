@@ -541,12 +541,24 @@ func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controlle
 	klog.V(4).Infof("Generate rules for Pod: [%s]\n", podNamespacedName(pod))
 
 	// nft add table inet filter
-	nftState, err := bootstrapNetfilterRules(nft, podInfo)
-	if err != nil {
-		return fmt.Errorf("bootstrap netfilter rules failed for pod [%s]: %w", podNamespacedName(pod), err)
-	}
-	if nftState == nil {
-		return fmt.Errorf("bootstrap netfilter rules returned nil state for pod [%s]", podNamespacedName(pod))
+	var nftState *nftState
+	var err error
+	if s.shuttingDown.Load() {
+		// During shutdown, create minimal state with only table references.
+		// Empty desired-state maps cause cleanupRules to delete all existing
+		// rules, leaving chains empty for cleanupChains(force=true) to remove.
+		nftState, err = shutdownNftState(nft)
+		if err != nil {
+			return fmt.Errorf("shutdown nft state failed for pod [%s]: %w", podNamespacedName(pod), err)
+		}
+	} else {
+		nftState, err = bootstrapNetfilterRules(nft, podInfo)
+		if err != nil {
+			return fmt.Errorf("bootstrap netfilter rules failed for pod [%s]: %w", podNamespacedName(pod), err)
+		}
+		if nftState == nil {
+			return fmt.Errorf("bootstrap netfilter rules returned nil state for pod [%s]", podNamespacedName(pod))
+		}
 	}
 
 	var ingressPolicies []internalPolicy
