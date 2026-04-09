@@ -193,20 +193,6 @@ func (pm *PolicyMap) unmerge(other PolicyMap) {
 	}
 }
 
-//XXX: for debug, to be removed
-/*
-func (pm *PolicyMap)String() string {
-	if pm == nil {
-		return ""
-	}
-	str := ""
-	for _, v := range *pm {
-		str = fmt.Sprintf("%s\n\tpod: %s", str, v.Name())
-	}
-	return str
-}
-*/
-
 type policyChange struct {
 	previous PolicyMap
 	current  PolicyMap

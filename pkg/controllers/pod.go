@@ -31,6 +31,7 @@ import (
 	multiutils "github.com/telekom/multi-networkpolicy-nftables/pkg/utils"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 
 	v1 "k8s.io/api/core/v1"
@@ -297,7 +298,9 @@ func (pct *PodChangeTracker) getPodNetNSPath(pod *v1.Pod) (string, error) {
 				ContainerId: containerID,
 				Verbose:     true,
 			}
-			r, err := pct.criClient.ContainerStatus(context.TODO(), request)
+			rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer rpcCancel()
+			r, err := pct.criClient.ContainerStatus(rpcCtx, request)
 			if err != nil {
 				return "", fmt.Errorf("cannot get containerStatus: %v", err)
 			}
@@ -558,13 +561,34 @@ func getRuntimeClientConnection(runtimeEndpoint, hostPrefix string) (*grpc.Clien
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	//nolint:staticcheck // ignore SA1019 : grpc.DialContext is deprecated
-	conn, err := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock(), grpc.WithContextDialer(dialer))
+	// grpc.NewClient uses name resolution by default; "passthrough" skips
+	// the resolver so the address is handed directly to the custom dialer,
+	// matching the semantics of the former grpc.DialContext.
+	target := "passthrough:///" + addr
+	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(dialer))
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to %s, make sure you are running as root and the runtime has been started: %v", HostRuntimeEndpoint, err)
+		return nil, fmt.Errorf("failed to create gRPC client for %s: %w", HostRuntimeEndpoint, err)
 	}
+
+	// Trigger the connection attempt (moves state from IDLE to CONNECTING).
+	conn.Connect()
+
+	// Wait up to 30 s for the connection to become READY.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for {
+		state := conn.GetState()
+		if state == connectivity.Ready {
+			break
+		}
+		if !conn.WaitForStateChange(ctx, state) {
+			// Context expired before READY was reached.
+			_ = conn.Close()
+			return nil, fmt.Errorf("timed out waiting for gRPC connection to %s to become ready (last state: %s)", HostRuntimeEndpoint, state)
+		}
+	}
+
 	return conn, nil
 }
 

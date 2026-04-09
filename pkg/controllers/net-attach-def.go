@@ -261,7 +261,8 @@ func (ndt *NetDefChangeTracker) netDefToNetDefMap(netdef *netdefv1.NetworkAttach
 		klog.Errorf("err: %v\n", err)
 		return nil
 	}
-	//XXX: need to revisit (why we need map?, just netdefInfo might be okey?)
+	// TODO(#refactor): NetDefMap is keyed by NamespacedName for future multi-entry support;
+	// currently only one entry is added. Revisit if the single-entry assumption becomes a constraint.
 	netdefMap[types.NamespacedName{Namespace: netdef.Namespace, Name: netdef.Name}] = *netdefInfo
 	return netdefMap
 }

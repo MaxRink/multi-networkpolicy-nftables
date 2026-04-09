@@ -128,13 +128,21 @@ func MatchRulesetBytes(t *testing.T, fillRuleset func(c *nftables.Conn), want []
 func nfdump(b []byte) string {
 	var buf bytes.Buffer
 	i := 0
-	for ; i < len(b); i += 4 {
-		// TODO: show printable characters as ASCII
-		fmt.Fprintf(&buf, "%02x %02x %02x %02x\n",
+	for ; i+3 < len(b); i += 4 {
+		var ascii [4]byte
+		for j := 0; j < 4; j++ {
+			if b[i+j] >= 0x20 && b[i+j] < 0x7f {
+				ascii[j] = b[i+j]
+			} else {
+				ascii[j] = '.'
+			}
+		}
+		fmt.Fprintf(&buf, "%02x %02x %02x %02x  %s\n",
 			b[i],
 			b[i+1],
 			b[i+2],
-			b[i+3])
+			b[i+3],
+			string(ascii[:]))
 	}
 	for ; i < len(b); i++ {
 		fmt.Fprintf(&buf, "%02x ", b[i])

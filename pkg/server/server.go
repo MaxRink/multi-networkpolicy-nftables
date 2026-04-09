@@ -18,6 +18,7 @@ package server
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"slices"
 	"strings"
@@ -516,16 +517,20 @@ func (s *Server) syncMultiPolicy() error {
 }
 
 func (s *Server) applyPolicyRulesForPod(pod *v1.Pod, podInfo *controllers.PodInfo, netNs ns.NetNS) error {
-	nft, err := nftables.New(nftables.WithNetNSFd(int(netNs.Fd())), nftables.AsLasting())
+	fd := netNs.Fd()
+	if fd > uintptr(math.MaxInt) {
+		return fmt.Errorf("netns file descriptor %d overflows int", fd)
+	}
+	nft, err := nftables.New(nftables.WithNetNSFd(int(fd)), nftables.AsLasting())
+	if err != nil {
+		return fmt.Errorf("failed to open nftables: %v", err)
+	}
 	var closeErr error
 	defer func() {
 		if err := nft.CloseLasting(); err != nil {
 			closeErr = fmt.Errorf("closing lasting netlink connection failed for pod [%s]: %w", podNamespacedName(pod), err)
 		}
 	}()
-	if err != nil {
-		return fmt.Errorf("failed to open nftables: %v", err)
-	}
 	err = s.applyPolicyRulesForPodAndFamily(pod, podInfo, nft)
 	if err != nil {
 		return fmt.Errorf("can't apply nftables inet rules for pod [%s]: %w", podNamespacedName(pod), err)

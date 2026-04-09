@@ -235,7 +235,9 @@ func TestApplyCommonChainRules(t *testing.T) {
 }
 
 func TestApplyPodRules(t *testing.T) {
-	// TODO: still needs proper validation against the MultiNetworkPolicy CR content
+	// TODO(enhancement): Currently validates rule and set counts only. Full validation
+	// of rule content against the MultiNetworkPolicy CR spec (e.g. verifying port ranges,
+	// IP blocks, and protocol values in the nftables binary encoding) is tracked separately.
 	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
 	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
 	defer c.CloseLasting()
