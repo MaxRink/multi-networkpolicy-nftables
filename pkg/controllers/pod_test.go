@@ -200,7 +200,7 @@ var _ = Describe("pod controller", func() {
 		podChanges := NewFakePodChangeTracker("nodeName", "hostPrefix", ndChanges)
 
 		Expect(podChanges.Update(nil, NewFakePod("testns1", "testpod1"))).To(BeTrue())
-		Expect(podChanges.Update(NewFakePod("testns1", "testpod1"), nil)).To(BeTrue())
+		Expect(podChanges.Update(NewFakePod("testns1", "testpod1"), nil)).To(BeFalse())
 		Expect(podChanges.Update(nil, NewFakePod("testns2", "testpod2"))).To(BeTrue())
 
 		podMap := make(PodMap)
@@ -263,6 +263,28 @@ var _ = Describe("pod controller", func() {
 		Expect(pod2.Name).To(Equal("testpod1"))
 		Expect(pod2.Namespace).To(Equal("testns1"))
 		Expect(len(pod2.Interfaces)).To(Equal(1))
+	})
+
+	It("Update returns false when no items are pending (equal previous and current)", func() {
+		ndChanges := NewNetDefChangeTracker()
+		podChanges := NewFakePodChangeTracker("nodeName", "hostPrefix", ndChanges)
+		result := podChanges.Update(NewFakePod("testns1", "testpod1"), NewFakePod("testns1", "testpod1"))
+		Expect(result).To(BeFalse())
+	})
+
+	It("Update returns true when an item is added", func() {
+		ndChanges := NewNetDefChangeTracker()
+		podChanges := NewFakePodChangeTracker("nodeName", "hostPrefix", ndChanges)
+		result := podChanges.Update(nil, NewFakePod("testns1", "testpod1"))
+		Expect(result).To(BeTrue())
+	})
+
+	It("Update returns false when item is deleted (previous equals current after tracking)", func() {
+		ndChanges := NewNetDefChangeTracker()
+		podChanges := NewFakePodChangeTracker("nodeName", "hostPrefix", ndChanges)
+		podChanges.Update(nil, NewFakePod("testns1", "testpod1"))
+		result := podChanges.Update(NewFakePod("testns1", "testpod1"), nil)
+		Expect(result).To(BeFalse())
 	})
 
 })
