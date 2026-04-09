@@ -32,6 +32,15 @@ import (
 const (
 	IPv4OffSet = uint32(12) // IPs start at byte 12 in the NetworkBaseHeader
 	IPv6OffSet = uint32(8)  // IPv6 IPs start at byte 8 in the NetworkBaseHeader
+
+	// tableFilter is the daemon-specific nftables table for filter rules.
+	// Using a dedicated name avoids conflicts with other tools that use
+	// the generic "filter" table.
+	tableFilter = "mnp-filter"
+	// tableNat is the daemon-specific nftables table for NAT rules.
+	// Using a dedicated name avoids conflicts with other tools that use
+	// the generic "nat" table.
+	tableNat = "mnp-nat"
 )
 
 type nftState struct {
@@ -152,7 +161,7 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 
 	filterTable, err := addTable(nft, &nftables.Table{
 		Family: nftables.TableFamilyINet,
-		Name:   "filter",
+		Name:   tableFilter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to add table: %w", err)
@@ -160,7 +169,7 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 
 	natTable, err := addTable(nft, &nftables.Table{
 		Family: nftables.TableFamilyINet,
-		Name:   "nat",
+		Name:   tableNat,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to add table: %w", err)
