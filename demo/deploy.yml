@@ -6,7 +6,7 @@ metadata:
 rules:
   - apiGroups: ["k8s.cni.cncf.io"]
     resources:
-      - multinetworkpolicies
+      - multi-networkpolicies
       - network-attachment-definitions
     verbs:
       - get
