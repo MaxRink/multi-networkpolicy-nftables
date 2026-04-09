@@ -40,7 +40,7 @@ for f in ./tests/*.bats; do
     bats_help="$(bats --help 2>&1)"
     if printf '%s\n' "$bats_help" | grep -q -- "--report-formatter" &&
         printf '%s\n' "$bats_help" | grep -q -- "junit"; then
-        bats --report-formatter junit --output "./artifacts/junit" "$f"
+        BATS_REPORT_FILENAME="${test_name}.xml" bats --report-formatter junit --output "./artifacts/junit" "$f"
     else
         bats "$f"
     fi

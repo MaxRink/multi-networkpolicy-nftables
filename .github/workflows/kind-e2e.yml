@@ -52,6 +52,24 @@ jobs:
           path: ./e2e/artifacts/junit/
           if-no-files-found: ignore
 
+      - name: Print test summary
+        if: always()
+        run: |
+          echo "## E2E Test Results" >> "$GITHUB_STEP_SUMMARY"
+          for f in ./e2e/artifacts/junit/*.xml; do
+            [ -f "$f" ] || continue
+            suite="$(basename "$f" .xml)"
+            tests="$(grep -o 'tests="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*')"
+            failures="$(grep -o 'failures="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*')"
+            errors="$(grep -o 'errors="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*')"
+            skipped="$(grep -o 'skipped="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*')"
+            if [ "${failures:-0}" -eq 0 ] && [ "${errors:-0}" -eq 0 ]; then
+              echo "- ✅ **${suite}**: ${tests} tests, ${skipped:-0} skipped" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- ❌ **${suite}**: ${tests} tests, ${failures:-0} failures, ${errors:-0} errors" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
       - name: Publish test report
         uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
         if: always() && hashFiles('./e2e/artifacts/junit/*.xml') != ''
