@@ -378,7 +378,7 @@ func TestApplyPodRules(t *testing.T) {
 	check := func() bool {
 		filterTable, err := c.ListTableOfFamily(nftState.filter.Name, nftables.TableFamilyINet)
 		if err != nil {
-			t.Fatalf("c.ListTable(\"filter\") failed: %v", err)
+			t.Fatalf("c.ListTable(%q) failed: %v", nftState.filter.Name, err)
 		}
 		if filterTable == nil {
 			t.Errorf("filterTable is nil")
@@ -605,7 +605,7 @@ func TestApplyPodRulesNoPorts(t *testing.T) {
 	check := func() bool {
 		filterTable, err := c.ListTableOfFamily(nftState.filter.Name, nftables.TableFamilyINet)
 		if err != nil {
-			t.Fatalf("c.ListTable(\"filter\") failed: %v", err)
+			t.Fatalf("c.ListTable(%q) failed: %v", nftState.filter.Name, err)
 		}
 		if filterTable == nil {
 			t.Errorf("filterTable is nil")
@@ -808,7 +808,7 @@ func TestApplyPolicyPortsRules(t *testing.T) {
 	check := func() bool {
 		filterTable, err := c.ListTableOfFamily(nftState.filter.Name, nftables.TableFamilyINet)
 		if err != nil {
-			t.Fatalf("c.ListTable(\"filter\") failed: %v", err)
+			t.Fatalf("c.ListTable(%q) failed: %v", nftState.filter.Name, err)
 		}
 		if filterTable == nil {
 			t.Errorf("filterTable is nil")
