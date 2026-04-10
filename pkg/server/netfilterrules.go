@@ -428,6 +428,15 @@ func ruleEqual(a, b *nftables.Rule) bool {
 			if !exprEqual(&expr.Bitwise{}, a.Exprs[i], b.Exprs[i]) {
 				return false
 			}
+		case *expr.Counter:
+			// Counter values change at runtime; only verify the peer expression is
+			// also a Counter (type match is sufficient for rule identity).
+			if _, ok := b.Exprs[i].(*expr.Counter); !ok {
+				return false
+			}
+		default:
+			// Unknown expression type: fail-safe — assume not equal.
+			return false
 		}
 	}
 

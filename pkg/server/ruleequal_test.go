@@ -15,8 +15,6 @@ func makeRule(chainName, tableName string, exprs []expr.Any) *nftables.Rule {
 	}
 }
 
-// TestRuleEqual_DifferentExprLen verifies that ruleEqual returns false (without
-// panicking) when a.Exprs and b.Exprs have different lengths.
 func TestRuleEqual_DifferentExprLen(t *testing.T) {
 	a := makeRule("input", "filter", []expr.Any{
 		&expr.Meta{Key: expr.MetaKeyL4PROTO},
@@ -31,29 +29,23 @@ func TestRuleEqual_DifferentExprLen(t *testing.T) {
 	}
 }
 
-// TestRuleEqual_EqualRules verifies that ruleEqual returns true for two
-// identical rules.
 func TestRuleEqual_EqualRules(t *testing.T) {
-	exprs := []expr.Any{
+	a := makeRule("forward", "filter", []expr.Any{
 		&expr.Meta{Key: expr.MetaKeyL4PROTO},
 		&expr.Cmp{Op: expr.CmpOpEq, Data: []byte{0x06}},
 		&expr.Verdict{Kind: expr.VerdictAccept},
-	}
-	a := makeRule("forward", "filter", exprs)
-	b := makeRule("forward", "filter", exprs)
-	b.Exprs = []expr.Any{
+	})
+	b := makeRule("forward", "filter", []expr.Any{
 		&expr.Meta{Key: expr.MetaKeyL4PROTO},
 		&expr.Cmp{Op: expr.CmpOpEq, Data: []byte{0x06}},
 		&expr.Verdict{Kind: expr.VerdictAccept},
-	}
+	})
 
 	if !ruleEqual(a, b) {
 		t.Error("ruleEqual() returned false for identical rules; expected true")
 	}
 }
 
-// TestRuleEqual_DifferentChain verifies that ruleEqual returns false when
-// chain names differ.
 func TestRuleEqual_DifferentChain(t *testing.T) {
 	exprs := []expr.Any{&expr.Verdict{Kind: expr.VerdictAccept}}
 	a := makeRule("input", "filter", exprs)
@@ -64,8 +56,6 @@ func TestRuleEqual_DifferentChain(t *testing.T) {
 	}
 }
 
-// TestRuleEqual_DifferentTable verifies that ruleEqual returns false when
-// table names differ.
 func TestRuleEqual_DifferentTable(t *testing.T) {
 	exprs := []expr.Any{&expr.Verdict{Kind: expr.VerdictAccept}}
 	a := makeRule("input", "filter", exprs)
@@ -76,8 +66,6 @@ func TestRuleEqual_DifferentTable(t *testing.T) {
 	}
 }
 
-// TestRuleEqual_DifferentUserData verifies that ruleEqual returns false when
-// UserData differs.
 func TestRuleEqual_DifferentUserData(t *testing.T) {
 	exprs := []expr.Any{&expr.Verdict{Kind: expr.VerdictAccept}}
 	a := makeRule("input", "filter", exprs)
@@ -90,13 +78,50 @@ func TestRuleEqual_DifferentUserData(t *testing.T) {
 	}
 }
 
-// TestRuleEqual_EmptyExprs verifies that ruleEqual handles empty Exprs slices
-// correctly.
 func TestRuleEqual_EmptyExprs(t *testing.T) {
 	a := makeRule("input", "filter", []expr.Any{})
 	b := makeRule("input", "filter", []expr.Any{})
 
 	if !ruleEqual(a, b) {
 		t.Error("ruleEqual() returned false for rules with empty Exprs; expected true")
+	}
+}
+
+func TestRuleEqual_CounterVsCounter(t *testing.T) {
+	a := makeRule("input", "filter", []expr.Any{
+		&expr.Counter{Bytes: 100, Packets: 10},
+	})
+	b := makeRule("input", "filter", []expr.Any{
+		&expr.Counter{Bytes: 999, Packets: 99},
+	})
+
+	if !ruleEqual(a, b) {
+		t.Error("ruleEqual() returned false for Counter vs Counter (different values); expected true (values are runtime-only)")
+	}
+}
+
+func TestRuleEqual_CounterVsNonCounter(t *testing.T) {
+	a := makeRule("input", "filter", []expr.Any{
+		&expr.Counter{},
+	})
+	b := makeRule("input", "filter", []expr.Any{
+		&expr.Verdict{Kind: expr.VerdictAccept},
+	})
+
+	if ruleEqual(a, b) {
+		t.Error("ruleEqual() returned true for Counter vs non-Counter; expected false")
+	}
+}
+
+func TestRuleEqual_UnknownExprType(t *testing.T) {
+	a := makeRule("input", "filter", []expr.Any{
+		&expr.Masq{},
+	})
+	b := makeRule("input", "filter", []expr.Any{
+		&expr.Masq{},
+	})
+
+	if ruleEqual(a, b) {
+		t.Error("ruleEqual() returned true for unhandled expression type; expected false (fail-safe default)")
 	}
 }
