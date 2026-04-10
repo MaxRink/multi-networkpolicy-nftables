@@ -1834,10 +1834,10 @@ func validatePortSpec(port multiv1beta1.MultiNetworkPolicyPort) ([]nftables.SetE
 
 	if port.Port.Type == intstr.String {
 		portNum, err := strconv.Atoi(port.Port.StrVal)
-		if err != nil {
+		if err != nil || portNum < 1 || portNum > math.MaxUint16 {
 			return nil, fmt.Errorf("named port %q is not supported; numeric ports are required", port.Port.StrVal)
 		}
-		port.Port = &intstr.IntOrString{Type: intstr.Int, IntVal: int32(portNum)}
+		port.Port = &intstr.IntOrString{Type: intstr.Int, IntVal: int32(portNum)} //nolint:gosec // G109: portNum validated in range [1, 65535] above
 	}
 	if port.Port.IntValue() < 1 || port.Port.IntValue() > math.MaxUint16 {
 		return nil, fmt.Errorf("port %d out of range, must be between 1 and %d", port.Port.IntValue(), math.MaxUint16)
