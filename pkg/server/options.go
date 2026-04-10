@@ -18,6 +18,7 @@ package server
 
 import (
 	"flag"
+	"fmt"
 	"net"
 	"strings"
 
@@ -45,6 +46,8 @@ type Options struct {
 	acceptICMP               bool
 	allowSrcPrefixText       string
 	allowDstPrefixText       string
+	// healthPort is the TCP port the health HTTP server listens on (0 = disabled).
+	healthPort int
 
 	// updated by command line parsing
 	allowSrcPrefix []string
@@ -70,6 +73,7 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&o.acceptICMPv6, "accept-icmpv6", false, "accept all ICMPv6 traffic")
 	fs.StringVar(&o.allowSrcPrefixText, "allow-src-prefix", "", "Accept source IP prefix list, comma separated CIDRs (e.g. \"fe80::/10\")")
 	fs.StringVar(&o.allowDstPrefixText, "allow-dst-prefix", "", "Accept destination IP prefix list, comma separated CIDRs (e.g. \"fe80::/10,ff00::/8\")")
+	fs.IntVar(&o.healthPort, "health-port", 8081, "TCP port for the health HTTP server (0 to disable).")
 	fs.AddGoFlagSet(flag.CommandLine)
 }
 
@@ -118,6 +122,14 @@ func (o *Options) Run() error {
 	err = o.Validate()
 	if err != nil {
 		return err
+	}
+
+	if o.healthPort > 0 {
+		hs := newHealthServer(fmt.Sprintf(":%d", o.healthPort), server)
+		if err := hs.Start(); err != nil {
+			return err
+		}
+		defer hs.Stop()
 	}
 
 	server.Run(hostname, o.stopCh)
