@@ -1905,12 +1905,12 @@ func (n *nftState) cleanupChains(force bool) error {
 		if err != nil {
 			return fmt.Errorf("failed to get rules for table %q, chain %q: %w", chain.Table.Name, chain.Name, err)
 		}
-		_, used := n.chains[chainID(chain)]
-		if !used && len(rules) < 1 {
+		if _, used := n.chains[chainID(chain)]; !used && len(rules) < 1 {
 			klog.V(8).Infof("deleting chain %q in table %q", chain.Name, chain.Table.Name)
 			n.nft.DelChain(chain)
 			performFlush = true
-		} else if force && len(rules) == 0 && isBootstrapChain(chain.Name, chain.Table.Name) {
+		}
+		if force && len(rules) == 0 && isBootstrapChain(chain.Name, chain.Table.Name) {
 			klog.V(8).Infof("force-deleting bootstrap chain %q in table %q on shutdown", chain.Name, chain.Table.Name)
 			n.nft.DelChain(chain)
 			performFlush = true
