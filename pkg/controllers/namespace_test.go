@@ -167,4 +167,17 @@ var _ = Describe("namespace controller", func() {
 		Expect(ok).To(BeTrue())
 		Expect(labelTest).To(Equal("labelValue2"))
 	})
+
+	It("Update ns with same data returns false (no pending changes)", func() {
+		nsChanges := NewNamespaceChangeTracker()
+		labels := map[string]string{"labelName1": "labelValue1"}
+		Expect(nsChanges.Update(nil, NewNamespace("test1", labels))).To(BeTrue())
+		nsMap := make(NamespaceMap)
+		nsMap.Update(nsChanges)
+
+		Expect(nsChanges.Update(
+			NewNamespace("test1", labels),
+			NewNamespace("test1", labels),
+		)).To(BeFalse())
+	})
 })
