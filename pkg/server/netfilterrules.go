@@ -84,7 +84,7 @@ func policyRuleNamespacedName(o *multiv1beta1.MultiNetworkPolicy) string {
 	return o.GetNamespace() + "-" + o.GetName()
 }
 
-func bootstrapNetfilterChains(nftState *nftState) {
+func bootstrapNetfilterChains(nftState *nftState) error {
 	// the netfilter hook system
 	// ref: https://wiki.nftables.org/wiki-nftables/index.php/Netfilter_hooks
 	// Create our chains if they don't already exist
@@ -97,7 +97,7 @@ func bootstrapNetfilterChains(nftState *nftState) {
 		Priority: nftables.ChainPriorityFilter,
 		Type:     nftables.ChainTypeFilter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create input chain: %w", err)
 	}
 	// nft add chain inet filter output { type filter hook output priority 0 \; }
 	if nftState.output, err = nftState.addChain(&nftables.Chain{
@@ -107,7 +107,7 @@ func bootstrapNetfilterChains(nftState *nftState) {
 		Priority: nftables.ChainPriorityFilter,
 		Type:     nftables.ChainTypeFilter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create output chain: %w", err)
 	}
 	// nft add chain inet filter prerouting { type filter hook prerouting priority 0 \; }
 	if nftState.prerouting, err = nftState.addChain(&nftables.Chain{
@@ -117,36 +117,37 @@ func bootstrapNetfilterChains(nftState *nftState) {
 		Priority: nftables.ChainPriorityNATDest,
 		Type:     nftables.ChainTypeNAT,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create prerouting chain: %w", err)
 	}
 	// add chain inet filter MULTI-INGRESS
 	if nftState.ingressChain, err = nftState.addChain(&nftables.Chain{
 		Name:  ingressChain,
 		Table: nftState.filter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create %s chain: %w", ingressChain, err)
 	}
 	// add chain inet filter MULTI-EGRESS
 	if nftState.egressChain, err = nftState.addChain(&nftables.Chain{
 		Name:  egressChain,
 		Table: nftState.filter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create %s chain: %w", egressChain, err)
 	}
 	// nft add chain inet filter MULTI-INGRESS-COMMON
 	if nftState.commonIngressChain, err = nftState.addChain(&nftables.Chain{
 		Name:  fmt.Sprintf("%s-%s", ingressChain, common),
 		Table: nftState.filter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create %s-%s chain: %w", ingressChain, common, err)
 	}
 	// nft add chain inet filter MULTI-EGRESS-COMMON
 	if nftState.commonEgressChain, err = nftState.addChain(&nftables.Chain{
 		Name:  fmt.Sprintf("%s-%s", egressChain, common),
 		Table: nftState.filter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create %s-%s chain: %w", egressChain, common, err)
 	}
+	return nil
 }
 
 func addTable(nft *nftables.Conn, table *nftables.Table) (*nftables.Table, error) {
@@ -192,7 +193,9 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 		chains: make(map[string]*nftables.Chain),
 	}
 
-	bootstrapNetfilterChains(nftState)
+	if err = bootstrapNetfilterChains(nftState); err != nil {
+		return nil, fmt.Errorf("failed to bootstrap netfilter chains: %w", err)
+	}
 
 	slices.SortStableFunc(podInfo.Interfaces, func(a, b controllers.InterfaceInfo) int {
 		return strings.Compare(a.InterfaceName, b.InterfaceName)

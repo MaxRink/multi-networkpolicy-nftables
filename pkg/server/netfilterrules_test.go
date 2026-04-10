@@ -1301,9 +1301,64 @@ func NewCNIConfig(cniName, cniType string) string {
 	return fmt.Sprintf(cniConfigTemp, cniName, cniType)
 }
 
+func TestBootstrapNetfilterChainsErrorPropagation(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.FlushRuleset()
+	defer c.CloseLasting()
+	c.FlushRuleset()
+
+	filterTable, err := addTable(c, &nftables.Table{
+		Family: nftables.TableFamilyINet,
+		Name:   "filter",
+	})
+	if err != nil {
+		t.Fatalf("addTable(filter) failed: %v", err)
+	}
+	natTable, err := addTable(c, &nftables.Table{
+		Family: nftables.TableFamilyINet,
+		Name:   "nat",
+	})
+	if err != nil {
+		t.Fatalf("addTable(nat) failed: %v", err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatalf("c.Flush() failed: %v", err)
+	}
+
+	state := &nftState{
+		nft:    c,
+		filter: filterTable,
+		nat:    natTable,
+		rules:  make(map[string]*nftables.Rule),
+		sets:   make(map[string]*nftables.Set),
+		chains: make(map[string]*nftables.Chain),
+	}
+
+	if err = bootstrapNetfilterChains(state); err != nil {
+		t.Fatalf("bootstrapNetfilterChains() failed unexpectedly: %v", err)
+	}
+
+	if state.input == nil || state.output == nil || state.prerouting == nil ||
+		state.ingressChain == nil || state.egressChain == nil ||
+		state.commonIngressChain == nil || state.commonEgressChain == nil {
+		t.Fatal("bootstrapNetfilterChains() left nil chain fields after success")
+	}
+}
+
+func TestBootstrapNetfilterRulesPropagatesChainError(t *testing.T) {
+	_, err := bootstrapNetfilterRules(nil, nil)
+	if err == nil {
+		t.Fatal("bootstrapNetfilterRules(nil, nil) should have returned an error")
+	}
+	_, err = bootstrapNetfilterRules(nil, &controllers.PodInfo{})
+	if err == nil {
+		t.Fatal("bootstrapNetfilterRules(nil, empty PodInfo) should have returned an error")
+	}
+}
+
 func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *Server, *controllers.PodInfo, error) {
 	podMockInfo := &controllers.PodInfo{
-		Name:      "mock-pod",
 		Namespace: "default",
 		Interfaces: []controllers.InterfaceInfo{
 			{NetattachName: "net0", InterfaceType: "macvlan", InterfaceName: "eth0", IPs: []string{"10.0.0.0", "fd00::"}},
