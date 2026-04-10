@@ -210,6 +210,7 @@ type PodInfo struct {
 	NetworkStatus []netdefv1.NetworkStatus
 	NodeName      string
 	Interfaces    []InterfaceInfo
+	Labels        map[string]string
 }
 
 // CheckPolicyNetwork checks whether given pod is target or not,
@@ -423,6 +424,7 @@ func (pct *PodChangeTracker) newPodInfo(pod *v1.Pod) *PodInfo {
 		NetNSPath:     netnsPath,
 		NodeName:      pod.Spec.NodeName,
 		Interfaces:    netifs,
+		Labels:        pod.Labels,
 	}
 	return info
 }

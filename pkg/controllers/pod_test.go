@@ -111,6 +111,25 @@ func NewFakeNetworkStatus(netns, netname string) string {
 	return fmt.Sprintf(baseStr, netns, netname)
 }
 
+func NewFakePodWithLabels(namespace, name string, labels map[string]string) *v1.Pod {
+	return &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      name,
+			UID:       "testUID",
+			Labels:    labels,
+		},
+		Spec: v1.PodSpec{
+			Containers: []v1.Container{
+				{Name: "ctr1", Image: "image"},
+			},
+		},
+		Status: v1.PodStatus{
+			Phase: v1.PodRunning,
+		},
+	}
+}
+
 func NewFakePod(namespace, name string) *v1.Pod {
 	return &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -285,6 +304,26 @@ var _ = Describe("pod controller", func() {
 		podChanges.Update(nil, NewFakePod("testns1", "testpod1"))
 		result := podChanges.Update(NewFakePod("testns1", "testpod1"), nil)
 		Expect(result).To(BeFalse())
+	})
+
+	It("Label change triggers tracker diff", func() {
+		ndChanges := NewNetDefChangeTracker()
+		podChanges := NewFakePodChangeTracker("nodeName", "hostPrefix", ndChanges)
+
+		oldPod := NewFakePodWithLabels("testns1", "testpod1", map[string]string{"a": "b"})
+		newPod := NewFakePodWithLabels("testns1", "testpod1", map[string]string{"a": "c"})
+
+		Expect(podChanges.Update(nil, oldPod)).To(BeTrue())
+		podMap := make(PodMap)
+		podMap.Update(podChanges)
+
+		Expect(podChanges.Update(oldPod, newPod)).To(BeTrue())
+		Expect(len(podChanges.items)).To(Equal(1))
+
+		podMap.Update(podChanges)
+		pod1, ok := podMap[types.NamespacedName{Namespace: "testns1", Name: "testpod1"}]
+		Expect(ok).To(BeTrue())
+		Expect(pod1.Labels["a"]).To(Equal("c"))
 	})
 
 })
