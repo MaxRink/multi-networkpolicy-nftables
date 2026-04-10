@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -424,7 +425,7 @@ func (pct *PodChangeTracker) newPodInfo(pod *v1.Pod) *PodInfo {
 		NetNSPath:     netnsPath,
 		NodeName:      pod.Spec.NodeName,
 		Interfaces:    netifs,
-		Labels:        pod.Labels,
+		Labels:        maps.Clone(pod.Labels),
 	}
 	return info
 }
