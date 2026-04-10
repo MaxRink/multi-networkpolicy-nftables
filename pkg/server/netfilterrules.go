@@ -1520,6 +1520,16 @@ func (n *nftState) applyPolicyPeersRulesSelector(ctx context.Context, deps contr
 			if !podIntf.CheckPolicyNetwork(policyNetworks) {
 				continue
 			}
+			if nsSelector != nil && !nsSelector.Matches(labels.Set(nsLabels.Labels)) {
+				continue
+			}
+			s.podMap.Update(s.podChanges)
+			sPodinfo, err := s.podMap.GetPodInfo(sPod)
+			if err != nil {
+				klog.Errorf("cannot get %s/%s podInfo: %v", sPod.Namespace, sPod.Name, err)
+				continue
+			}
+
 			for _, sPodIntf := range sPodinfo.Interfaces {
 				if !sPodIntf.CheckPolicyNetwork(policyNetworks) {
 					continue
