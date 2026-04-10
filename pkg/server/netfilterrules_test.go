@@ -1348,6 +1348,75 @@ func NewCNIConfig(cniName, cniType string) string {
 	return fmt.Sprintf(cniConfigTemp, cniName, cniType)
 }
 
+func TestExceptCIDRUsesVerdictReturn(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.CloseLasting()
+	c.FlushRuleset()
+	defer c.FlushRuleset()
+
+	nftState, _, _, _, err := prepareEnv(c, false)
+	if err != nil {
+		t.Fatalf("failed to prepare test env: %s", err.Error())
+	}
+
+	peer := multiv1beta1.MultiNetworkPolicyPeer{
+		IPBlock: &multiv1beta1.IPBlock{
+			CIDR:   "10.0.0.0/8",
+			Except: []string{"10.1.0.0/16"},
+		},
+	}
+
+	chainName := nftState.ingressChain.Name
+	chain := nftState.ingressChain
+
+	if err := nftState.applyPolicyPeersRulesIPBlock(chainName, chain, "test-policy", peer, 0); err != nil {
+		t.Fatalf("applyPolicyPeersRulesIPBlock() failed: %v", err)
+	}
+
+	if err := nftState.nft.Flush(); err != nil {
+		t.Fatalf("nft.Flush() failed: %v", err)
+	}
+
+	filterTable, err := c.ListTableOfFamily(nftState.filter.Name, nftables.TableFamilyINet)
+	if err != nil {
+		t.Fatalf("ListTableOfFamily() failed: %v", err)
+	}
+	if filterTable == nil {
+		t.Fatal("filterTable is nil")
+	}
+
+	rules, err := c.GetRules(filterTable, chain)
+	if err != nil {
+		t.Fatalf("GetRules() failed: %v", err)
+	}
+
+	foundExceptRule := false
+	for _, rule := range rules {
+		comment, ok := userdata.GetString(rule.UserData, userdata.TypeComment)
+		if !ok || !strings.Contains(comment, "return") {
+			continue
+		}
+		for _, e := range rule.Exprs {
+			v, ok := e.(*expr.Verdict)
+			if !ok {
+				continue
+			}
+			if v.Kind == expr.VerdictDrop {
+				t.Errorf("except CIDR rule uses VerdictDrop; want VerdictReturn")
+			}
+			if v.Kind != expr.VerdictReturn {
+				t.Errorf("except CIDR rule verdict kind = %v; want VerdictReturn", v.Kind)
+			}
+			foundExceptRule = true
+		}
+	}
+
+	if !foundExceptRule {
+		t.Error("no except CIDR rule with a verdict found; expected one rule with VerdictReturn")
+	}
+}
+
 func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *testServer, *controllers.PodInfo, error) {
 	podMockInfo := &controllers.PodInfo{
 		Name:      "mock-pod",
