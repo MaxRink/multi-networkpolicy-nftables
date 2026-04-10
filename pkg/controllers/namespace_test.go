@@ -175,8 +175,7 @@ var _ = Describe("namespace controller", func() {
 		nsMap := make(NamespaceMap)
 		nsMap.Update(nsChanges)
 
-		nsChanges2 := NewNamespaceChangeTracker()
-		Expect(nsChanges2.Update(
+		Expect(nsChanges.Update(
 			NewNamespace("test1", labels),
 			NewNamespace("test1", labels),
 		)).To(BeFalse())
