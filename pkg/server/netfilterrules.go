@@ -1171,10 +1171,20 @@ func (n *nftState) applyPolicyPeersRulesIPBlock(chainName string, chain *nftable
 
 func (n *nftState) applyPolicyPeersRulesSelector(s *Server, chainName string, chain *nftables.Chain, policyName string, peer multiv1beta1.MultiNetworkPolicyPeer,
 	podInfo *controllers.PodInfo, policyNetworks []string, peerIndex int) error {
-	klog.V(8).Infof("applying peers rules with pod selector: %s", peer.PodSelector.String())
-	podSelector, err := metav1.LabelSelectorAsSelector(peer.PodSelector)
-	if err != nil {
-		return fmt.Errorf("pod selector: %w", err)
+	if peer.PodSelector != nil {
+		klog.V(8).Infof("applying peers rules with pod selector: %s", peer.PodSelector.String())
+	} else {
+		klog.V(8).Info("applying peers rules with namespace selector only (all pods in matched namespaces)")
+	}
+	var podSelector labels.Selector
+	if peer.PodSelector != nil {
+		var err error
+		podSelector, err = metav1.LabelSelectorAsSelector(peer.PodSelector)
+		if err != nil {
+			return fmt.Errorf("pod selector: %w", err)
+		}
+	} else {
+		podSelector = labels.Everything()
 	}
 
 	pods, err := s.podLister.Pods(metav1.NamespaceAll).List(podSelector)
@@ -1266,9 +1276,15 @@ func (n *nftState) addIPRule(chainName string, addrs []string, chain *nftables.C
 		offset += payloadLen
 	}
 
-	selectorHash, err := hash(peer.PodSelector.String())
+	var selectorStr string
+	if peer.PodSelector != nil {
+		selectorStr = peer.PodSelector.String()
+	} else {
+		selectorStr = "<all>"
+	}
+	selectorHash, err := hash(selectorStr)
 	if err != nil {
-		return fmt.Errorf("failed to hash pod selector %q: %w", peer.PodSelector.String(), err)
+		return fmt.Errorf("failed to hash pod selector %q: %w", selectorStr, err)
 	}
 
 	ipSet := &nftables.Set{
