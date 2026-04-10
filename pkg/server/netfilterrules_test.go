@@ -1348,6 +1348,10 @@ func NewCNIConfig(cniName, cniType string) string {
 	return fmt.Sprintf(cniConfigTemp, cniName, cniType)
 }
 
+// TestExceptCIDRUsesVerdictReturn verifies that except CIDRs in IPBlock peers
+// produce VerdictReturn rules (not VerdictDrop), and that OR semantics across
+// peers are preserved: an except match for one ipBlock entry does not prevent
+// a second peer from being evaluated.
 func TestExceptCIDRUsesVerdictReturn(t *testing.T) {
 	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
 	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
@@ -1355,23 +1359,31 @@ func TestExceptCIDRUsesVerdictReturn(t *testing.T) {
 	c.FlushRuleset()
 	defer c.FlushRuleset()
 
-	nftState, _, _, _, err := prepareEnv(c, false)
+	nftState, testNs, mockServer, _, err := prepareEnv(c, true)
 	if err != nil {
 		t.Fatalf("failed to prepare test env: %s", err.Error())
 	}
 
-	peer := multiv1beta1.MultiNetworkPolicyPeer{
-		IPBlock: &multiv1beta1.IPBlock{
-			CIDR:   "10.0.0.0/8",
-			Except: []string{"10.1.0.0/16"},
+	peers := []multiv1beta1.MultiNetworkPolicyPeer{
+		{
+			IPBlock: &multiv1beta1.IPBlock{
+				CIDR:   "10.0.0.0/8",
+				Except: []string{"10.1.0.0/16"},
+			},
+		},
+		{
+			IPBlock: &multiv1beta1.IPBlock{
+				CIDR: "192.168.0.0/16",
+			},
 		},
 	}
 
+	policyName := fmt.Sprintf("%s/test-policy", testNs)
 	chainName := nftState.ingressChain.Name
 	chain := nftState.ingressChain
 
-	if err := nftState.applyPolicyPeersRulesIPBlock(chainName, chain, "test-policy", peer, 0); err != nil {
-		t.Fatalf("applyPolicyPeersRulesIPBlock() failed: %v", err)
+	if err := nftState.applyPolicyPeersRules(mockServer, chainName, chain, policyName, peers, &controllers.PodInfo{}, []string{}, 0); err != nil {
+		t.Fatalf("applyPolicyPeersRules() failed: %v", err)
 	}
 
 	if err := nftState.nft.Flush(); err != nil {
@@ -1386,34 +1398,73 @@ func TestExceptCIDRUsesVerdictReturn(t *testing.T) {
 		t.Fatal("filterTable is nil")
 	}
 
-	rules, err := c.GetRules(filterTable, chain)
+	peersChainName := fmt.Sprintf("%s-%s-0", chainName, peersChainSuffix)
+
+	peersRules, err := c.GetRules(filterTable, &nftables.Chain{Name: peersChainName})
 	if err != nil {
-		t.Fatalf("GetRules() failed: %v", err)
+		t.Fatalf("GetRules(peersChain) failed: %v", err)
 	}
 
+	ipBlockJumps := 0
+	for _, rule := range peersRules {
+		for _, e := range rule.Exprs {
+			if v, ok := e.(*expr.Verdict); ok && v.Kind == expr.VerdictJump {
+				ipBlockJumps++
+			}
+		}
+	}
+	if ipBlockJumps < 2 {
+		t.Errorf("peers chain has %d jump(s); want at least 2 (one per ipBlock peer)", ipBlockJumps)
+	}
+
+	chains, err := c.ListChainsOfTableFamily(nftables.TableFamilyINet)
+	if err != nil {
+		t.Fatalf("ListChainsOfTableFamily() failed: %v", err)
+	}
+
+	exceptSetName := fmt.Sprintf("%s-%s-0_%s_%s_%s_0",
+		peersChainName, ipBlockChainSuffix,
+		peerIPBlockExceptPrefix, protoIPv4, sourceAddressSuffix)
+
 	foundExceptRule := false
-	for _, rule := range rules {
-		comment, ok := userdata.GetString(rule.UserData, userdata.TypeComment)
-		if !ok || !strings.Contains(comment, "return") {
+	for _, ch := range chains {
+		if ch.Table.Name != filterTable.Name {
 			continue
 		}
-		for _, e := range rule.Exprs {
-			v, ok := e.(*expr.Verdict)
-			if !ok {
+		rules, err := c.GetRules(filterTable, ch)
+		if err != nil {
+			continue
+		}
+		for _, rule := range rules {
+			hasExceptLookup := false
+			var verdict *expr.Verdict
+			for _, e := range rule.Exprs {
+				if lk, ok := e.(*expr.Lookup); ok && lk.SetName == exceptSetName {
+					hasExceptLookup = true
+				}
+				if v, ok := e.(*expr.Verdict); ok {
+					verdict = v
+				}
+			}
+			if !hasExceptLookup {
 				continue
 			}
-			if v.Kind == expr.VerdictDrop {
-				t.Errorf("except CIDR rule uses VerdictDrop; want VerdictReturn")
-			}
-			if v.Kind != expr.VerdictReturn {
-				t.Errorf("except CIDR rule verdict kind = %v; want VerdictReturn", v.Kind)
-			}
 			foundExceptRule = true
+			if verdict == nil {
+				t.Error("except rule has no verdict expression")
+				continue
+			}
+			if verdict.Kind == expr.VerdictDrop {
+				t.Error("except CIDR rule uses VerdictDrop; want VerdictReturn to preserve OR semantics across peers")
+			}
+			if verdict.Kind != expr.VerdictReturn {
+				t.Errorf("except CIDR rule verdict kind = %v; want VerdictReturn", verdict.Kind)
+			}
 		}
 	}
 
 	if !foundExceptRule {
-		t.Error("no except CIDR rule with a verdict found; expected one rule with VerdictReturn")
+		t.Errorf("no except CIDR rule found targeting set %q; expected one rule with VerdictReturn", exceptSetName)
 	}
 }
 
