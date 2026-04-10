@@ -1368,3 +1368,111 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *Server
 	}
 	return nftState, testNs, mockServer, podMockInfo, nil
 }
+
+// bootstrapChainNames returns the names and tables for all chains that bootstrapNetfilterRules
+// creates unconditionally and that should be removed during graceful shutdown.
+func bootstrapChainNames() []struct{ table, name string } {
+	return []struct{ table, name string }{
+		{"filter", "input"},
+		{"filter", "output"},
+		{"nat", "prerouting"},
+		{"filter", ingressChain},
+		{"filter", egressChain},
+		{"filter", fmt.Sprintf("%s-%s", ingressChain, common)},
+		{"filter", fmt.Sprintf("%s-%s", egressChain, common)},
+	}
+}
+
+func countBootstrapChains(t *testing.T, c *nftables.Conn) int {
+	t.Helper()
+	chains, err := c.ListChains()
+	if err != nil {
+		t.Fatalf("failed to list chains: %v", err)
+	}
+	expected := bootstrapChainNames()
+	found := 0
+	for _, chain := range chains {
+		for _, want := range expected {
+			if chain.Table.Name == want.table && chain.Name == want.name {
+				found++
+				break
+			}
+		}
+	}
+	return found
+}
+
+func TestShutdownCleanupRemovesBootstrapChains(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.CloseLasting()
+	c.FlushRuleset()
+	defer c.FlushRuleset()
+
+	podMockInfo := &controllers.PodInfo{
+		Interfaces: []controllers.InterfaceInfo{
+			{NetattachName: "one", InterfaceName: "eth0", IPs: []string{"10.0.0.1"}},
+		},
+	}
+
+	bootstrapState, err := bootstrapNetfilterRules(c, podMockInfo)
+	if err != nil {
+		t.Fatalf("bootstrapNetfilterRules() failed: %v", err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatalf("nft flush after bootstrap failed: %v", err)
+	}
+
+	if got := countBootstrapChains(t, c); got != len(bootstrapChainNames()) {
+		t.Fatalf("expected %d bootstrap chains after bootstrap, got %d", len(bootstrapChainNames()), got)
+	}
+
+	_ = bootstrapState
+
+	shutdownState, err := shutdownNftState(c)
+	if err != nil {
+		t.Fatalf("shutdownNftState() failed: %v", err)
+	}
+
+	if err := shutdownState.cleanup(); err != nil {
+		t.Fatalf("cleanup() during shutdown failed: %v", err)
+	}
+
+	if got := countBootstrapChains(t, c); got != 0 {
+		t.Errorf("expected 0 bootstrap chains after shutdown cleanup, got %d", got)
+	}
+}
+
+func TestNormalCleanupPreservesBootstrapChains(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.CloseLasting()
+	c.FlushRuleset()
+	defer c.FlushRuleset()
+
+	podMockInfo := &controllers.PodInfo{
+		Interfaces: []controllers.InterfaceInfo{
+			{NetattachName: "one", InterfaceName: "eth0", IPs: []string{"10.0.0.1"}},
+		},
+	}
+
+	state, err := bootstrapNetfilterRules(c, podMockInfo)
+	if err != nil {
+		t.Fatalf("bootstrapNetfilterRules() failed: %v", err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatalf("nft flush after bootstrap failed: %v", err)
+	}
+
+	if got := countBootstrapChains(t, c); got != len(bootstrapChainNames()) {
+		t.Fatalf("expected %d bootstrap chains after bootstrap, got %d", len(bootstrapChainNames()), got)
+	}
+
+	if err := state.cleanup(); err != nil {
+		t.Fatalf("cleanup() failed: %v", err)
+	}
+
+	if got := countBootstrapChains(t, c); got != len(bootstrapChainNames()) {
+		t.Errorf("expected %d bootstrap chains after normal cleanup, got %d", len(bootstrapChainNames()), got)
+	}
+}

@@ -544,7 +544,7 @@ func (s *Server) applyPolicyRulesForPod(pod *v1.Pod, podInfo *controllers.PodInf
 func (s *Server) initNftState(nft *nftables.Conn, podInfo *controllers.PodInfo, pod *v1.Pod) (*nftState, error) {
 	if s.shuttingDown.Load() {
 		// Empty desired-state maps cause cleanupRules to delete all existing
-		// rules, leaving chains empty for cleanupChains(force=true) to remove.
+		// rules, leaving chains empty so cleanupChains can remove them.
 		state, err := shutdownNftState(nft)
 		if err != nil {
 			return nil, fmt.Errorf("shutdown nft state failed for pod [%s]: %w", podNamespacedName(pod), err)
@@ -624,7 +624,7 @@ func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controlle
 	}
 
 	// Skip common chain rules during shutdown — they would repopulate chains
-	// that cleanup(force=true) needs to find empty in order to delete them.
+	// that cleanupChains needs to find empty in order to delete them.
 	if !s.shuttingDown.Load() {
 		err = nftState.applyCommonChainRules(s)
 		if err != nil {
@@ -677,7 +677,7 @@ func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controlle
 		return fmt.Errorf("nft flush failed for pod [%s]: %w", podNamespacedName(pod), err)
 	}
 
-	if err := nftState.cleanup(s.shuttingDown.Load()); err != nil {
+	if err := nftState.cleanup(); err != nil {
 		return fmt.Errorf("failed to cleanup nft: %w", err)
 	}
 
