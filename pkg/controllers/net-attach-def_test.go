@@ -191,4 +191,13 @@ var _ = Describe("net-attach-def controller", func() {
 		Expect(ndTest1.Name()).To(Equal("test1"))
 		Expect(ndTest1.PluginType).To(Equal("testType2"))
 	})
+
+	It("Update netdef with same data returns false (no pending changes)", func() {
+		cniConfig := NewCNIConfig("cniConfig1", "testType1")
+		ndChanges := NewNetDefChangeTracker()
+		Expect(ndChanges.Update(
+			NewNetDef("testns1", "test1", cniConfig),
+			NewNetDef("testns1", "test1", cniConfig),
+		)).To(BeFalse())
+	})
 })

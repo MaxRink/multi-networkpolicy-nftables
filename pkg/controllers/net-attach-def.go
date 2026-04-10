@@ -299,7 +299,7 @@ func (ndt *NetDefChangeTracker) Update(previous, current *netdefv1.NetworkAttach
 		delete(ndt.items, namespacedName)
 	}
 
-	return len(ndt.items) >= 0
+	return len(ndt.items) > 0
 }
 
 // NewNetDefChangeTracker ...
