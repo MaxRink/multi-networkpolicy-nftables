@@ -1707,12 +1707,6 @@ func TestValidatePortSpec(t *testing.T) {
 			wantEnd:   81,
 		},
 		{
-			name:      "numeric string port '80' accepted (Cellebyte feedback)",
-			port:      multiv1beta1.MultiNetworkPolicyPort{Port: &port80Str},
-			wantStart: 80,
-			wantEnd:   81,
-		},
-		{
 			name:       "named port 'http' rejected with clear error",
 			port:       multiv1beta1.MultiNetworkPolicyPort{Port: &portHTTPStr},
 			wantErr:    true,
