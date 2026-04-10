@@ -1302,51 +1302,33 @@ func NewCNIConfig(cniName, cniType string) string {
 }
 
 func TestBootstrapNetfilterChainsErrorPropagation(t *testing.T) {
-	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
-	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
-	defer c.FlushRuleset()
-	defer c.CloseLasting()
-	c.FlushRuleset()
-
-	filterTable, err := addTable(c, &nftables.Table{
-		Family: nftables.TableFamilyINet,
-		Name:   "filter",
-	})
+	dialErr := fmt.Errorf("injected netlink failure")
+	failConn, err := nftest.NewFailingConn(dialErr)
 	if err != nil {
-		t.Fatalf("addTable(filter) failed: %v", err)
-	}
-	natTable, err := addTable(c, &nftables.Table{
-		Family: nftables.TableFamilyINet,
-		Name:   "nat",
-	})
-	if err != nil {
-		t.Fatalf("addTable(nat) failed: %v", err)
-	}
-	if err := c.Flush(); err != nil {
-		t.Fatalf("c.Flush() failed: %v", err)
+		t.Fatalf("nftest.NewFailingConn() failed: %v", err)
 	}
 
+	fakeFilter := &nftables.Table{Family: nftables.TableFamilyINet, Name: "filter"}
+	fakeNat := &nftables.Table{Family: nftables.TableFamilyINet, Name: "nat"}
 	state := &nftState{
-		nft:    c,
-		filter: filterTable,
-		nat:    natTable,
+		nft:    failConn,
+		filter: fakeFilter,
+		nat:    fakeNat,
 		rules:  make(map[string]*nftables.Rule),
 		sets:   make(map[string]*nftables.Set),
 		chains: make(map[string]*nftables.Chain),
 	}
 
-	if err = bootstrapNetfilterChains(state); err != nil {
-		t.Fatalf("bootstrapNetfilterChains() failed unexpectedly: %v", err)
+	err = bootstrapNetfilterChains(state)
+	if err == nil {
+		t.Fatal("bootstrapNetfilterChains() should have returned an error when the connection fails")
 	}
-
-	if state.input == nil || state.output == nil || state.prerouting == nil ||
-		state.ingressChain == nil || state.egressChain == nil ||
-		state.commonIngressChain == nil || state.commonEgressChain == nil {
-		t.Fatal("bootstrapNetfilterChains() left nil chain fields after success")
+	if !strings.Contains(err.Error(), "failed to create") {
+		t.Errorf("expected error to contain 'failed to create', got: %v", err)
 	}
 }
 
-func TestBootstrapNetfilterRulesPropagatesChainError(t *testing.T) {
+func TestBootstrapNetfilterRulesInputValidation(t *testing.T) {
 	_, err := bootstrapNetfilterRules(nil, nil)
 	if err == nil {
 		t.Fatal("bootstrapNetfilterRules(nil, nil) should have returned an error")
@@ -1354,6 +1336,28 @@ func TestBootstrapNetfilterRulesPropagatesChainError(t *testing.T) {
 	_, err = bootstrapNetfilterRules(nil, &controllers.PodInfo{})
 	if err == nil {
 		t.Fatal("bootstrapNetfilterRules(nil, empty PodInfo) should have returned an error")
+	}
+}
+
+func TestBootstrapNetfilterRulesPropagatesChainError(t *testing.T) {
+	rec := nftest.NewRecorder()
+	c, err := rec.Conn()
+	if err != nil {
+		t.Fatalf("rec.Conn() failed: %v", err)
+	}
+
+	podMockInfo := &controllers.PodInfo{
+		Interfaces: []controllers.InterfaceInfo{
+			{NetattachName: "net0", InterfaceName: "eth0", IPs: []string{"10.0.0.1"}},
+		},
+	}
+
+	_, err = bootstrapNetfilterRules(c, podMockInfo)
+	if err == nil {
+		t.Fatal("bootstrapNetfilterRules() with recorder conn should have returned an error on chain creation")
+	}
+	if !strings.Contains(err.Error(), "failed to") {
+		t.Errorf("expected error to contain 'failed to', got: %v", err)
 	}
 }
 

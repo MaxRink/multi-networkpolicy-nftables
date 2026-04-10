@@ -91,6 +91,16 @@ func NewRecorder() *Recorder {
 	return &Recorder{}
 }
 
+// NewFailingConn returns an nftables.Conn whose underlying transport always
+// returns the provided error. This is useful for testing error propagation
+// without requiring a Linux kernel or root privileges.
+func NewFailingConn(dialErr error) (*nftables.Conn, error) {
+	return nftables.New(nftables.WithTestDial(
+		func(req []netlink.Message) ([]netlink.Message, error) {
+			return nil, dialErr
+		}))
+}
+
 // Diff returns the first difference between the specified netlink messages and
 // the expected netlink message payloads.
 func Diff(got []netlink.Message, want [][]byte) string {
