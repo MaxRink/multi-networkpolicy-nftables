@@ -127,13 +127,16 @@ func (o *Options) Run() error {
 
 // Stop halts the command
 func (o *Options) Stop() {
-	o.stopCh <- struct{}{}
+	select {
+	case o.stopCh <- struct{}{}:
+	default:
+	}
 }
 
 // NewOptions initializes Options
 func NewOptions() *Options {
 	return &Options{
 		containerRuntime: controllers.Cri,
-		stopCh:           make(chan struct{}),
+		stopCh:           make(chan struct{}, 1),
 	}
 }
