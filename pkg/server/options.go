@@ -73,7 +73,7 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&o.acceptICMPv6, "accept-icmpv6", false, "accept all ICMPv6 traffic")
 	fs.StringVar(&o.allowSrcPrefixText, "allow-src-prefix", "", "Accept source IP prefix list, comma separated CIDRs (e.g. \"fe80::/10\")")
 	fs.StringVar(&o.allowDstPrefixText, "allow-dst-prefix", "", "Accept destination IP prefix list, comma separated CIDRs (e.g. \"fe80::/10,ff00::/8\")")
-	fs.IntVar(&o.healthPort, "health-port", 8081, "TCP port for the health HTTP server (0 to disable).")
+	fs.IntVar(&o.healthPort, "health-port", 0, "TCP port for the health HTTP server (0 to disable, 1-65535 to enable).")
 	fs.AddGoFlagSet(flag.CommandLine)
 }
 
@@ -102,6 +102,11 @@ func (o *Options) Validate() error {
 	if err := parseIPPrefixText(o.allowDstPrefixText, &o.allowDstPrefix); err != nil {
 		return err
 	}
+
+	if o.healthPort < 0 || o.healthPort > 65535 {
+		return fmt.Errorf("invalid --health-port %d: must be 0 (disabled) or in range 1-65535", o.healthPort)
+	}
+
 	return nil
 }
 

@@ -19,7 +19,6 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 )
 
@@ -36,8 +35,10 @@ func TestHealthzAlwaysOK(t *testing.T) {
 	}
 }
 
-func TestReadyzNotInitialized(t *testing.T) {
+func TestReadyzNotAllSynced(t *testing.T) {
 	s := &Server{}
+	// Only one informer synced — AllSynced() must return false.
+	s.policySynced = true
 	hs := newHealthServer(":0", s)
 
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -45,13 +46,16 @@ func TestReadyzNotInitialized(t *testing.T) {
 	hs.server.Handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("/readyz (not initialized): want 503, got %d", rec.Code)
+		t.Errorf("/readyz (partial sync): want 503, got %d", rec.Code)
 	}
 }
 
-func TestReadyzInitialized(t *testing.T) {
+func TestReadyzAllSynced(t *testing.T) {
 	s := &Server{}
-	atomic.StoreInt32(&s.initialized, 1)
+	// All informers that AllSynced() checks must be true.
+	s.policySynced = true
+	s.netdefSynced = true
+	s.nsSynced = true
 	hs := newHealthServer(":0", s)
 
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -59,7 +63,25 @@ func TestReadyzInitialized(t *testing.T) {
 	hs.server.Handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Errorf("/readyz (initialized): want 200, got %d", rec.Code)
+		t.Errorf("/readyz (all synced): want 200, got %d", rec.Code)
+	}
+}
+
+func TestReadyzShuttingDown(t *testing.T) {
+	s := &Server{}
+	// All informers synced, but daemon is shutting down.
+	s.policySynced = true
+	s.netdefSynced = true
+	s.nsSynced = true
+	s.shuttingDown.Store(true)
+	hs := newHealthServer(":0", s)
+
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	hs.server.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("/readyz (shutting down): want 503, got %d", rec.Code)
 	}
 }
 

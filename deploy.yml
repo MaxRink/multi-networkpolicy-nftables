@@ -146,6 +146,7 @@ spec:
           httpGet:
             path: /healthz
             port: healthz
+            host: 127.0.0.1
           initialDelaySeconds: 10
           periodSeconds: 10
           timeoutSeconds: 5
@@ -154,6 +155,7 @@ spec:
           httpGet:
             path: /readyz
             port: healthz
+            host: 127.0.0.1
           initialDelaySeconds: 5
           periodSeconds: 10
           timeoutSeconds: 5

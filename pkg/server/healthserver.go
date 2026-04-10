@@ -28,11 +28,12 @@ import (
 
 // HealthServer provides HTTP health and readiness endpoints for the daemon.
 type HealthServer struct {
-	server *http.Server
+	server  *http.Server
+	serving chan struct{} // closed once Serve() begins accepting connections
 }
 
 // newHealthServer creates a new HealthServer bound to the given address.
-// The s parameter is the main Server whose initialization state drives /readyz.
+// The s parameter is the main Server whose state drives /readyz.
 func newHealthServer(addr string, s *Server) *HealthServer {
 	mux := http.NewServeMux()
 
@@ -42,9 +43,15 @@ func newHealthServer(addr string, s *Server) *HealthServer {
 		_, _ = fmt.Fprintln(w, "ok")
 	})
 
-	// /readyz — readiness: 200 once nftables state is initialized, 503 otherwise.
+	// /readyz — readiness: 200 only when all informers have synced AND we are
+	// not shutting down.  Returns 503 in all other cases.
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if s.isInitialized() {
+		if s.shuttingDown.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = fmt.Fprintln(w, "shutting down")
+			return
+		}
+		if s.AllSynced() {
 			w.WriteHeader(http.StatusOK)
 			_, _ = fmt.Fprintln(w, "ok")
 		} else {
@@ -59,18 +66,24 @@ func newHealthServer(addr string, s *Server) *HealthServer {
 			Handler:           mux,
 			ReadHeaderTimeout: 5 * time.Second,
 		},
+		serving: make(chan struct{}),
 	}
 }
 
 // Start begins listening in a background goroutine. It returns an error if the
 // listener cannot be created (e.g. address already in use).
+// The method blocks only until the listener is bound; actual request serving
+// happens asynchronously.  Stop() is safe to call immediately after Start()
+// returns because it waits for the serving goroutine to begin before issuing
+// Shutdown.
 func (h *HealthServer) Start() error {
 	ln, err := net.Listen("tcp", h.server.Addr)
 	if err != nil {
 		return fmt.Errorf("health server failed to listen on %s: %w", h.server.Addr, err)
 	}
-	klog.Infof("Health server listening on %s", h.server.Addr)
+	klog.Infof("Health server listening on %s", ln.Addr().String())
 	go func() {
+		close(h.serving) // signal that Serve() is about to be called
 		if serveErr := h.server.Serve(ln); serveErr != nil && serveErr != http.ErrServerClosed {
 			klog.Errorf("Health server exited with error: %v", serveErr)
 		}
@@ -78,8 +91,15 @@ func (h *HealthServer) Start() error {
 	return nil
 }
 
-// Stop gracefully shuts down the health server.
+// Stop gracefully shuts down the health server.  It waits until Start() has
+// begun serving before calling Shutdown so that the two never race.
 func (h *HealthServer) Stop() {
+	// Wait until the serving goroutine has started (or Start() was never
+	// called, in which case this returns immediately because the channel was
+	// never closed — that case is safe because Shutdown on an idle server is
+	// a no-op).
+	<-h.serving
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := h.server.Shutdown(ctx); err != nil {
