@@ -1456,11 +1456,35 @@ func (n *nftState) applyPolicyPeersRulesIPBlock(chainName string, chain *nftable
 		return fmt.Errorf("failed to get prefix sets of prefixes [%s]: %w", peer.IPBlock.CIDR, err)
 	}
 
-	if err := n.applyPrefixes(chainName, chain, policyName, peer, peerIndex, v4Prefixes, v4ExceptPrefixes, false); err != nil {
+	ipBlockChainName := fmt.Sprintf("%s-%s-%d", chainName, ipBlockChainSuffix, peerIndex)
+	ipBlockChain, err := n.addChain(&nftables.Chain{
+		Name:  ipBlockChainName,
+		Table: chain.Table,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create ipblock chain: %w", err)
+	}
+
+	if _, err := n.updateRule(&nftables.Rule{
+		Table:    chain.Table,
+		Chain:    chain,
+		UserData: userDataComment(fmt.Sprintf("policy:%s, name:%s, jump:%s", policyName, chainName, ipBlockChain.Name)),
+		Exprs: []expr.Any{
+			&expr.Counter{},
+			&expr.Verdict{
+				Kind:  expr.VerdictJump,
+				Chain: ipBlockChain.Name,
+			},
+		},
+	}, n.nft.AddRule, false); err != nil {
+		return err
+	}
+
+	if err := n.applyPrefixes(ipBlockChainName, ipBlockChain, policyName, peer, peerIndex, v4Prefixes, v4ExceptPrefixes, false); err != nil {
 		return fmt.Errorf("failed to apply %s prefixes for policy %q: %w", protoIPv4, policyName, err)
 	}
 
-	if err := n.applyPrefixes(chainName, chain, policyName, peer, peerIndex, v6Prefixes, v6ExceptPrefixes, true); err != nil {
+	if err := n.applyPrefixes(ipBlockChainName, ipBlockChain, policyName, peer, peerIndex, v6Prefixes, v6ExceptPrefixes, true); err != nil {
 		return fmt.Errorf("failed to apply %s prefixes for policy %q: %w", protoIPv6, policyName, err)
 	}
 
