@@ -1339,7 +1339,7 @@ func (n *nftState) applyPrefixes(chainName string, chain *nftables.Chain, policy
 		}
 		if len(exceptPrefixes) > 0 {
 			setName := fmt.Sprintf("%s_%s_%s_%s_%d", chainName, peerIPBlockExceptPrefix, protocol, getAddressSuffix(chainName), peerIndex)
-			ruleComment := fmt.Sprintf("policy:%s, name:%s, cidr:%s, deny", policyName, chainName, peer.IPBlock.CIDR)
+			ruleComment := fmt.Sprintf("policy:%s, name:%s, cidr:%s, return", policyName, chainName, peer.IPBlock.CIDR)
 
 			exceptSet := &nftables.Set{
 				Table:    chain.Table,
@@ -1381,7 +1381,7 @@ func (n *nftState) applyPrefixes(chainName string, chain *nftables.Chain, policy
 					},
 					&expr.Counter{},
 					&expr.Verdict{
-						Kind: expr.VerdictDrop,
+						Kind: expr.VerdictReturn,
 					},
 				},
 			}, n.nft.AddRule, false); err != nil {
