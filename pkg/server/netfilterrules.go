@@ -394,6 +394,10 @@ func ruleEqual(a, b *nftables.Rule) bool {
 		return false
 	}
 
+	if len(a.Exprs) != len(b.Exprs) {
+		return false
+	}
+
 	for i := range a.Exprs {
 		switch a.Exprs[i].(type) {
 		case *expr.Meta:
@@ -424,6 +428,12 @@ func ruleEqual(a, b *nftables.Rule) bool {
 			if !exprEqual(&expr.Bitwise{}, a.Exprs[i], b.Exprs[i]) {
 				return false
 			}
+		case *expr.Counter:
+			if _, ok := b.Exprs[i].(*expr.Counter); !ok {
+				return false
+			}
+		default:
+			return false
 		}
 	}
 
