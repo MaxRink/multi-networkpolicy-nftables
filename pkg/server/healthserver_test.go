@@ -94,3 +94,34 @@ func TestHealthServerStartStop(t *testing.T) {
 	}
 	hs.Stop()
 }
+
+func TestOptionsValidateHealthPort(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		port    int
+		wantErr bool
+	}{
+		{name: "disabled (0)", port: 0, wantErr: false},
+		{name: "valid low (1)", port: 1, wantErr: false},
+		{name: "valid high (8081)", port: 8081, wantErr: false},
+		{name: "valid max (65535)", port: 65535, wantErr: false},
+		{name: "negative (-1)", port: -1, wantErr: true},
+		{name: "out of range (65536)", port: 65536, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			o := &Options{healthPort: tc.port}
+			err := o.Validate()
+			if tc.wantErr && err == nil {
+				t.Errorf("Validate() with healthPort=%d: want error, got nil", tc.port)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("Validate() with healthPort=%d: want nil, got %v", tc.port, err)
+			}
+		})
+	}
+}
