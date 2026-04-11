@@ -30,6 +30,7 @@ import (
 type HealthServer struct {
 	server  *http.Server
 	serving chan struct{} // closed once Serve() begins accepting connections
+	ln      net.Listener  // stored so Stop() can close it on shutdown
 }
 
 // newHealthServer creates a new HealthServer bound to the given address.
@@ -43,7 +44,7 @@ func newHealthServer(addr string, s *Server) *HealthServer {
 		_, _ = fmt.Fprintln(w, "ok")
 	})
 
-	// /readyz — readiness: 200 only when all informers have synced AND we are
+	// /readyz — readiness: 200 only when the server is fully initialised AND we are
 	// not shutting down.  Returns 503 in all other cases.
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		if s.shuttingDown.Load() {
@@ -51,7 +52,7 @@ func newHealthServer(addr string, s *Server) *HealthServer {
 			_, _ = fmt.Fprintln(w, "shutting down")
 			return
 		}
-		if s.AllSynced() {
+		if s.ready.Load() {
 			w.WriteHeader(http.StatusOK)
 			_, _ = fmt.Fprintln(w, "ok")
 		} else {
@@ -81,6 +82,7 @@ func (h *HealthServer) Start() error {
 	if err != nil {
 		return fmt.Errorf("health server failed to listen on %s: %w", h.server.Addr, err)
 	}
+	h.ln = ln
 	klog.Infof("Health server listening on %s", ln.Addr().String())
 	go func() {
 		close(h.serving) // signal that Serve() is about to be called
@@ -95,9 +97,11 @@ func (h *HealthServer) Start() error {
 // begun serving before calling Shutdown so that the two never race.
 // Stop must only be called after a successful call to Start().
 func (h *HealthServer) Stop() {
-	// Block until the serving goroutine signals it is about to call Serve().
-	// This prevents Shutdown from racing with listener registration.
 	<-h.serving
+
+	if h.ln != nil {
+		_ = h.ln.Close()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

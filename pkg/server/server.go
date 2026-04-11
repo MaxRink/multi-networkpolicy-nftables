@@ -95,6 +95,7 @@ type Server struct {
 	syncRunner       *runner.BoundedFrequencyRunner
 	syncRunnerStopCh chan struct{}
 	shuttingDown     atomic.Bool
+	ready            atomic.Bool
 }
 
 type internalPolicy struct {
@@ -116,6 +117,7 @@ func (s *Server) RunPodConfig() {
 	podConfig.RegisterEventHandler(s)
 	go podConfig.Run(wait.NeverStop)
 	informerFactory.Start(wait.NeverStop)
+	s.ready.Store(true)
 	s.SyncLoop()
 }
 
