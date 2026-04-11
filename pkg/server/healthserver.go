@@ -93,11 +93,10 @@ func (h *HealthServer) Start() error {
 
 // Stop gracefully shuts down the health server.  It waits until Start() has
 // begun serving before calling Shutdown so that the two never race.
+// Stop must only be called after a successful call to Start().
 func (h *HealthServer) Stop() {
-	// Wait until the serving goroutine has started (or Start() was never
-	// called, in which case this returns immediately because the channel was
-	// never closed — that case is safe because Shutdown on an idle server is
-	// a no-op).
+	// Block until the serving goroutine signals it is about to call Serve().
+	// This prevents Shutdown from racing with listener registration.
 	<-h.serving
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
