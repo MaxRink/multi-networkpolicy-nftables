@@ -326,6 +326,37 @@ var _ = Describe("pod controller", func() {
 		Expect(pod1.Labels["a"]).To(Equal("c"))
 	})
 
+	It("Pod with nil labels does not panic (maps.Clone nil-safe)", func() {
+		ndChanges := NewNetDefChangeTracker()
+		podChanges := NewFakePodChangeTracker("nodeName", "hostPrefix", ndChanges)
+		pod := NewFakePodWithLabels("testns1", "testpod1", nil)
+
+		Expect(podChanges.Update(nil, pod)).To(BeTrue())
+		podMap := make(PodMap)
+		podMap.Update(podChanges)
+
+		info, ok := podMap[types.NamespacedName{Namespace: "testns1", Name: "testpod1"}]
+		Expect(ok).To(BeTrue())
+		Expect(info.Labels).To(BeNil())
+	})
+
+	It("Pod with empty labels does not panic and isolation is preserved", func() {
+		ndChanges := NewNetDefChangeTracker()
+		podChanges := NewFakePodChangeTracker("nodeName", "hostPrefix", ndChanges)
+		originalLabels := map[string]string{}
+		pod := NewFakePodWithLabels("testns1", "testpod1", originalLabels)
+
+		Expect(podChanges.Update(nil, pod)).To(BeTrue())
+		podMap := make(PodMap)
+		podMap.Update(podChanges)
+
+		originalLabels["injected"] = "value"
+
+		info, ok := podMap[types.NamespacedName{Namespace: "testns1", Name: "testpod1"}]
+		Expect(ok).To(BeTrue())
+		Expect(info.Labels).NotTo(HaveKey("injected"))
+	})
+
 })
 
 var _ = Describe("runtime kind", func() {
