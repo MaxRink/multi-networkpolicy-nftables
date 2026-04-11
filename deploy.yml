@@ -138,6 +138,7 @@ spec:
         #- "--accept-icmp"
         #- "--accept-icmpv6"
         - "--health-port=8081"
+        - "--health-bind-address=127.0.0.1"
         ports:
         - name: healthz
           containerPort: 8081

@@ -125,3 +125,34 @@ func TestOptionsValidateHealthPort(t *testing.T) {
 		})
 	}
 }
+
+func TestOptionsValidateHealthBindAddress(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		addr    string
+		wantErr bool
+	}{
+		{name: "empty (all interfaces)", addr: "", wantErr: false},
+		{name: "loopback IPv4", addr: "127.0.0.1", wantErr: false},
+		{name: "loopback IPv6", addr: "::1", wantErr: false},
+		{name: "any IPv4", addr: "0.0.0.0", wantErr: false},
+		{name: "invalid address", addr: "not-an-ip", wantErr: true},
+		{name: "hostname (not IP)", addr: "localhost", wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			o := &Options{healthBindAddress: tc.addr}
+			err := o.Validate()
+			if tc.wantErr && err == nil {
+				t.Errorf("Validate() with healthBindAddress=%q: want error, got nil", tc.addr)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("Validate() with healthBindAddress=%q: want nil, got %v", tc.addr, err)
+			}
+		})
+	}
+}

@@ -48,6 +48,9 @@ type Options struct {
 	allowDstPrefixText       string
 	// healthPort is the TCP port the health HTTP server listens on (0 = disabled).
 	healthPort int
+	// healthBindAddress is the IP address the health HTTP server binds to.
+	// Defaults to "" (all interfaces); set to "127.0.0.1" to restrict to loopback.
+	healthBindAddress string
 
 	// updated by command line parsing
 	allowSrcPrefix []string
@@ -74,6 +77,7 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.allowSrcPrefixText, "allow-src-prefix", "", "Accept source IP prefix list, comma separated CIDRs (e.g. \"fe80::/10\")")
 	fs.StringVar(&o.allowDstPrefixText, "allow-dst-prefix", "", "Accept destination IP prefix list, comma separated CIDRs (e.g. \"fe80::/10,ff00::/8\")")
 	fs.IntVar(&o.healthPort, "health-port", 0, "TCP port for the health HTTP server (0 to disable, 1-65535 to enable).")
+	fs.StringVar(&o.healthBindAddress, "health-bind-address", "", "IP address the health HTTP server binds to (empty = all interfaces, 127.0.0.1 = loopback only).")
 	fs.AddGoFlagSet(flag.CommandLine)
 }
 
@@ -107,6 +111,12 @@ func (o *Options) Validate() error {
 		return fmt.Errorf("invalid --health-port %d: must be 0 (disabled) or in range 1-65535", o.healthPort)
 	}
 
+	if o.healthBindAddress != "" {
+		if net.ParseIP(o.healthBindAddress) == nil {
+			return fmt.Errorf("invalid --health-bind-address %q: must be a valid IP address", o.healthBindAddress)
+		}
+	}
+
 	return nil
 }
 
@@ -130,7 +140,7 @@ func (o *Options) Run() error {
 	}
 
 	if o.healthPort > 0 {
-		hs := newHealthServer(fmt.Sprintf(":%d", o.healthPort), server)
+		hs := newHealthServer(fmt.Sprintf("%s:%d", o.healthBindAddress, o.healthPort), server)
 		if err := hs.Start(); err != nil {
 			return err
 		}
