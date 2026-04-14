@@ -16,6 +16,15 @@
 package server
 
 const (
+	// filterTableName is the daemon-owned nftables table name for filter rules.
+	// Using a daemon-specific prefix prevents collisions with other programs
+	// (kube-proxy, container runtimes, other CNI plugins) that share the pod netns
+	// and may use the generic "filter" table name.
+	filterTableName = "multi-networkpolicy-filter"
+	// natTableName is the daemon-owned nftables table name for NAT rules.
+	// Same isolation rationale as filterTableName.
+	natTableName = "multi-networkpolicy-nat"
+
 	ingressChain = "multi-ingress"
 	egressChain  = "multi-egress"
 

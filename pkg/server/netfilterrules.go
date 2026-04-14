@@ -168,7 +168,7 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 
 	filterTable, err := addTable(nft, &nftables.Table{
 		Family: nftables.TableFamilyINet,
-		Name:   "filter",
+		Name:   filterTableName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to add table: %w", err)
@@ -176,7 +176,7 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 
 	natTable, err := addTable(nft, &nftables.Table{
 		Family: nftables.TableFamilyINet,
-		Name:   "nat",
+		Name:   natTableName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to add table: %w", err)

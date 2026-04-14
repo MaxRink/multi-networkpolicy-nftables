@@ -73,13 +73,13 @@ func TestBootstrap(t *testing.T) {
 
 	checkForBootstrap := func() bool {
 
-		filterTable, err := c.ListTableOfFamily("filter", nftables.TableFamilyINet)
+		filterTable, err := c.ListTableOfFamily(filterTableName, nftables.TableFamilyINet)
 		if err != nil {
-			t.Fatalf("c.ListTable(\"filter\") failed: %v", err)
+			t.Fatalf("c.ListTable(%q) failed: %v", filterTableName, err)
 		}
-		natTable, err := c.ListTableOfFamily("nat", nftables.TableFamilyINet)
+		natTable, err := c.ListTableOfFamily(natTableName, nftables.TableFamilyINet)
 		if err != nil {
-			t.Fatalf("c.ListTable(\"nat\") failed: %v", err)
+			t.Fatalf("c.ListTable(%q) failed: %v", natTableName, err)
 		}
 		if filterTable == nil || natTable == nil {
 			t.Errorf("filterTable or natTable is nil %v, %v", filterTable, natTable)
@@ -91,7 +91,7 @@ func TestBootstrap(t *testing.T) {
 		}
 		var foundInput, foundOutput, foundIngress, foundEgress, foundCommonIngress, foundCommonEgress, foundPreRouting bool
 		for _, ch := range chains {
-			if ch.Table.Name == "filter" {
+			if ch.Table.Name == filterTableName {
 				switch ch.Name {
 				case ingressChain:
 					foundIngress = true
@@ -107,7 +107,7 @@ func TestBootstrap(t *testing.T) {
 					foundOutput = true
 				}
 			}
-			if ch.Table.Name == "nat" {
+			if ch.Table.Name == natTableName {
 				if ch.Name == "prerouting" {
 					foundPreRouting = true
 				}
@@ -187,9 +187,9 @@ func TestApplyCommonChainRules(t *testing.T) {
 	}
 
 	checkCommon := func() bool {
-		filterTable, err := c.ListTableOfFamily("filter", nftables.TableFamilyINet)
+		filterTable, err := c.ListTableOfFamily(filterTableName, nftables.TableFamilyINet)
 		if err != nil {
-			t.Fatalf("c.ListTable(\"filter\") failed: %v", err)
+			t.Fatalf("c.ListTable(%q) failed: %v", filterTableName, err)
 		}
 		if filterTable == nil {
 			t.Errorf("filterTable is nil")
