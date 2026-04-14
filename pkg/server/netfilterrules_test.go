@@ -1368,3 +1368,57 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *Server
 	}
 	return nftState, testNs, mockServer, podMockInfo, nil
 }
+
+func TestCleanupLegacyTables(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.FlushRuleset()
+	defer c.CloseLasting()
+	c.FlushRuleset()
+
+	inetFamily := nftables.TableFamilyINet
+
+	legacyFilter := &nftables.Table{Family: inetFamily, Name: legacyFilterTableName}
+	c.AddTable(legacyFilter)
+
+	daemonChain := c.AddChain(&nftables.Chain{
+		Name:  ingressChain,
+		Table: legacyFilter,
+	})
+	_ = daemonChain
+
+	foreignChain := c.AddChain(&nftables.Chain{
+		Name:  "foreign-chain",
+		Table: legacyFilter,
+	})
+	_ = foreignChain
+
+	if err := c.Flush(); err != nil {
+		t.Fatalf("setup flush failed: %v", err)
+	}
+
+	if err := cleanupLegacyTables(c); err != nil {
+		t.Fatalf("cleanupLegacyTables() returned error: %v", err)
+	}
+
+	chains, err := c.ListChainsOfTableFamily(inetFamily)
+	if err != nil {
+		t.Fatalf("ListChainsOfTableFamily failed: %v", err)
+	}
+
+	for _, ch := range chains {
+		if ch.Table.Name == legacyFilterTableName && ch.Name == ingressChain {
+			t.Errorf("daemon chain %q was not removed from legacy table", ingressChain)
+		}
+	}
+
+	found := false
+	for _, ch := range chains {
+		if ch.Table.Name == legacyFilterTableName && ch.Name == "foreign-chain" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("foreign chain %q was incorrectly removed from legacy table", "foreign-chain")
+	}
+}

@@ -540,6 +540,10 @@ func (s *Server) applyPolicyRulesForPod(pod *v1.Pod, podInfo *controllers.PodInf
 func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controllers.PodInfo, nft *nftables.Conn) error {
 	klog.V(4).Infof("Generate rules for Pod: [%s]\n", podNamespacedName(pod))
 
+	if err := cleanupLegacyTables(nft); err != nil {
+		return fmt.Errorf("legacy table cleanup failed for pod [%s]: %w", podNamespacedName(pod), err)
+	}
+
 	// nft add table inet filter
 	nftState, err := bootstrapNetfilterRules(nft, podInfo)
 	if err != nil {

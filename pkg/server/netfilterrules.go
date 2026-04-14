@@ -161,6 +161,81 @@ func addTable(nft *nftables.Conn, table *nftables.Table) (*nftables.Table, error
 	return t, nil
 }
 
+// legacyDaemonChainNames holds the chain names that the daemon used to create
+// inside the generic "filter" / "nat" tables before table isolation was introduced.
+// These are the only names we are allowed to delete — foreign chains must be left alone.
+var legacyDaemonChainNames = map[string]bool{
+	ingressChain: true,
+	egressChain:  true,
+	fmt.Sprintf("%s-%s", ingressChain, common): true,
+	fmt.Sprintf("%s-%s", egressChain, common):  true,
+	"input":      true,
+	"output":     true,
+	"prerouting": true,
+}
+
+// cleanupLegacyTables removes daemon-owned objects (chains / sets) that were
+// previously installed inside the generic "filter" / "nat" inet tables by an
+// older version of this daemon.  Only objects whose name is known to belong to
+// the daemon are removed; foreign tables and unrecognized chains/sets are left
+// untouched.
+func cleanupLegacyTables(nft *nftables.Conn) error {
+	legacyNames := map[string]bool{
+		legacyFilterTableName: true,
+		legacyNatTableName:    true,
+	}
+
+	// List all inet tables and pick out the legacy ones.
+	allTables, err := nft.ListTablesOfFamily(nftables.TableFamilyINet)
+	if err != nil {
+		return fmt.Errorf("cleanupLegacyTables: failed to list inet tables: %w", err)
+	}
+
+	flushed := false
+	for _, table := range allTables {
+		if !legacyNames[table.Name] {
+			continue
+		}
+		klog.V(2).Infof("cleanupLegacyTables: found legacy table %q, scanning for daemon-owned objects", table.Name)
+
+		chains, err := nft.ListChainsOfTableFamily(nftables.TableFamilyINet)
+		if err != nil {
+			return fmt.Errorf("cleanupLegacyTables: failed to list chains for table %q: %w", table.Name, err)
+		}
+		for _, chain := range chains {
+			if chain.Table.Name != table.Name {
+				continue
+			}
+			if !legacyDaemonChainNames[chain.Name] {
+				continue
+			}
+			klog.V(2).Infof("cleanupLegacyTables: removing daemon-owned chain %q from legacy table %q", chain.Name, table.Name)
+			nft.DelChain(chain)
+			flushed = true
+		}
+
+		sets, err := nft.GetSets(table)
+		if err != nil {
+			return fmt.Errorf("cleanupLegacyTables: failed to list sets for table %q: %w", table.Name, err)
+		}
+		for _, set := range sets {
+			if set.Name != podInterfacesName {
+				continue
+			}
+			klog.V(2).Infof("cleanupLegacyTables: removing daemon-owned set %q from legacy table %q", set.Name, table.Name)
+			nft.DelSet(set)
+			flushed = true
+		}
+	}
+
+	if flushed {
+		if err := nft.Flush(); err != nil {
+			return fmt.Errorf("cleanupLegacyTables: flush failed: %w", err)
+		}
+	}
+	return nil
+}
+
 func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (*nftState, error) {
 	if podInfo == nil || len(podInfo.Interfaces) == 0 {
 		return nil, fmt.Errorf("podInfo or podInfo.Interfaces is nil/empty")

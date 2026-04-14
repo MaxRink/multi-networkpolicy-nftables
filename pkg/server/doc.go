@@ -25,6 +25,14 @@ const (
 	// Same isolation rationale as filterTableName.
 	natTableName = "multi-networkpolicy-nat"
 
+	// legacyFilterTableName is the old generic "filter" table name used by the daemon
+	// before table isolation was introduced. At startup the daemon removes any
+	// daemon-owned objects (chains / sets) left behind in this table by a previous
+	// version to avoid duplicate or conflicting policy enforcement.
+	legacyFilterTableName = "filter"
+	// legacyNatTableName is the old generic "nat" table name — see legacyFilterTableName.
+	legacyNatTableName = "nat"
+
 	ingressChain = "multi-ingress"
 	egressChain  = "multi-egress"
 
