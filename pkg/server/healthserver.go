@@ -44,7 +44,7 @@ func newHealthServer(addr string, s *Server) *HealthServer {
 		_, _ = fmt.Fprintln(w, "ok")
 	})
 
-	// /readyz — readiness: 200 only when the server is fully initialized AND we are
+	// /readyz — readiness: 200 only when all informers have synced AND we are
 	// not shutting down.  Returns 503 in all other cases.
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		if s.shuttingDown.Load() {
@@ -52,7 +52,7 @@ func newHealthServer(addr string, s *Server) *HealthServer {
 			_, _ = fmt.Fprintln(w, "shutting down")
 			return
 		}
-		if s.ready.Load() {
+		if s.AllSynced() {
 			w.WriteHeader(http.StatusOK)
 			_, _ = fmt.Fprintln(w, "ok")
 		} else {
