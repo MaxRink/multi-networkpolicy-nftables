@@ -43,7 +43,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -94,6 +93,8 @@ type Server struct {
 
 	syncRunner       *runner.BoundedFrequencyRunner
 	syncRunnerStopCh chan struct{}
+	stopCh           <-chan struct{}
+	runPodConfigOnce sync.Once
 	shuttingDown     atomic.Bool
 }
 
@@ -108,19 +109,29 @@ func CompareInternalPolicy(a, b internalPolicy) int {
 
 // RunPodConfig ...
 func (s *Server) RunPodConfig() {
-	klog.Infof("Starting pod config")
-	informerFactory := informers.NewSharedInformerFactoryWithOptions(s.Client, s.ConfigSyncPeriod)
-	s.podLister = informerFactory.Core().V1().Pods().Lister()
+	s.runPodConfigOnce.Do(func() {
+		klog.Infof("Starting pod config")
+		s.mu.Lock()
+		stopCh := s.stopCh
+		s.mu.Unlock()
 
-	podConfig := controllers.NewPodConfig(informerFactory.Core().V1().Pods(), s.ConfigSyncPeriod)
-	podConfig.RegisterEventHandler(s)
-	go podConfig.Run(wait.NeverStop)
-	informerFactory.Start(wait.NeverStop)
-	s.SyncLoop()
+		informerFactory := informers.NewSharedInformerFactoryWithOptions(s.Client, s.ConfigSyncPeriod)
+		s.podLister = informerFactory.Core().V1().Pods().Lister()
+
+		podConfig := controllers.NewPodConfig(informerFactory.Core().V1().Pods(), s.ConfigSyncPeriod)
+		podConfig.RegisterEventHandler(s)
+		go podConfig.Run(stopCh)
+		informerFactory.Start(stopCh)
+		s.SyncLoop()
+	})
 }
 
 // Run ...
 func (s *Server) Run(_ string, stopCh chan struct{}) {
+	s.mu.Lock()
+	s.stopCh = stopCh
+	s.mu.Unlock()
+
 	if s.Broadcaster != nil {
 		s.Broadcaster.StartRecordingToSink(
 			&v1core.EventSinkImpl{Interface: s.Client.CoreV1().Events("")})
@@ -129,8 +140,8 @@ func (s *Server) Run(_ string, stopCh chan struct{}) {
 	informerFactory := informers.NewSharedInformerFactoryWithOptions(s.Client, s.ConfigSyncPeriod)
 	nsConfig := controllers.NewNamespaceConfig(informerFactory.Core().V1().Namespaces(), s.ConfigSyncPeriod)
 	nsConfig.RegisterEventHandler(s)
-	go nsConfig.Run(wait.NeverStop)
-	informerFactory.Start(wait.NeverStop)
+	go nsConfig.Run(stopCh)
+	informerFactory.Start(stopCh)
 
 	policyInformerFactory := multiinformer.NewSharedInformerFactoryWithOptions(
 		s.NetworkPolicyClient, s.ConfigSyncPeriod)
@@ -139,16 +150,16 @@ func (s *Server) Run(_ string, stopCh chan struct{}) {
 	policyConfig := controllers.NewNetworkPolicyConfig(
 		policyInformerFactory.K8sCniCncfIo().V1beta1().MultiNetworkPolicies(), s.ConfigSyncPeriod)
 	policyConfig.RegisterEventHandler(s)
-	go policyConfig.Run(wait.NeverStop)
-	policyInformerFactory.Start(wait.NeverStop)
+	go policyConfig.Run(stopCh)
+	policyInformerFactory.Start(stopCh)
 
 	netdefInformarFactory := netdefinformerv1.NewSharedInformerFactoryWithOptions(
 		s.NetDefClient, s.ConfigSyncPeriod)
 	netdefConfig := controllers.NewNetDefConfig(
 		netdefInformarFactory.K8sCniCncfIo().V1().NetworkAttachmentDefinitions(), s.ConfigSyncPeriod)
 	netdefConfig.RegisterEventHandler(s)
-	go netdefConfig.Run(wait.NeverStop)
-	netdefInformarFactory.Start(wait.NeverStop)
+	go netdefConfig.Run(stopCh)
+	netdefInformarFactory.Start(stopCh)
 
 	s.birthCry()
 
