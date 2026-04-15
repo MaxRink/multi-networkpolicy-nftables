@@ -470,7 +470,6 @@ func (s *Server) syncMultiPolicy() error {
 		return fmt.Errorf("failed to list pods for sync: %w", err)
 	}
 	for _, p := range pods {
-		s.podMap.Update(s.podChanges)
 		if !controllers.IsMultiNetworkpolicyTarget(p) {
 			klog.V(8).Infof("SKIP SYNC %s/%s", p.Namespace, p.Name)
 			continue
