@@ -181,5 +181,5 @@ func getEnabledPolicyTypes(policy *multiv1beta1.MultiNetworkPolicy) (bool, bool)
 		return ingressEnable, egressEnable
 	}
 
-	return len(policy.Spec.Ingress) > 0, len(policy.Spec.Egress) > 0
+	return policy.Spec.Ingress != nil, policy.Spec.Egress != nil
 }
