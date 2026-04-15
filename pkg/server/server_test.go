@@ -25,80 +25,80 @@ import (
 
 func TestGetEnabledPolicyTypes(t *testing.T) {
 	tests := []struct {
-		name            string
-		policyTypes     []multiv1beta1.MultiPolicyType
-		ingressRules    []multiv1beta1.MultiNetworkPolicyIngressRule
-		egressRules     []multiv1beta1.MultiNetworkPolicyEgressRule
-		wantIngress     bool
-		wantEgress      bool
+		name         string
+		policyTypes  []multiv1beta1.MultiPolicyType
+		ingressRules []multiv1beta1.MultiNetworkPolicyIngressRule
+		egressRules  []multiv1beta1.MultiNetworkPolicyEgressRule
+		wantIngress  bool
+		wantEgress   bool
 	}{
 		{
-			name:        "a: ingress nil, egress nil — no policy types",
-			policyTypes: nil,
+			name:         "a: ingress nil, egress nil — no policy types",
+			policyTypes:  nil,
 			ingressRules: nil,
 			egressRules:  nil,
 			wantIngress:  false,
 			wantEgress:   false,
 		},
 		{
-			name:        "b: ingress empty slice, egress nil — Ingress in result",
-			policyTypes: nil,
+			name:         "b: ingress empty slice, egress nil — Ingress in result",
+			policyTypes:  nil,
 			ingressRules: []multiv1beta1.MultiNetworkPolicyIngressRule{},
 			egressRules:  nil,
 			wantIngress:  true,
 			wantEgress:   false,
 		},
 		{
-			name:        "c: ingress non-empty, egress nil — Ingress in result",
-			policyTypes: nil,
+			name:         "c: ingress non-empty, egress nil — Ingress in result",
+			policyTypes:  nil,
 			ingressRules: []multiv1beta1.MultiNetworkPolicyIngressRule{{}},
 			egressRules:  nil,
 			wantIngress:  true,
 			wantEgress:   false,
 		},
 		{
-			name:        "d: ingress nil, egress empty — Egress in result",
-			policyTypes: nil,
+			name:         "d: ingress nil, egress empty — Egress in result",
+			policyTypes:  nil,
 			ingressRules: nil,
 			egressRules:  []multiv1beta1.MultiNetworkPolicyEgressRule{},
 			wantIngress:  false,
 			wantEgress:   true,
 		},
 		{
-			name:        "e: ingress nil, egress non-empty — Egress in result",
-			policyTypes: nil,
+			name:         "e: ingress nil, egress non-empty — Egress in result",
+			policyTypes:  nil,
 			ingressRules: nil,
 			egressRules:  []multiv1beta1.MultiNetworkPolicyEgressRule{{}},
 			wantIngress:  false,
 			wantEgress:   true,
 		},
 		{
-			name:        "f: both nil — no types (same as a)",
-			policyTypes: nil,
+			name:         "f: both nil — no types (same as a)",
+			policyTypes:  nil,
 			ingressRules: nil,
 			egressRules:  nil,
 			wantIngress:  false,
 			wantEgress:   false,
 		},
 		{
-			name:        "policyTypes explicit Ingress only",
-			policyTypes: []multiv1beta1.MultiPolicyType{multiv1beta1.PolicyTypeIngress},
+			name:         "policyTypes explicit Ingress only",
+			policyTypes:  []multiv1beta1.MultiPolicyType{multiv1beta1.PolicyTypeIngress},
 			ingressRules: nil,
 			egressRules:  []multiv1beta1.MultiNetworkPolicyEgressRule{{}},
 			wantIngress:  true,
 			wantEgress:   false,
 		},
 		{
-			name:        "policyTypes explicit Egress only",
-			policyTypes: []multiv1beta1.MultiPolicyType{multiv1beta1.PolicyTypeEgress},
+			name:         "policyTypes explicit Egress only",
+			policyTypes:  []multiv1beta1.MultiPolicyType{multiv1beta1.PolicyTypeEgress},
 			ingressRules: []multiv1beta1.MultiNetworkPolicyIngressRule{{}},
 			egressRules:  nil,
 			wantIngress:  false,
 			wantEgress:   true,
 		},
 		{
-			name:        "policyTypes explicit both Ingress and Egress",
-			policyTypes: []multiv1beta1.MultiPolicyType{multiv1beta1.PolicyTypeIngress, multiv1beta1.PolicyTypeEgress},
+			name:         "policyTypes explicit both Ingress and Egress",
+			policyTypes:  []multiv1beta1.MultiPolicyType{multiv1beta1.PolicyTypeIngress, multiv1beta1.PolicyTypeEgress},
 			ingressRules: nil,
 			egressRules:  nil,
 			wantIngress:  true,
