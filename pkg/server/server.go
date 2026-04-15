@@ -128,8 +128,15 @@ func (s *Server) RunPodConfig() {
 
 // Run ...
 func (s *Server) Run(_ string, stopCh chan struct{}) {
+	// internalStop is always closed (never sent-to) so all informers and
+	// controllers receive a proper broadcast shutdown signal regardless of
+	// whether the caller closes stopCh or sends a single value.
+	internalStop := make(chan struct{})
+	var once sync.Once
+	closeInternal := func() { once.Do(func() { close(internalStop) }) }
+
 	s.mu.Lock()
-	s.stopCh = stopCh
+	s.stopCh = internalStop
 	s.mu.Unlock()
 
 	if s.Broadcaster != nil {
@@ -140,8 +147,8 @@ func (s *Server) Run(_ string, stopCh chan struct{}) {
 	informerFactory := informers.NewSharedInformerFactoryWithOptions(s.Client, s.ConfigSyncPeriod)
 	nsConfig := controllers.NewNamespaceConfig(informerFactory.Core().V1().Namespaces(), s.ConfigSyncPeriod)
 	nsConfig.RegisterEventHandler(s)
-	go nsConfig.Run(stopCh)
-	informerFactory.Start(stopCh)
+	go nsConfig.Run(internalStop)
+	informerFactory.Start(internalStop)
 
 	policyInformerFactory := multiinformer.NewSharedInformerFactoryWithOptions(
 		s.NetworkPolicyClient, s.ConfigSyncPeriod)
@@ -150,21 +157,23 @@ func (s *Server) Run(_ string, stopCh chan struct{}) {
 	policyConfig := controllers.NewNetworkPolicyConfig(
 		policyInformerFactory.K8sCniCncfIo().V1beta1().MultiNetworkPolicies(), s.ConfigSyncPeriod)
 	policyConfig.RegisterEventHandler(s)
-	go policyConfig.Run(stopCh)
-	policyInformerFactory.Start(stopCh)
+	go policyConfig.Run(internalStop)
+	policyInformerFactory.Start(internalStop)
 
 	netdefInformarFactory := netdefinformerv1.NewSharedInformerFactoryWithOptions(
 		s.NetDefClient, s.ConfigSyncPeriod)
 	netdefConfig := controllers.NewNetDefConfig(
 		netdefInformarFactory.K8sCniCncfIo().V1().NetworkAttachmentDefinitions(), s.ConfigSyncPeriod)
 	netdefConfig.RegisterEventHandler(s)
-	go netdefConfig.Run(stopCh)
-	netdefInformarFactory.Start(stopCh)
+	go netdefConfig.Run(internalStop)
+	netdefInformarFactory.Start(internalStop)
 
 	s.birthCry()
 
-	// Wait for stop signal
+	// Wait for external stop signal (closed or value sent) then broadcast
+	// shutdown to all informers and controllers via internalStop.
 	<-stopCh
+	closeInternal()
 	klog.Info("Shutdown signal received, stopping server...")
 
 	// Signal that we are shutting down and prevent new syncs
