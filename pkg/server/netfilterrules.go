@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"net"
 	"net/netip"
@@ -82,6 +83,28 @@ func policyRuleNamespacedName(o *multiv1beta1.MultiNetworkPolicy) string {
 		return "<nil>"
 	}
 	return o.GetNamespace() + "-" + o.GetName()
+}
+
+const nftNameMaxLen = 255
+
+func sanitizeNftChar(r rune) rune {
+	if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' {
+		return r
+	}
+	return '_'
+}
+
+func truncateNftName(name string, maxLen int) string {
+	sanitized := strings.Map(sanitizeNftChar, name)
+	if len(sanitized) <= maxLen {
+		return sanitized
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(name))
+	suffix := fmt.Sprintf("-%x", h.Sum32())
+	prefix := sanitized[:maxLen-len(suffix)]
+	return prefix + suffix
 }
 
 func bootstrapNetfilterChains(nftState *nftState) {
@@ -1675,7 +1698,8 @@ func (n *nftState) applyPolicyPortsRules(chainName string, chain *nftables.Chain
 func (n *nftState) applyPodRules(s *Server, chain *nftables.Chain, podInfo *controllers.PodInfo, policy *multiv1beta1.MultiNetworkPolicy, policyNetworks []string) (bool, error) {
 	// add chain inet filter <chainName>-<idx>
 	entryChainName := chain.Name
-	policyChainName := fmt.Sprintf("%s-%s", entryChainName, policyRuleNamespacedName(policy))
+	policyPart := truncateNftName(policyRuleNamespacedName(policy), nftNameMaxLen-len(entryChainName)-1)
+	policyChainName := fmt.Sprintf("%s-%s", entryChainName, policyPart)
 	policyChain, err := n.addChain(&nftables.Chain{
 		Name:  policyChainName,
 		Table: n.filter,
