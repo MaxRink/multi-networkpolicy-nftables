@@ -96,13 +96,25 @@ func sanitizeNftChar(r rune) rune {
 }
 
 func truncateNftName(name string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
 	sanitized := strings.Map(sanitizeNftChar, name)
 	if len(sanitized) <= maxLen {
 		return sanitized
 	}
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(name))
-	suffix := fmt.Sprintf("-%x", h.Sum32())
+	// Use %08x for a deterministic 8-digit zero-padded suffix (9 chars with leading dash).
+	suffix := fmt.Sprintf("-%08x", h.Sum32())
+	if maxLen <= len(suffix) {
+		// maxLen is too small for the prefix+suffix; return the hash truncated to maxLen.
+		hash := suffix[1:] // drop the leading dash
+		if maxLen < len(hash) {
+			return hash[:maxLen]
+		}
+		return hash
+	}
 	prefix := sanitized[:maxLen-len(suffix)]
 	return prefix + suffix
 }
@@ -883,7 +895,16 @@ func ifname(n string) []byte {
 	return b
 }
 
+// userDataCommentMaxLen is the maximum length of a comment string in userdata.
+// userdata.AppendString encodes the string length in a single byte (0-255),
+// and appends a null terminator, so the effective maximum for the comment
+// string itself is 254 bytes.
+const userDataCommentMaxLen = 254
+
 func userDataComment(comment string) []byte {
+	if len(comment) > userDataCommentMaxLen {
+		comment = comment[:userDataCommentMaxLen]
+	}
 	return userdata.AppendString([]byte{}, userdata.TypeComment, comment)
 }
 
