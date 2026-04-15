@@ -207,4 +207,3 @@ func TestUserDataCommentMaxLen(t *testing.T) {
 		t.Errorf("expected userdata length %d, got %d", 2+userDataCommentMaxLen+1, len(ud3))
 	}
 }
-
