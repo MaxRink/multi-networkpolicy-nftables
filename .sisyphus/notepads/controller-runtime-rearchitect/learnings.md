@@ -46,3 +46,9 @@
 - Fetching CRD YAMLs directly from the upstream raw GitHub URLs into testdata/crds/ worked, and checking for CustomResourceDefinition confirmed the manifests were usable for envtest.
 - mockPolicyDeps was kept as a thin function-backed stub implementing ListPods/GetNamespaceInfo/GetPodInfo so each TDD scenario can override only the dependency it needs.
 - controller-runtime envtest imports required module mode in this repo because vendor is missing pkg/envtest and vendor/modules.txt lacks github.com/blang/semver/v4; tests and build pass with GOFLAGS=-mod=mod, and test fixture names had to avoid underscores because namespace names must be RFC1123 labels.
+
+## [2026-04-26] Task 8: netfilterrules.go + server.go refactor
+- netfilterrules.go now depends on controllers.PolicyDeps/CommonRuleConfig signatures only; metav1 stayed because selector conversion still uses LabelSelectorAsSelector.
+- The old metav1.NamespaceAll usage disappeared from netfilterrules.go after switching pod listing to deps.ListPods, so the import is no longer needed there.
+- Server thin-wrapper extraction stayed minimal by adding PolicyDeps bridge methods plus commonRuleConfig and delegating applyPolicyRulesForPodAndFamily to the exported helper.
+- GOOS=linux production builds passed; pkg/server TestApply remains expectedly build-failing until T10 updates old test call sites.

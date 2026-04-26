@@ -176,7 +176,7 @@ func TestApplyCommonChainRules(t *testing.T) {
 			allowDstPrefix: []string{"fe00::/8", "ff00::/8", "10.0.0.2/32", "10.0.2.0/24"},
 		},
 	}
-	err = nftState.applyCommonChainRules(mockServer)
+	err = nftState.applyCommonChainRules(mockServer.commonRuleConfig())
 	if err != nil {
 		t.Fatalf("applyCommonChainRules() failed: %v", err)
 	}
@@ -388,7 +388,7 @@ func TestApplyPodRules(t *testing.T) {
 			},
 		},
 	}
-	_, err = nftState.applyPodRules(mockServer, nftState.ingressChain, podMockInfo, mockPolicy, policyNetworks)
+	_, err = nftState.applyPodRules(mockServer, mockServer.commonRuleConfig(), nftState.ingressChain, podMockInfo, mockPolicy, policyNetworks)
 	if err != nil {
 		t.Fatalf("applyPodRules() for ingress failed: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestApplyPodRules(t *testing.T) {
 		t.Fatalf("nft flush failed after applying ingress rules: %v", err)
 	}
 
-	_, err = nftState.applyPodRules(mockServer, nftState.egressChain, podMockInfo, mockPolicy, policyNetworks)
+	_, err = nftState.applyPodRules(mockServer, mockServer.commonRuleConfig(), nftState.egressChain, podMockInfo, mockPolicy, policyNetworks)
 	if err != nil {
 		t.Fatalf("applyPodRules() for egress failed: %v", err)
 	}
@@ -743,7 +743,7 @@ func TestApplyPodRulesNoPorts(t *testing.T) {
 			},
 		},
 	}
-	_, err = nftState.applyPodRules(mockServer, nftState.ingressChain, podMockInfo, mockPolicy, []string{"net1", "net2"})
+	_, err = nftState.applyPodRules(mockServer, mockServer.commonRuleConfig(), nftState.ingressChain, podMockInfo, mockPolicy, []string{"net1", "net2"})
 	if err != nil {
 		t.Fatalf("applyPodRules() for ingress failed: %v", err)
 	}
@@ -751,7 +751,7 @@ func TestApplyPodRulesNoPorts(t *testing.T) {
 		t.Fatalf("nft flush failed after applying ingress rules: %v", err)
 	}
 
-	_, err = nftState.applyPodRules(mockServer, nftState.egressChain, podMockInfo, mockPolicy, []string{"net1", "net2"})
+	_, err = nftState.applyPodRules(mockServer, mockServer.commonRuleConfig(), nftState.egressChain, podMockInfo, mockPolicy, []string{"net1", "net2"})
 	if err != nil {
 		t.Fatalf("applyPodRules() for egress failed: %v", err)
 	}
@@ -1358,7 +1358,7 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *Server
 			},
 		}
 	}
-	err = nftState.applyCommonChainRules(mockServer)
+	err = nftState.applyCommonChainRules(mockServer.commonRuleConfig())
 	if err != nil {
 		return nftState, testNs, mockServer, podMockInfo, fmt.Errorf("applyCommonChainRules() failed: %w", err)
 	}

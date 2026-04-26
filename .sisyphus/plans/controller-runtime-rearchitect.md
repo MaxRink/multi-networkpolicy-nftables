@@ -791,7 +791,7 @@ Max Concurrent: 6 (Wave 2)
 
   **Commit**: NO (groups with Wave 2)
 
-- [ ] 8. Refactor netfilterrules.go to use PolicyDeps + CommonRuleConfig AND extract applyPolicyRulesForPodAndFamily from Server
+- [x] 8. Refactor netfilterrules.go to use PolicyDeps + CommonRuleConfig AND extract applyPolicyRulesForPodAndFamily from Server
 
   **What to do**:
   **Part A — Signature refactoring in netfilterrules.go:**
@@ -918,7 +918,7 @@ Max Concurrent: 6 (Wave 2)
   >
   > **All references to "T9" in other tasks still apply — they now mean "T8 Part B".**
 
-- [ ] 10. Update existing unit tests for refactored interfaces
+- [x] 10. Update existing unit tests for refactored interfaces
 
   **What to do**:
   - Update test files in `pkg/server/` that call the refactored functions (from T8)
