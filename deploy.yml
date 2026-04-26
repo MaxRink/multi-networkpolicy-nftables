@@ -21,6 +21,14 @@ rules:
       - list
       - watch
       - get
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
   # Watch for changes to Kubernetes NetworkPolicies.
   - apiGroups: ["networking.k8s.io"]
     resources:

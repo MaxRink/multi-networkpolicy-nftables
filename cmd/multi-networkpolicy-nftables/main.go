@@ -21,19 +21,25 @@ limitations under the License.
 package main
 
 import (
-	//"flag"
+	"fmt"
 	"log"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"github.com/telekom/multi-networkpolicy-nftables/pkg/controller"
+	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/server"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"k8s.io/klog/v2"
+	ctrl "sigs.k8s.io/controller-runtime"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
 
 const logFlushFreqFlagName = "log-flush-frequency"
@@ -55,6 +61,74 @@ func initLogs() {
 	go wait.Forever(klog.Flush, *logFlushFreq)
 }
 
+func run(opts *server.Options) error {
+	cfg, err := opts.BuildReconcilerConfig()
+	if err != nil {
+		return fmt.Errorf("build reconciler config: %w", err)
+	}
+
+	klog.Infof("hostname: %v", cfg.NodeName)
+	klog.Infof("container-runtime: %v", cfg.ContainerRuntime)
+
+	var restCfg *rest.Config
+	if cfg.Kubeconfig == "" {
+		klog.Info("No kubeconfig specified. Falling back to in-cluster config.")
+		restCfg, err = rest.InClusterConfig()
+	} else {
+		restCfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+			&clientcmd.ClientConfigLoadingRules{ExplicitPath: cfg.Kubeconfig},
+			&clientcmd.ConfigOverrides{ClusterInfo: clientcmdapi.Cluster{Server: cfg.Master}},
+		).ClientConfig()
+	}
+	if err != nil {
+		return fmt.Errorf("build kubeconfig: %w", err)
+	}
+
+	scheme := runtime.NewScheme()
+	if err := controller.SetupScheme(scheme); err != nil {
+		return fmt.Errorf("setup scheme: %w", err)
+	}
+
+	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
+		Scheme:         scheme,
+		LeaderElection: false,
+		Metrics:        metricsserver.Options{BindAddress: "0"},
+	})
+	if err != nil {
+		return fmt.Errorf("create manager: %w", err)
+	}
+
+	ctx := ctrl.SetupSignalHandler()
+	if err := controller.SetupIndexes(ctx, mgr); err != nil {
+		return fmt.Errorf("setup indexes: %w", err)
+	}
+
+	criClient, criConn, err := controllers.GetCriRuntimeClient(cfg.ContainerRuntimeEndpoint, cfg.HostPrefix)
+	if err != nil {
+		klog.Warningf("failed to create CRI client (will retry at runtime): %v", err)
+		criClient = nil
+		criConn = nil
+	}
+	if criConn != nil {
+		defer criConn.Close()
+	}
+
+	reconciler := &controller.NodeReconciler{
+		NodeName:       cfg.NodeName,
+		Client:         mgr.GetClient(),
+		HostPrefix:     cfg.HostPrefix,
+		NetworkPlugins: cfg.NetworkPlugins,
+		CommonCfg:      cfg.CommonRuleConfig,
+		CriClient:      criClient,
+	}
+	if err := reconciler.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("setup reconciler: %w", err)
+	}
+
+	klog.Infof("Starting manager for node %s", cfg.NodeName)
+	return mgr.Start(ctx)
+}
+
 func main() {
 	initLogs()
 	defer klog.Flush()
@@ -63,22 +137,11 @@ func main() {
 	cmd := &cobra.Command{
 		Use:  "multi-networkpolicy-node",
 		Long: `TBD`,
-		Run: func(cmd *cobra.Command, args []string) {
-			if err := opts.Run(); err != nil {
-				klog.Exit(err)
-			}
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return run(opts)
 		},
 	}
 	opts.AddFlags(cmd.Flags())
-
-	signalCh := make(chan os.Signal, 16)
-	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		for sig := range signalCh {
-			klog.V(1).Infof("Caught %v, stopping...", sig)
-			opts.Stop()
-		}
-	}()
 
 	klog.Infof("Executing ...")
 
