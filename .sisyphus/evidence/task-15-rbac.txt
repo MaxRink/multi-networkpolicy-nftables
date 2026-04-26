@@ -1,0 +1,7 @@
+deploy.yml ClusterRole evidence:
+- resources:
+  - nodes
+- verbs:
+  - get
+  - list
+  - watch

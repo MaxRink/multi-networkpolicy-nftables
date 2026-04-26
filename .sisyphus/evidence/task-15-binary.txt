@@ -1,0 +1,14 @@
+GOOS=linux go build -o /tmp/mnpn ./cmd/multi-networkpolicy-nftables/
+EXIT:0
+
+docker run --rm --platform linux/arm64 -v "/tmp/mnpn:/tmp/mnpn:ro" alpine:3.22 /tmp/mnpn --help
+Matched flags:
+- --container-runtime RuntimeKind
+- --kubeconfig string
+- --host-prefix string
+- --network-plugins strings
+- --accept-icmp
+- --sync-period int
+
+Leader election evidence:
+- cmd/multi-networkpolicy-nftables/main.go contains `LeaderElection: false`

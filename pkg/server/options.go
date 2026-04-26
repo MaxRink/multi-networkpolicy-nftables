@@ -66,6 +66,18 @@ type ReconcilerConfig struct {
 	CommonRuleConfig         controllers.CommonRuleConfig
 }
 
+// ReconcilerConfig holds all configuration values needed to construct a NodeReconciler.
+type ReconcilerConfig struct {
+	Kubeconfig               string
+	Master                   string
+	NodeName                 string
+	HostPrefix               string
+	ContainerRuntime         controllers.RuntimeKind
+	ContainerRuntimeEndpoint string
+	NetworkPlugins           []string
+	CommonRuleConfig         controllers.CommonRuleConfig
+}
+
 // AddFlags adds command line flags into command
 func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	klog.InitFlags(nil)
