@@ -1,0 +1,2 @@
+TestSetupWithManager added to pkg/controller/reconciler_test.go.
+Uses envtest manager with metrics disabled and SetupIndexes before SetupWithManager.
