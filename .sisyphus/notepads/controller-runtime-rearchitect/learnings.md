@@ -81,3 +81,12 @@
 - SetupIndexes must be called BEFORE SetupWithManager (indexes must be registered first)
 - metricsserver.Options{BindAddress: "0"} disables metrics in tests
 - Wave 4 commit covers T11-T14: mappers, predicates, reconciler, applier, SetupWithManager
+
+## [2026-04-27] Task 15: Wire Manager in main.go
+- ctrl.SetupSignalHandler() returns a context; call it ONCE and pass to both SetupIndexes and mgr.Start
+- metricsserver.Options{BindAddress: "0"} disables metrics HTTP server (no port conflict in DaemonSet)
+- GetCriRuntimeClient returns (pb.RuntimeServiceClient, *grpc.ClientConn, error) — conn must be closed
+- BuildReconcilerConfig() on Options resolves hostname + prefix lists + packages all config
+- Signal handling removed from main.go — ctrl.SetupSignalHandler() handles SIGTERM/SIGINT
+- cobra RunE (not Run) lets errors propagate to main()
+- LeaderElection: false is CRITICAL for DaemonSet

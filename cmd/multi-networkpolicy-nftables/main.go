@@ -147,6 +147,74 @@ func startManagerAndCleanup(
 	return nil
 }
 
+func run(opts *server.Options) error {
+	cfg, err := opts.BuildReconcilerConfig()
+	if err != nil {
+		return fmt.Errorf("build reconciler config: %w", err)
+	}
+
+	klog.Infof("hostname: %v", cfg.NodeName)
+	klog.Infof("container-runtime: %v", cfg.ContainerRuntime)
+
+	var restCfg *rest.Config
+	if cfg.Kubeconfig == "" {
+		klog.Info("No kubeconfig specified. Falling back to in-cluster config.")
+		restCfg, err = rest.InClusterConfig()
+	} else {
+		restCfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+			&clientcmd.ClientConfigLoadingRules{ExplicitPath: cfg.Kubeconfig},
+			&clientcmd.ConfigOverrides{ClusterInfo: clientcmdapi.Cluster{Server: cfg.Master}},
+		).ClientConfig()
+	}
+	if err != nil {
+		return fmt.Errorf("build kubeconfig: %w", err)
+	}
+
+	scheme := runtime.NewScheme()
+	if err := controller.SetupScheme(scheme); err != nil {
+		return fmt.Errorf("setup scheme: %w", err)
+	}
+
+	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
+		Scheme:         scheme,
+		LeaderElection: false,
+		Metrics:        metricsserver.Options{BindAddress: "0"},
+	})
+	if err != nil {
+		return fmt.Errorf("create manager: %w", err)
+	}
+
+	ctx := ctrl.SetupSignalHandler()
+	if err := controller.SetupIndexes(ctx, mgr); err != nil {
+		return fmt.Errorf("setup indexes: %w", err)
+	}
+
+	criClient, criConn, err := controllers.GetCriRuntimeClient(cfg.ContainerRuntimeEndpoint, cfg.HostPrefix)
+	if err != nil {
+		klog.Warningf("failed to create CRI client (will retry at runtime): %v", err)
+		criClient = nil
+		criConn = nil
+	}
+	if criConn != nil {
+		defer criConn.Close()
+	}
+
+	reconciler := &controller.NodeReconciler{
+		NodeName:       cfg.NodeName,
+		Client:         mgr.GetClient(),
+		HostPrefix:     cfg.HostPrefix,
+		NetworkPlugins: cfg.NetworkPlugins,
+		CommonCfg:      cfg.CommonRuleConfig,
+		CriClient:      criClient,
+	}
+	if err := reconciler.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("setup reconciler: %w", err)
+	}
+
+	klog.Infof("Starting manager for node %s", cfg.NodeName)
+	return mgr.Start(ctx)
+}
+
 func main() {
 	defer klog.Flush()
 	opts := server.NewOptions()
