@@ -820,9 +820,9 @@ func (n *nftState) allowConntracked(chain *nftables.Chain) error {
 	return err
 }
 
-func (n *nftState) applyCommonChainRules(s *Server) error {
+func (n *nftState) applyCommonChainRules(cfg controllers.CommonRuleConfig) error {
 	klog.V(8).Info("applying common chain rules")
-	if s.Options.acceptICMPv6 {
+	if cfg.AcceptICMPv6 {
 		if err := n.allowICMP(n.commonIngressChain, true); err != nil {
 			return fmt.Errorf("failed to allow ICMPv6 in common ingress chain: %v", err)
 		}
@@ -837,7 +837,7 @@ func (n *nftState) applyCommonChainRules(s *Server) error {
 			return fmt.Errorf("failed to allow ICMPv6 neighbor discovery in common egress chain: %v", err)
 		}
 	}
-	if s.Options.acceptICMP {
+	if cfg.AcceptICMP {
 		if err := n.allowICMP(n.commonIngressChain, false); err != nil {
 			return fmt.Errorf("failed to allow ICMP in common ingress chain: %v", err)
 		}
@@ -846,14 +846,14 @@ func (n *nftState) applyCommonChainRules(s *Server) error {
 		}
 	}
 
-	if len(s.Options.allowSrcPrefix) != 0 {
-		if err := n.applyCommonPrefixRules(n.commonIngressChain, s.Options.allowSrcPrefix, common); err != nil {
+	if len(cfg.AllowSrcPrefix) != 0 {
+		if err := n.applyCommonPrefixRules(n.commonIngressChain, cfg.AllowSrcPrefix, common); err != nil {
 			return fmt.Errorf("failed to apply common ingress rules: %v", err)
 		}
 	}
 
-	if len(s.Options.allowDstPrefix) != 0 {
-		if err := n.applyCommonPrefixRules(n.commonEgressChain, s.Options.allowDstPrefix, common); err != nil {
+	if len(cfg.AllowDstPrefix) != 0 {
+		if err := n.applyCommonPrefixRules(n.commonEgressChain, cfg.AllowDstPrefix, common); err != nil {
 			return fmt.Errorf("failed to apply common egress rules: %v", err)
 		}
 	}
@@ -1213,7 +1213,7 @@ func (n *nftState) applyPolicyPeersRulesIPBlock(chainName string, chain *nftable
 	return nil
 }
 
-func (n *nftState) applyPolicyPeersRulesSelector(s *Server, chainName string, chain *nftables.Chain, policyName string, peer multiv1beta1.MultiNetworkPolicyPeer,
+func (n *nftState) applyPolicyPeersRulesSelector(deps controllers.PolicyDeps, chainName string, chain *nftables.Chain, policyName string, peer multiv1beta1.MultiNetworkPolicyPeer,
 	podInfo *controllers.PodInfo, policyNetworks []string, peerIndex int) error {
 	if peer.PodSelector != nil {
 		klog.V(8).Infof("applying peers rules with pod selector: %s", peer.PodSelector.String())
@@ -1231,7 +1231,7 @@ func (n *nftState) applyPolicyPeersRulesSelector(s *Server, chainName string, ch
 		podSelector = labels.Everything()
 	}
 
-	pods, err := s.podLister.Pods(metav1.NamespaceAll).List(podSelector)
+	pods, err := deps.ListPods(podSelector)
 	if err != nil {
 		return fmt.Errorf("pod list failed: %w", err)
 	}
@@ -1245,12 +1245,10 @@ func (n *nftState) applyPolicyPeersRulesSelector(s *Server, chainName string, ch
 			return fmt.Errorf("namespace selector: %w", err)
 		}
 	}
-	s.namespaceMap.Update(s.nsChanges)
-
 	var podIntfIPs []string
 	podIntfsIPsMap := make(map[string]any)
 	for _, sPod := range pods {
-		nsLabels, err := s.namespaceMap.GetNamespaceInfo(sPod.Namespace)
+		nsLabels, err := deps.GetNamespaceInfo(sPod.Namespace)
 		if err != nil {
 			klog.Errorf("cannot get namespace info: %v %v", sPod.Name, err)
 			continue
@@ -1258,8 +1256,7 @@ func (n *nftState) applyPolicyPeersRulesSelector(s *Server, chainName string, ch
 		if nsSelector != nil && !nsSelector.Matches(labels.Set(nsLabels.Labels)) {
 			continue
 		}
-		s.podMap.Update(s.podChanges)
-		sPodinfo, err := s.podMap.GetPodInfo(sPod)
+		sPodinfo, err := deps.GetPodInfo(sPod)
 		if err != nil {
 			klog.Errorf("cannot get %s/%s podInfo: %v", sPod.Namespace, sPod.Name, err)
 			continue
@@ -1420,7 +1417,7 @@ func (n *nftState) addIPRules(chainName string, addrs []string, chain *nftables.
 	return nil
 }
 
-func (n *nftState) applyPolicyPeersRules(s *Server, chainName string, chain *nftables.Chain, policyName string, peers []multiv1beta1.MultiNetworkPolicyPeer,
+func (n *nftState) applyPolicyPeersRules(deps controllers.PolicyDeps, chainName string, chain *nftables.Chain, policyName string, peers []multiv1beta1.MultiNetworkPolicyPeer,
 	podInfo *controllers.PodInfo, policyNetworks []string, peerIndex int) error {
 	peersName := fmt.Sprintf("%s-%s-%d", chainName, peersChainSuffix, peerIndex)
 
@@ -1445,8 +1442,6 @@ func (n *nftState) applyPolicyPeersRules(s *Server, chainName string, chain *nft
 		}}, n.nft.AddRule, false); err != nil {
 		return err
 	}
-	// sync podmap before calculating rules
-	s.podMap.Update(s.podChanges)
 	for index, peer := range peers {
 		if peer.IPBlock != nil {
 			if err := n.applyPolicyPeersRulesIPBlock(peersName, peersChain, policyName, peer, index); err != nil {
@@ -1455,7 +1450,7 @@ func (n *nftState) applyPolicyPeersRules(s *Server, chainName string, chain *nft
 			continue
 		}
 		if peer.PodSelector != nil || peer.NamespaceSelector != nil {
-			if err := n.applyPolicyPeersRulesSelector(s, peersName, peersChain, policyName, peer, podInfo, policyNetworks, index); err != nil {
+			if err := n.applyPolicyPeersRulesSelector(deps, peersName, peersChain, policyName, peer, podInfo, policyNetworks, index); err != nil {
 				klog.Errorf("failed to apply selector rules: %v", err)
 			}
 			continue
@@ -1715,8 +1710,7 @@ func (n *nftState) applyPolicyPortsRules(chainName string, chain *nftables.Chain
 	return nil
 }
 
-// s *Server, podInfo *controllers.PodInfo, pIndex, iIndex int, from []multiv1beta1.MultiNetworkPolicyPeer, policyNetworks []string
-func (n *nftState) applyPodRules(s *Server, chain *nftables.Chain, podInfo *controllers.PodInfo, policy *multiv1beta1.MultiNetworkPolicy, policyNetworks []string) (bool, error) {
+func (n *nftState) applyPodRules(deps controllers.PolicyDeps, _ controllers.CommonRuleConfig, chain *nftables.Chain, podInfo *controllers.PodInfo, policy *multiv1beta1.MultiNetworkPolicy, policyNetworks []string) (bool, error) {
 	// add chain inet filter <chainName>-<idx>
 	entryChainName := chain.Name
 	policyPart := truncateNftName(policyRuleNamespacedName(policy), nftNameMaxLen-len(entryChainName)-1)
@@ -1750,7 +1744,7 @@ func (n *nftState) applyPodRules(s *Server, chain *nftables.Chain, podInfo *cont
 			if err := n.applyPolicyPortsRules(policyChainName, policyChain, policyNamespacedName(policy), ingress.Ports, index); err != nil {
 				return newRules, fmt.Errorf("failed to apply ingress ports for policy %q: %w", policyNamespacedName(policy), err)
 			}
-			if err := n.applyPolicyPeersRules(s, policyChainName, policyChain, policyNamespacedName(policy), ingress.From, podInfo, policyNetworks, index); err != nil {
+			if err := n.applyPolicyPeersRules(deps, policyChainName, policyChain, policyNamespacedName(policy), ingress.From, podInfo, policyNetworks, index); err != nil {
 				return newRules, fmt.Errorf("failed to apply ingress address rules for policy %q: %w", policyNamespacedName(policy), err)
 			}
 			if err := n.applyMarkCheck(policyChainName, policyChain, policyNamespacedName(policy), index); err != nil {
@@ -1765,7 +1759,7 @@ func (n *nftState) applyPodRules(s *Server, chain *nftables.Chain, podInfo *cont
 			if err := n.applyPolicyPortsRules(policyChainName, policyChain, policyNamespacedName(policy), egress.Ports, index); err != nil {
 				return newRules, fmt.Errorf("failed to apply egress ports for policy %q: %w", policyNamespacedName(policy), err)
 			}
-			if err := n.applyPolicyPeersRules(s, policyChainName, policyChain, policyNamespacedName(policy), egress.To, podInfo, policyNetworks, index); err != nil {
+			if err := n.applyPolicyPeersRules(deps, policyChainName, policyChain, policyNamespacedName(policy), egress.To, podInfo, policyNetworks, index); err != nil {
 				return newRules, fmt.Errorf("failed to apply egress address rules for policy %q: %w", policyNamespacedName(policy), err)
 			}
 			if err := n.applyMarkCheck(policyChainName, policyChain, policyNamespacedName(policy), index); err != nil {

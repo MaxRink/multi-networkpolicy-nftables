@@ -487,6 +487,30 @@ func (s *Server) syncMultiPolicy() error {
 	return nil
 }
 
+// ListPods implements controllers.PolicyDeps.
+func (s *Server) ListPods(selector labels.Selector) ([]*v1.Pod, error) {
+	return s.podLister.Pods(metav1.NamespaceAll).List(selector)
+}
+
+// GetNamespaceInfo implements controllers.PolicyDeps.
+func (s *Server) GetNamespaceInfo(namespace string) (*controllers.NamespaceInfo, error) {
+	return s.namespaceMap.GetNamespaceInfo(namespace)
+}
+
+// GetPodInfo implements controllers.PolicyDeps.
+func (s *Server) GetPodInfo(pod *v1.Pod) (*controllers.PodInfo, error) {
+	return s.podMap.GetPodInfo(pod)
+}
+
+func (s *Server) commonRuleConfig() controllers.CommonRuleConfig {
+	return controllers.CommonRuleConfig{
+		AcceptICMPv6:   s.Options.acceptICMPv6,
+		AcceptICMP:     s.Options.acceptICMP,
+		AllowSrcPrefix: s.Options.allowSrcPrefix,
+		AllowDstPrefix: s.Options.allowDstPrefix,
+	}
+}
+
 func (s *Server) applyPolicyForPod(p *v1.Pod) error {
 	podInfo, err := s.podMap.GetPodInfo(p)
 	if err != nil {
@@ -537,7 +561,9 @@ func (s *Server) applyPolicyRulesForPod(pod *v1.Pod, podInfo *controllers.PodInf
 	return closeErr
 }
 
-func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controllers.PodInfo, nft *nftables.Conn) error {
+// ApplyPolicyRulesForPodAndFamily applies nftables rules for the given pod using the provided deps and config.
+// This is the decoupled version called by NodeReconciler (pkg/controller).
+func ApplyPolicyRulesForPodAndFamily(deps controllers.PolicyDeps, cfg controllers.CommonRuleConfig, policyMap controllers.PolicyMap, pod *v1.Pod, podInfo *controllers.PodInfo, nft *nftables.Conn) error {
 	klog.V(4).Infof("Generate rules for Pod: [%s]\n", podNamespacedName(pod))
 
 	// nft add table inet filter
@@ -552,7 +578,7 @@ func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controlle
 	var ingressPolicies []internalPolicy
 	var egressPolicies []internalPolicy
 
-	for _, p := range s.policyMap {
+	for _, p := range policyMap {
 		policy := p.Policy
 		if policy.GetNamespace() != pod.Namespace {
 			continue
@@ -601,7 +627,7 @@ func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controlle
 		}
 	}
 
-	err = nftState.applyCommonChainRules(s)
+	err = nftState.applyCommonChainRules(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to apply common chain rules for pod [%s]: %w", podNamespacedName(pod), err)
 	}
@@ -613,7 +639,7 @@ func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controlle
 	if len(ingressPolicies) > 0 {
 		forceUpdate := false
 		for _, policy := range ingressPolicies {
-			newRules, err := nftState.applyPodRules(s, nftState.ingressChain, podInfo, policy.policy, policy.policyNetworks)
+			newRules, err := nftState.applyPodRules(deps, cfg, nftState.ingressChain, podInfo, policy.policy, policy.policyNetworks)
 			if err != nil {
 				klog.Errorf("failed to apply pod ingress rules: %v", err)
 			}
@@ -632,7 +658,7 @@ func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controlle
 	if len(egressPolicies) > 0 {
 		forceUpdate := false
 		for _, policy := range egressPolicies {
-			newRules, err := nftState.applyPodRules(s, nftState.egressChain, podInfo, policy.policy, policy.policyNetworks)
+			newRules, err := nftState.applyPodRules(deps, cfg, nftState.egressChain, podInfo, policy.policy, policy.policyNetworks)
 			if err != nil {
 				klog.Errorf("failed to apply pod egress rules: %v", err)
 			}
@@ -656,6 +682,10 @@ func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controlle
 	}
 
 	return nil
+}
+
+func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controllers.PodInfo, nft *nftables.Conn) error {
+	return ApplyPolicyRulesForPodAndFamily(s, s.commonRuleConfig(), s.policyMap, pod, podInfo, nft)
 }
 
 func podNamespacedName(o *v1.Pod) string {
