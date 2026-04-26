@@ -1,0 +1,8 @@
+TestPodHostnameIndex
+TestReconcile_NoPodsOnNode
+TestReconcile_PodWithNoPolicy
+TestReconcile_PodWithMatchingPolicy
+TestReconcile_PodDeletedDuringReconcile
+TestReconcile_NamespaceSelector
+TestSetupScheme
+ok  	github.com/telekom/multi-networkpolicy-nftables/pkg/controller	5.223s
