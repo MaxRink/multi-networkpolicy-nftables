@@ -1,0 +1,8 @@
+=== klog v1 imports remaining ===
+(none)
+=== klog v1 in go.mod ===
+(none)
+=== controller-runtime in go.mod ===
+	sigs.k8s.io/controller-runtime v0.21.0
+=== build ===
+OK

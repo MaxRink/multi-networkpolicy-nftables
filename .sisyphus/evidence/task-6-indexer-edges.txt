@@ -1,0 +1,3 @@
+TestPodHostnameIndex edge cases
+scheduled pod => ["node-a"]
+unscheduled pod => nil

@@ -1,0 +1,2 @@
+	sigs.k8s.io/controller-runtime v0.21.0
+ok  	github.com/telekom/multi-networkpolicy-nftables/pkg/controllers	(cached)

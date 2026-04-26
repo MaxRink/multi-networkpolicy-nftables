@@ -33,7 +33,7 @@ import (
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/server"
 
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 const logFlushFreqFlagName = "log-flush-frequency"
