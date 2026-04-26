@@ -18,6 +18,7 @@ package server
 
 import (
 	"flag"
+	"fmt"
 	"net"
 	"strings"
 
@@ -51,6 +52,18 @@ type Options struct {
 	allowDstPrefix []string
 	// stopCh is used to stop the command
 	stopCh chan struct{}
+}
+
+// ReconcilerConfig holds all configuration values needed to construct a NodeReconciler.
+type ReconcilerConfig struct {
+	Kubeconfig               string
+	Master                   string
+	NodeName                 string
+	HostPrefix               string
+	ContainerRuntime         controllers.RuntimeKind
+	ContainerRuntimeEndpoint string
+	NetworkPlugins           []string
+	CommonRuleConfig         controllers.CommonRuleConfig
 }
 
 // AddFlags adds command line flags into command
@@ -99,6 +112,35 @@ func (o *Options) Validate() error {
 		return err
 	}
 	return nil
+}
+
+// BuildReconcilerConfig resolves all configuration needed to build a NodeReconciler.
+// It resolves hostname, parses prefix lists, and packages everything into a ReconcilerConfig.
+func (o *Options) BuildReconcilerConfig() (*ReconcilerConfig, error) {
+	if err := o.Validate(); err != nil {
+		return nil, fmt.Errorf("options validation: %w", err)
+	}
+
+	hostname, err := nodeutil.GetHostname(o.hostnameOverride)
+	if err != nil {
+		return nil, fmt.Errorf("get hostname: %w", err)
+	}
+
+	return &ReconcilerConfig{
+		Kubeconfig:               o.Kubeconfig,
+		Master:                   o.master,
+		NodeName:                 hostname,
+		HostPrefix:               o.hostPrefix,
+		ContainerRuntime:         o.containerRuntime,
+		ContainerRuntimeEndpoint: o.containerRuntimeEndpoint,
+		NetworkPlugins:           o.networkPlugins,
+		CommonRuleConfig: controllers.CommonRuleConfig{
+			AcceptICMP:     o.acceptICMP,
+			AcceptICMPv6:   o.acceptICMPv6,
+			AllowSrcPrefix: o.allowSrcPrefix,
+			AllowDstPrefix: o.allowDstPrefix,
+		},
+	}, nil
 }
 
 // Run invokes server
