@@ -1,0 +1,1 @@
+Created pkg/controllers/deps.go with PolicyDeps, CommonRuleConfig, and NetDefResolver contracts.
