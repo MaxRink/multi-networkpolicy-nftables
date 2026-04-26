@@ -1,0 +1,4 @@
+go test -v -count=1 ./pkg/controllers/...
+
+Result: PASS
+43 passed, 0 failed, 0 pending, 0 skipped
