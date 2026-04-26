@@ -1,0 +1,2 @@
+SetupWithManager added to NodeReconciler in pkg/controller/reconciler.go.
+Wires Node, Pod, MultiNetworkPolicy, NetworkAttachmentDefinition, and Namespace watches.

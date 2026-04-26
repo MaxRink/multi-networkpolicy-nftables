@@ -17,6 +17,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	ctrl "sigs.k8s.io/controller-runtime"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -97,6 +99,30 @@ func TestMain(m *testing.M) {
 	}
 
 	os.Exit(code)
+}
+
+func TestSetupWithManager(t *testing.T) {
+	mgr, err := ctrl.NewManager(testEnv.Config, ctrl.Options{
+		Scheme:                 testScheme,
+		LeaderElection:         false,
+		Metrics:                metricsserver.Options{BindAddress: "0"},
+		HealthProbeBindAddress: "0",
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	r := &NodeReconciler{
+		NodeName: "test-node",
+		Client:   mgr.GetClient(),
+	}
+
+	if err := SetupIndexes(context.Background(), mgr); err != nil {
+		t.Fatalf("SetupIndexes() error = %v", err)
+	}
+	if err := r.SetupWithManager(mgr); err != nil {
+		t.Fatalf("SetupWithManager() error = %v", err)
+	}
 }
 
 func resolveEnvtestAssetsDir() (string, error) {

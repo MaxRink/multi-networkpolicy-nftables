@@ -52,3 +52,32 @@
 - The old metav1.NamespaceAll usage disappeared from netfilterrules.go after switching pod listing to deps.ListPods, so the import is no longer needed there.
 - Server thin-wrapper extraction stayed minimal by adding PolicyDeps bridge methods plus commonRuleConfig and delegating applyPolicyRulesForPodAndFamily to the exported helper.
 - GOOS=linux production builds passed; pkg/server TestApply remains expectedly build-failing until T10 updates old test call sites.
+
+## [2026-04-27] Task 11: mappers.go
+- All 4 map functions are closures capturing nodeName string
+- mapPodToNode extracts pod.Spec.NodeName; empty NodeName returns nil (unscheduled pod)
+- mapPolicy/Namespace/NetDefToNode all enqueue the same local node (DaemonSet pattern)
+- handler.MapFunc = func(context.Context, client.Object) []reconcile.Request
+
+## [2026-04-27] Task 12: predicates.go
+- PodPredicate uses predicate.Funcs{} with phase+label change check on Update
+- PolicyPredicate uses GenerationChangedPredicate or manual generation comparison
+- NodePredicate is a closure comparing obj.GetName() == nodeName
+- All predicates are macOS-safe (no Linux imports)
+
+## [2026-04-27] Task 13: NodeReconciler.Reconcile()
+- Platform isolation: applier_linux.go (//go:build linux) vs applier_other.go (//go:build !linux)
+- applyRulesForPod is the only function that imports ns/nftables/server — lives in applier_linux.go
+- reconciler.go has no Linux-specific imports — compiles and tests on macOS
+- PolicyDeps.GetPodInfo: when CriClient is nil (tests), returns minimal PodInfo
+- IsMultiNetworkpolicyTarget requires Phase==Running — test pods (no status) are skipped → no nftables calls in tests
+- policyDeps() helper: uses r.PolicyDeps if set (tests), otherwise r itself (production)
+- NetDefResolver.GetPluginType uses netdefutils.GetCNIConfig + json parsing (same as NetDefChangeTracker)
+- compile-time interface checks: var _ controllers.PolicyDeps = (*NodeReconciler)(nil)
+
+## [2026-04-27] Task 14: SetupWithManager
+- SetupWithManager wires For(&Node{}) + 4 Watches: Pod, MultiNetworkPolicy, NAD, Namespace
+- NodePredicate filters to this-node-only events for the primary For() resource
+- SetupIndexes must be called BEFORE SetupWithManager (indexes must be registered first)
+- metricsserver.Options{BindAddress: "0"} disables metrics in tests
+- Wave 4 commit covers T11-T14: mappers, predicates, reconciler, applier, SetupWithManager
