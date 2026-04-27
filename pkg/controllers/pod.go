@@ -19,9 +19,7 @@ package controllers
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"strings"
-	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -31,12 +29,8 @@ import (
 	netdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	coreinformers "k8s.io/client-go/informers/core/v1"
-	"k8s.io/client-go/tools/cache"
 	pb "k8s.io/cri-api/pkg/apis/runtime/v1"
 	k8sutils "k8s.io/cri-client/pkg/util"
-	"k8s.io/klog/v2"
 )
 
 // RuntimeKind is enum type variable for container runtime
@@ -59,124 +53,10 @@ func (rk *RuntimeKind) Set(s string) error {
 }
 
 // String returns current runtime kind
-func (rk RuntimeKind) String() string {
-	return string(rk)
-}
+func (rk RuntimeKind) String() string { return string(rk) }
 
 // Type returns its type, "RuntimeKind"
-func (rk RuntimeKind) Type() string {
-	return "RuntimeKind"
-}
-
-// PodHandler is an abstract interface of objects which receive
-// notifications about pod object changes.
-type PodHandler interface {
-	// OnPodAdd is called whenever creation of new pod object
-	// is observed.
-	OnPodAdd(pod *v1.Pod)
-	// OnPodUpdate is called whenever modification of an existing
-	// pod object is observed.
-	OnPodUpdate(oldPod, pod *v1.Pod)
-	// OnPodDelete is called whenever deletion of an existing pod
-	// object is observed.
-	OnPodDelete(pod *v1.Pod)
-	// OnPodSynced is called once all the initial event handlers were
-	// called and the state is fully propagated to local cache.
-	OnPodSynced()
-}
-
-// PodConfig ...
-type PodConfig struct {
-	listerSynced  cache.InformerSynced
-	eventHandlers []PodHandler
-}
-
-// NewPodConfig creates a new PodConfig.
-func NewPodConfig(podInformer coreinformers.PodInformer, resyncPeriod time.Duration) *PodConfig {
-	result := &PodConfig{
-		listerSynced: podInformer.Informer().HasSynced,
-	}
-
-	_, err := podInformer.Informer().AddEventHandlerWithResyncPeriod(
-		cache.ResourceEventHandlerFuncs{
-			AddFunc:    result.handleAddPod,
-			UpdateFunc: result.handleUpdatePod,
-			DeleteFunc: result.handleDeletePod,
-		},
-		resyncPeriod,
-	)
-	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("cannot add pod informer event handler: %v", err))
-	}
-	return result
-}
-
-// RegisterEventHandler registers a handler which is called on every pod change.
-func (c *PodConfig) RegisterEventHandler(handler PodHandler) {
-	c.eventHandlers = append(c.eventHandlers, handler)
-}
-
-// Run waits for cache synced and invokes handlers after syncing.
-func (c *PodConfig) Run(stopCh <-chan struct{}) {
-	klog.Info("Starting pod config controller")
-
-	if !cache.WaitForNamedCacheSync("pod config", stopCh, c.listerSynced) {
-		return
-	}
-
-	for i := range c.eventHandlers {
-		klog.V(10).Infof("Calling handler.OnPodSynced()")
-		c.eventHandlers[i].OnPodSynced()
-	}
-}
-
-func (c *PodConfig) handleAddPod(obj interface{}) {
-	pod, ok := obj.(*v1.Pod)
-	if !ok {
-		utilruntime.HandleError(fmt.Errorf("unexpected object type: %v", obj))
-		return
-	}
-
-	for i := range c.eventHandlers {
-		klog.V(10).Infof("Calling handler.OnPodAdd")
-		c.eventHandlers[i].OnPodAdd(pod)
-	}
-}
-
-func (c *PodConfig) handleUpdatePod(oldObj, newObj interface{}) {
-	oldPod, ok := oldObj.(*v1.Pod)
-	if !ok {
-		utilruntime.HandleError(fmt.Errorf("unexpected object type: %v", oldObj))
-		return
-	}
-	pod, ok := newObj.(*v1.Pod)
-	if !ok {
-		utilruntime.HandleError(fmt.Errorf("unexpected object type: %v", newObj))
-		return
-	}
-	for i := range c.eventHandlers {
-		klog.V(10).Infof("Calling handler.OnPodUpdate")
-		c.eventHandlers[i].OnPodUpdate(oldPod, pod)
-	}
-}
-
-func (c *PodConfig) handleDeletePod(obj interface{}) {
-	pod, ok := obj.(*v1.Pod)
-	if !ok {
-		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
-		if !ok {
-			utilruntime.HandleError(fmt.Errorf("unexpected object type: %v", obj))
-		}
-		if pod, ok = tombstone.Obj.(*v1.Pod); !ok {
-			utilruntime.HandleError(fmt.Errorf("unexpected object type: %v", obj))
-			return
-		}
-	}
-	for i := range c.eventHandlers {
-		klog.V(10).Infof("Calling handler.OnPodDelete")
-		c.eventHandlers[i].OnPodDelete(pod)
-	}
-}
+func (rk RuntimeKind) Type() string { return "RuntimeKind" }
 
 // InterfaceInfo ...
 type InterfaceInfo struct {
@@ -233,39 +113,7 @@ func (info *PodInfo) GetMultusNetIFs() []string {
 }
 
 // String ...
-func (info *PodInfo) String() string {
-	return fmt.Sprintf("pod:%s", info.Name)
-}
-
-type podChange struct {
-	previous PodMap
-	current  PodMap
-}
-
-// PodChangeTracker carries state about uncommitted changes to an arbitrary number of
-// Pods in the node, keyed by their namespace and name
-type PodChangeTracker struct {
-	// lock protects items.
-	lock           sync.Mutex
-	hostname       string
-	networkPlugins []string
-	netdefChanges  *NetDefChangeTracker
-	// items maps a service to its podChange.
-	items map[types.NamespacedName]*podChange
-
-	// for cri
-	criClient pb.RuntimeServiceClient
-	criConn   *grpc.ClientConn
-}
-
-// String
-func (pct *PodChangeTracker) String() string {
-	return fmt.Sprintf("podChange: %v", pct.items)
-}
-
-func (pct *PodChangeTracker) getPodNetNSPath(pod *v1.Pod) (string, error) {
-	return GetPodNetNSPath(pct.criClient, pod)
-}
+func (info *PodInfo) String() string { return fmt.Sprintf("pod:%s", info.Name) }
 
 // IsMultiNetworkpolicyTarget ...
 func IsMultiNetworkpolicyTarget(pod *v1.Pod) bool {
@@ -279,124 +127,14 @@ func IsMultiNetworkpolicyTarget(pod *v1.Pod) bool {
 	return true
 }
 
-func (pct *PodChangeTracker) newPodInfo(pod *v1.Pod) *PodInfo {
-	return NewPodInfoFromPod(pod, pct.criClient, pct.hostname, pct.networkPlugins, pct.netdefChanges)
-}
-
-// NewPodChangeTracker ...
-func NewPodChangeTracker(runtime RuntimeKind, runtimeEndpoint, hostname, hostPrefix string, networkPlugins []string, ndt *NetDefChangeTracker) *PodChangeTracker {
-	switch runtime {
-	case Cri:
-		return NewPodChangeTrackerCri(runtimeEndpoint, hostname, hostPrefix, networkPlugins, ndt)
-	default:
-		klog.Errorf("unknown container runtime: %v", runtime)
-		return nil
-	}
-}
-
-// NewPodChangeTrackerCri ...
-func NewPodChangeTrackerCri(runtimeEndpoint, hostname, hostPrefix string, networkPlugins []string, ndt *NetDefChangeTracker) *PodChangeTracker {
-	criClient, criConn, err := GetCriRuntimeClient(runtimeEndpoint, hostPrefix)
-	if err != nil {
-		klog.Errorf("failed to get cri client: %v", err)
-		return nil
-	}
-
-	return &PodChangeTracker{
-		items:          make(map[types.NamespacedName]*podChange),
-		hostname:       hostname,
-		networkPlugins: networkPlugins,
-		netdefChanges:  ndt,
-		criClient:      criClient,
-		criConn:        criConn,
-	}
-}
-
-func (pct *PodChangeTracker) podToPodMap(pod *v1.Pod) PodMap {
-	if pod == nil {
-		return nil
-	}
-
-	podMap := make(PodMap)
-	podinfo := pct.newPodInfo(pod)
-
-	podMap[types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}] = *podinfo
-	return podMap
-}
-
-// Update ...
-func (pct *PodChangeTracker) Update(previous, current *v1.Pod) bool {
-	pod := current
-
-	if pct == nil {
-		return false
-	}
-
-	if pod == nil {
-		pod = previous
-	}
-	if pod == nil {
-		return false
-	}
-	namespacedName := types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}
-
-	pct.lock.Lock()
-	defer pct.lock.Unlock()
-
-	change, exists := pct.items[namespacedName]
-	if !exists {
-		change = &podChange{}
-		prevPodMap := pct.podToPodMap(previous)
-		change.previous = prevPodMap
-		pct.items[namespacedName] = change
-	}
-	curPodMap := pct.podToPodMap(current)
-	change.current = curPodMap
-	if reflect.DeepEqual(change.previous, change.current) {
-		delete(pct.items, namespacedName)
-	}
-	return len(pct.items) > 0
-}
-
 // PodMap ...
 type PodMap map[types.NamespacedName]PodInfo
 
-// Update updates podMap base on the given changes
-func (pm *PodMap) Update(changes *PodChangeTracker) {
-	if pm != nil {
-		pm.apply(changes)
-	}
-}
-
-func (pm *PodMap) apply(changes *PodChangeTracker) {
-	if pm == nil || changes == nil {
-		return
-	}
-
-	changes.lock.Lock()
-	defer changes.lock.Unlock()
-	for _, change := range changes.items {
-		pm.unmerge(change.previous)
-		pm.merge(change.current)
-	}
-	// clear changes after applying them to ServiceMap.
-	changes.items = make(map[types.NamespacedName]*podChange)
-}
-
-func (pm *PodMap) merge(other PodMap) {
-	for podName, info := range other {
-		(*pm)[podName] = info
-	}
-}
-
-func (pm *PodMap) unmerge(other PodMap) {
-	for podName := range other {
-		delete(*pm, podName)
-	}
-}
-
 // GetPodInfo ...
 func (pm *PodMap) GetPodInfo(pod *v1.Pod) (*PodInfo, error) {
+	if pm == nil || pod == nil {
+		return nil, fmt.Errorf("not found")
+	}
 	namespacedName := types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}
 
 	podInfo, ok := (*pm)[namespacedName]
@@ -407,29 +145,21 @@ func (pm *PodMap) GetPodInfo(pod *v1.Pod) (*PodInfo, error) {
 	return nil, fmt.Errorf("not found")
 }
 
-// =====================================
-// misc functions...
-// =====================================
-func getRuntimeClientConnection(runtimeEndpoint, hostPrefix string) (*grpc.ClientConn, error) {
-	HostRuntimeEndpoint := fmt.Sprintf("unix://%s%s", hostPrefix, runtimeEndpoint)
-	addr, dialer, err := k8sutils.GetAddressAndDialer(HostRuntimeEndpoint)
+// GetCriRuntimeClient retrieves cri grpc client
+func GetCriRuntimeClient(runtimeEndpoint, hostPrefix string) (pb.RuntimeServiceClient, *grpc.ClientConn, error) {
+	hostRuntimeEndpoint := fmt.Sprintf("unix://%s%s", hostPrefix, runtimeEndpoint)
+	addr, dialer, err := k8sutils.GetAddressAndDialer(hostRuntimeEndpoint)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	// grpc.NewClient uses name resolution by default; "passthrough" skips
-	// the resolver so the address is handed directly to the custom dialer,
-	// matching the semantics of the former grpc.DialContext.
 	target := "passthrough:///" + addr
 	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(dialer))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create gRPC client for %s: %w", HostRuntimeEndpoint, err)
+		return nil, nil, fmt.Errorf("failed to create gRPC client for %s: %w", hostRuntimeEndpoint, err)
 	}
-
-	// Trigger the connection attempt (moves state from IDLE to CONNECTING).
 	conn.Connect()
 
-	// Wait up to 30 s for the connection to become READY.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -439,24 +169,12 @@ func getRuntimeClientConnection(runtimeEndpoint, hostPrefix string) (*grpc.Clien
 			break
 		}
 		if !conn.WaitForStateChange(ctx, state) {
-			// Context expired before READY was reached.
 			_ = conn.Close()
-			return nil, fmt.Errorf("timed out waiting for gRPC connection to %s to become ready (last state: %s)", HostRuntimeEndpoint, state)
+			return nil, nil, fmt.Errorf("timed out waiting for gRPC connection to %s to become ready (last state: %s)", hostRuntimeEndpoint, state)
 		}
 	}
 
-	return conn, nil
-}
-
-// GetCriRuntimeClient retrieves cri grpc client
-func GetCriRuntimeClient(runtimeEndpoint, hostPrefix string) (pb.RuntimeServiceClient, *grpc.ClientConn, error) {
-	// Set up a connection to the server.
-	conn, err := getRuntimeClientConnection(runtimeEndpoint, hostPrefix)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to connect: %v", err)
-	}
-	runtimeClient := pb.NewRuntimeServiceClient(conn)
-	return runtimeClient, conn, nil
+	return pb.NewRuntimeServiceClient(conn), conn, nil
 }
 
 // CloseCriConnection closes grpc connection in client

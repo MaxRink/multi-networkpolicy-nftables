@@ -29,6 +29,8 @@ import (
 	"k8s.io/klog/v2"
 )
 
+const defaultSyncPeriod = 30
+
 // Options stores option for the command
 type Options struct {
 	// kubeconfig is the path to a KubeConfig file.
@@ -141,35 +143,6 @@ func (o *Options) BuildReconcilerConfig() (*ReconcilerConfig, error) {
 			AllowDstPrefix: o.allowDstPrefix,
 		},
 	}, nil
-}
-
-// Run invokes server
-func (o *Options) Run() error {
-	server, err := NewServer(o)
-	if err != nil {
-		return err
-	}
-
-	hostname, err := nodeutil.GetHostname(o.hostnameOverride)
-	if err != nil {
-		return err
-	}
-	klog.Infof("hostname: %v", hostname)
-	klog.Infof("container-runtime: %v", o.containerRuntime)
-
-	err = o.Validate()
-	if err != nil {
-		return err
-	}
-
-	server.Run(hostname, o.stopCh)
-
-	return nil
-}
-
-// Stop halts the command
-func (o *Options) Stop() {
-	o.stopCh <- struct{}{}
 }
 
 // NewOptions initializes Options
