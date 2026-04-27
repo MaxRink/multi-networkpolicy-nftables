@@ -39,9 +39,6 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.
 			return fmt.Errorf("cleanup canceled: %w", err)
 		}
 		pod := &podList.Items[i]
-		if pod.Spec.NodeName != r.NodeName {
-			continue
-		}
 		if !controllers.IsMultiNetworkpolicyTarget(pod) {
 			continue
 		}

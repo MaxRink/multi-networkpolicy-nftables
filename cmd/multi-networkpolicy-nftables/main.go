@@ -178,11 +178,13 @@ func run(opts *server.Options) error {
 	ctrl.SetLogger(klog.NewKlogr())
 
 	syncPeriod := time.Duration(cfg.SyncPeriodSeconds) * time.Second
+	gracefulTimeout := 55 * time.Second
 	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
-		Scheme:         scheme,
-		LeaderElection: false,
-		Metrics:        metricsserver.Options{BindAddress: "0"},
-		Cache:          cache.Options{SyncPeriod: &syncPeriod},
+		Scheme:                  scheme,
+		LeaderElection:          false,
+		Metrics:                 metricsserver.Options{BindAddress: "0"},
+		Cache:                   cache.Options{SyncPeriod: &syncPeriod},
+		GracefulShutdownTimeout: &gracefulTimeout,
 	})
 	if err != nil {
 		return fmt.Errorf("create manager: %w", err)
