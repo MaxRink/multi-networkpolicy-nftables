@@ -19,10 +19,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
 var _ controllers.PolicyDeps = (*NodeReconciler)(nil)
 var _ controllers.NetDefResolver = (*NodeReconciler)(nil)
+var _ manager.Runnable = (*cleanupRunnable)(nil)
+var _ manager.LeaderElectionRunnable = (*cleanupRunnable)(nil)
 
 type NodeReconciler struct {
 	NodeName       string
@@ -34,7 +37,22 @@ type NodeReconciler struct {
 	CriClient      pb.RuntimeServiceClient
 }
 
+// cleanupRunnable removes nftables rules from all pods on this node when the manager stops.
+type cleanupRunnable struct {
+	r *NodeReconciler
+}
+
+func (c *cleanupRunnable) Start(ctx context.Context) error {
+	<-ctx.Done()
+	return cleanupAllPods(context.Background(), c.r)
+}
+
+func (c *cleanupRunnable) NeedLeaderElection() bool { return false }
+
 func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.Add(&cleanupRunnable{r: r}); err != nil {
+		return fmt.Errorf("register cleanup runnable: %w", err)
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}, builder.WithPredicates(NodePredicate(r.NodeName))).
 		Watches(&corev1.Pod{},
