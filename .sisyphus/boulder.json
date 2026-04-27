@@ -2,10 +2,18 @@
   "active_plan": "/Users/A92615428/git/GitHub/telekom/multi-networkpolicy-nftables/.sisyphus/plans/controller-runtime-rearchitect.md",
   "started_at": "2026-04-26T18:37:00.953Z",
   "session_ids": [
-    "ses_2400d79e3ffeOqP74a8RQEm03Q"
+    "ses_2400d79e3ffeOqP74a8RQEm03Q",
+    "ses_233a76637ffeUM413W38lBMmee",
+    "ses_233a71dc0ffeGtJwUP8LZjbHi8",
+    "ses_233a6b8b7ffe5P54k2cvFyv7UQ",
+    "ses_233a62aeaffeuiyMSOZSM4xZUN"
   ],
   "session_origins": {
-    "ses_2400d79e3ffeOqP74a8RQEm03Q": "direct"
+    "ses_2400d79e3ffeOqP74a8RQEm03Q": "direct",
+    "ses_233a76637ffeUM413W38lBMmee": "appended",
+    "ses_233a71dc0ffeGtJwUP8LZjbHi8": "appended",
+    "ses_233a6b8b7ffe5P54k2cvFyv7UQ": "appended",
+    "ses_233a62aeaffeuiyMSOZSM4xZUN": "appended"
   },
   "plan_name": "controller-runtime-rearchitect",
   "agent": "atlas",
@@ -45,6 +53,24 @@
       "agent": "Sisyphus-Junior",
       "category": "deep",
       "updated_at": "2026-04-26T20:49:48.899Z"
+    },
+    "todo:16": {
+      "task_key": "todo:16",
+      "task_label": "16",
+      "task_title": "Implement graceful shutdown (nftables cleanup)",
+      "session_id": "ses_233e06669ffeTaSc2lazZCyIvt",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-04-26T23:33:21.790Z"
+    },
+    "todo:11": {
+      "task_key": "todo:11",
+      "task_label": "11",
+      "task_title": "Implement event map functions (mapToNode)",
+      "session_id": "ses_233a62aeaffeuiyMSOZSM4xZUN",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-04-27T00:38:40.012Z"
     }
   }
 }
