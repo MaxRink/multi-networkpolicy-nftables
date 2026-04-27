@@ -65,6 +65,7 @@ type ReconcilerConfig struct {
 	ContainerRuntime         controllers.RuntimeKind
 	ContainerRuntimeEndpoint string
 	NetworkPlugins           []string
+	SyncPeriodSeconds        int
 	CommonRuleConfig         controllers.CommonRuleConfig
 }
 
@@ -136,6 +137,7 @@ func (o *Options) BuildReconcilerConfig() (*ReconcilerConfig, error) {
 		ContainerRuntime:         o.containerRuntime,
 		ContainerRuntimeEndpoint: o.containerRuntimeEndpoint,
 		NetworkPlugins:           o.networkPlugins,
+		SyncPeriodSeconds:        o.syncPeriod,
 		CommonRuleConfig: controllers.CommonRuleConfig{
 			AcceptICMP:     o.acceptICMP,
 			AcceptICMPv6:   o.acceptICMPv6,
