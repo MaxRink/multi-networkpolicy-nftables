@@ -36,7 +36,6 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.
 		return err
 	}
 	debugLog(r.HostPrefix, "cleanup: found %d pods on node %s", len(podList.Items), r.NodeName)
-	resolver := &directNetDefResolver{cl: directClient}
 	targeted := 0
 	for i := range podList.Items {
 		pod := &podList.Items[i]
@@ -44,17 +43,16 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.
 			continue
 		}
 		targeted++
-		podInfo := controllers.NewPodInfoFromPod(pod, r.CriClient, r.NodeName, r.NetworkPlugins, resolver)
-		if podInfo == nil {
-			debugLog(r.HostPrefix, "cleanup: pod %s/%s podInfo=nil, skipping", pod.Namespace, pod.Name)
+		// Resolve netns path directly via CRI — no need for full
+		// NewPodInfoFromPod which also resolves NADs/interfaces (unnecessary
+		// for cleanup and prone to failure during shutdown).
+		netnsPath, err := controllers.GetPodNetNSPath(r.CriClient, pod)
+		if err != nil || netnsPath == "" {
+			debugLog(r.HostPrefix, "cleanup: pod %s/%s: cannot resolve netns (err=%v), skipping", pod.Namespace, pod.Name, err)
 			continue
 		}
-		if len(podInfo.Interfaces) == 0 {
-			debugLog(r.HostPrefix, "cleanup: pod %s/%s interfaces=0 netns=%q, skipping", pod.Namespace, pod.Name, podInfo.NetNSPath)
-			continue
-		}
-		debugLog(r.HostPrefix, "cleanup: removing rules for %s/%s (netns=%s, ifaces=%d)", pod.Namespace, pod.Name, podInfo.NetNSPath, len(podInfo.Interfaces))
-		if err := flushRulesForPod(pod, podInfo, r.HostPrefix); err != nil {
+		debugLog(r.HostPrefix, "cleanup: removing rules for %s/%s (netns=%s)", pod.Namespace, pod.Name, netnsPath)
+		if err := flushRulesForPod(pod.Namespace, pod.Name, netnsPath, r.HostPrefix); err != nil {
 			debugLog(r.HostPrefix, "cleanup: FAILED to remove rules for %s/%s: %v", pod.Namespace, pod.Name, err)
 		} else {
 			debugLog(r.HostPrefix, "cleanup: SUCCESS removed rules for %s/%s", pod.Namespace, pod.Name)

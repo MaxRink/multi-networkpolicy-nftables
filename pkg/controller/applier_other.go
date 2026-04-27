@@ -11,6 +11,6 @@ func applyRulesForPod(_ controllers.PolicyDeps, _ controllers.CommonRuleConfig, 
 	return nil
 }
 
-func flushRulesForPod(_ *v1.Pod, _ *controllers.PodInfo, _ string) error {
+func flushRulesForPod(_, _, _, _ string) error {
 	return nil
 }

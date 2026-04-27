@@ -115,6 +115,7 @@ func run(opts *server.Options) error {
 }
 
 func main() {
+	defer klog.Flush()
 	opts := server.NewOptions()
 
 	cmd := &cobra.Command{
