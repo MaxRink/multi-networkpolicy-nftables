@@ -47,7 +47,9 @@ type cleanupRunnable struct {
 
 func (c *cleanupRunnable) Start(ctx context.Context) error {
 	<-ctx.Done()
-	return cleanupAllPods(context.Background(), c.r, c.cleanupClient)
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
+	defer cancel()
+	return cleanupAllPods(cleanupCtx, c.r, c.cleanupClient)
 }
 
 func (c *cleanupRunnable) NeedLeaderElection() bool { return false }
