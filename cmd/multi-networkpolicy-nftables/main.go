@@ -22,18 +22,14 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
-	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controller"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/server"
 
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
@@ -41,25 +37,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
-
-const logFlushFreqFlagName = "log-flush-frequency"
-
-var logFlushFreq = pflag.Duration(logFlushFreqFlagName, 5*time.Second, "Maximum number of seconds between log flushes")
-
-// KlogWriter serves as a bridge between the standard log package and the glog package.
-type KlogWriter struct{}
-
-// Write implements the io.Writer interface.
-func (writer KlogWriter) Write(data []byte) (n int, err error) {
-	klog.InfoDepth(1, string(data))
-	return len(data), nil
-}
-
-func initLogs() {
-	log.SetOutput(KlogWriter{})
-	log.SetFlags(0)
-	go wait.Forever(klog.Flush, *logFlushFreq)
-}
 
 func run(opts *server.Options) error {
 	cfg, err := opts.BuildReconcilerConfig()
@@ -98,6 +75,9 @@ func run(opts *server.Options) error {
 		return fmt.Errorf("create manager: %w", err)
 	}
 
+	// Bridge klog to controller-runtime's logr logger
+	klog.SetLogger(mgr.GetLogger())
+
 	ctx := ctrl.SetupSignalHandler()
 	if err := controller.SetupIndexes(ctx, mgr); err != nil {
 		return fmt.Errorf("setup indexes: %w", err)
@@ -130,8 +110,6 @@ func run(opts *server.Options) error {
 }
 
 func main() {
-	initLogs()
-	defer klog.Flush()
 	opts := server.NewOptions()
 
 	cmd := &cobra.Command{
