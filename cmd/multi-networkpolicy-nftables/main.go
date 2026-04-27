@@ -25,7 +25,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controller"
@@ -183,6 +182,9 @@ func run(opts *server.Options) error {
 	if err != nil {
 		return fmt.Errorf("create manager: %w", err)
 	}
+
+	// Bridge klog to controller-runtime's logr logger
+	klog.SetLogger(mgr.GetLogger())
 
 	ctx := ctrl.SetupSignalHandler()
 	if err := controller.SetupIndexes(ctx, mgr); err != nil {

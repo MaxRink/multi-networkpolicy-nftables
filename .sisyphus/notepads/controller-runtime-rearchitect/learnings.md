@@ -116,3 +116,10 @@
 - go mod tidy cleaned up transitive dependencies
 - go mod vendor updated vendor/ (much smaller now)
 - controller-runtime v0.21.0 kept as direct dep
+
+## [2026-04-27] Task 19: klog→logr bridge
+- klog.SetLogger(mgr.GetLogger()) called once in run() after ctrl.NewManager
+- KlogWriter struct, initLogs(), defer klog.Flush() all removed
+- pflag import and logFlushFreq var removed (only needed for initLogs)
+- klog/v2 import kept — all klog.Infof/Errorf calls in pkg/ still work via logr bridge
+- One-line bridge: zero changes to any pkg/ files
