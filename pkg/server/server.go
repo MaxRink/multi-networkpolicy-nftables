@@ -154,10 +154,6 @@ func ApplyPolicyRulesForPodAndFamily(ctx context.Context, deps controllers.Polic
 	return nil
 }
 
-func (s *Server) applyPolicyRulesForPodAndFamily(pod *v1.Pod, podInfo *controllers.PodInfo, nft *nftables.Conn) error {
-	return ApplyPolicyRulesForPodAndFamily(s, s.commonRuleConfig(), s.policyMap, pod, podInfo, nft)
-}
-
 func podNamespacedName(o *v1.Pod) string {
 	if o == nil {
 		return "<nil>"
