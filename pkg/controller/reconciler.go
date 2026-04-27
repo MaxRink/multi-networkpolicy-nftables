@@ -32,6 +32,7 @@ var _ controllers.PolicyDeps = (*NodeReconciler)(nil)
 type NodeReconciler struct {
 	NodeName       string
 	Client         client.Client
+	CleanupClient  client.Client // direct (non-cached) client for shutdown cleanup
 	PolicyDeps     controllers.PolicyDeps
 	HostPrefix     string
 	NetworkPlugins []string
@@ -52,7 +53,15 @@ func CleanupOnShutdown(ctx context.Context, r *NodeReconciler, cl client.Client)
 
 // SetupWithManager wires node, pod, policy, namespace, and NAD watches.
 func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.Add(&cleanupRunnable{r: r}); err != nil {
+	cleanupCl := r.CleanupClient
+	if cleanupCl == nil {
+		directCl, err := client.New(mgr.GetConfig(), client.Options{Scheme: mgr.GetScheme()})
+		if err != nil {
+			return fmt.Errorf("create direct client for cleanup: %w", err)
+		}
+		cleanupCl = directCl
+	}
+	if err := mgr.Add(&cleanupRunnable{r: r, cleanupClient: cleanupCl}); err != nil {
 		return fmt.Errorf("register cleanup runnable: %w", err)
 	}
 	return ctrl.NewControllerManagedBy(mgr).
