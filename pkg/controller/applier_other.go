@@ -10,3 +10,7 @@ import (
 func applyRulesForPod(_ controllers.PolicyDeps, _ controllers.CommonRuleConfig, _ controllers.PolicyMap, _ *v1.Pod, _ *controllers.PodInfo, _ string) error {
 	return nil
 }
+
+func flushRulesForPod(_ *v1.Pod, _ *controllers.PodInfo, _ string) error {
+	return nil
+}
