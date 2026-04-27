@@ -12,18 +12,17 @@ import (
 )
 
 func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.Client) error {
+	klog.Infof("cleanup: starting nftables cleanup for node %s", r.NodeName)
 	var podList corev1.PodList
-	if err := directClient.List(ctx, &podList); err != nil {
+	if err := directClient.List(ctx, &podList, client.MatchingFields{"spec.nodeName": r.NodeName}); err != nil {
 		klog.Errorf("cleanup: failed to list pods: %v", err)
 		return err
 	}
+	klog.Infof("cleanup: found %d pods on node %s", len(podList.Items), r.NodeName)
 	resolver := &directNetDefResolver{cl: directClient}
 	deps := r.policyDeps()
 	for i := range podList.Items {
 		pod := &podList.Items[i]
-		if pod.Spec.NodeName != r.NodeName {
-			continue
-		}
 		if !controllers.IsMultiNetworkpolicyTarget(pod) {
 			continue
 		}
@@ -36,5 +35,6 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.
 			klog.Errorf("cleanup: failed to remove rules for %s/%s: %v", pod.Namespace, pod.Name, err)
 		}
 	}
+	klog.Infof("cleanup: finished nftables cleanup for node %s", r.NodeName)
 	return nil
 }
