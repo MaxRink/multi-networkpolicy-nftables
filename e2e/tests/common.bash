@@ -223,21 +223,6 @@ retry_until_allow() {
 	return 1
 }
 
-# wait_for_nft_rule_absent polls until the given pod no longer has an nft rule matching the pattern.
-# Usage: wait_for_nft_rule_absent <namespace> <pod> <grep-pattern> [timeout_seconds]
-# Returns non-zero if the rule is still present after the timeout.
-wait_for_nft_rule_absent() {
-	local ns="$1" pod="$2" pattern="$3" timeout="${4:-30}" attempts=0
-	while [ $attempts -lt $timeout ]; do
-		if ! kubectl -n "$ns" exec "$pod" -- sh -c "nft list ruleset 2>/dev/null | grep -q '$pattern'" 2>/dev/null; then
-			return 0
-		fi
-		sleep 1
-		attempts=$((attempts + 1))
-	done
-	return 1
-}
-
 # wait_for_nft_rules waits until nftables rules containing the given pattern appear in a pod.
 # Usage: wait_for_nft_rules <namespace> <pod> <grep_pattern> [max_retries]
 wait_for_nft_rules() {
@@ -289,6 +274,14 @@ wait_for_nft_rule_absent() {
 		fi
 		sleep 1
 		attempts=$((attempts + 1))
+	done
+	# Dump debug log from kind worker node for post-mortem analysis
+	echo "# wait_for_nft_rule_absent FAILED after $timeout attempts for $ns/$pod pattern=$pattern" >&3
+	for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
+		echo "# === cleanup-debug.log from $node ===" >&3
+		docker exec "$node" cat /tmp/cleanup-debug.log 2>/dev/null >&3 || echo "# (no debug log on $node)" >&3
+		echo "# === nft rules in $ns/$pod ===" >&3
+		kubectl -n "$ns" exec "$pod" -- nft list ruleset 2>/dev/null >&3 || true
 	done
 	return 1
 }

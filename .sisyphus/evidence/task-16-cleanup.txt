@@ -1,0 +1,9 @@
+pkg/controller/reconciler.go:27:var _ manager.Runnable = (*cleanupRunnable)(nil)
+pkg/controller/reconciler.go:28:var _ manager.LeaderElectionRunnable = (*cleanupRunnable)(nil)
+pkg/controller/reconciler.go:40:// cleanupRunnable removes nftables rules from all pods on this node when the manager stops.
+pkg/controller/reconciler.go:41:type cleanupRunnable struct {
+pkg/controller/reconciler.go:45:func (c *cleanupRunnable) Start(ctx context.Context) error {
+pkg/controller/reconciler.go:47:	return cleanupAllPods(context.Background(), c.r)
+pkg/controller/reconciler.go:50:func (c *cleanupRunnable) NeedLeaderElection() bool { return false }
+pkg/controller/reconciler.go:53:	if err := mgr.Add(&cleanupRunnable{r: r}); err != nil {
+pkg/controller/cleanup_linux.go:14:func cleanupAllPods(ctx context.Context, r *NodeReconciler) error {
