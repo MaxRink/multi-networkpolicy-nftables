@@ -47,7 +47,7 @@ type cleanupRunnable struct {
 
 func (c *cleanupRunnable) Start(ctx context.Context) error {
 	<-ctx.Done()
-	debugLog(c.r.HostPrefix, "cleanupRunnable: context cancelled, starting cleanup")
+	debugLog(c.r.HostPrefix, "cleanupRunnable: context canceled, starting cleanup")
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
 	defer cancel()
 	err := cleanupAllPods(cleanupCtx, c.r, c.cleanupClient)

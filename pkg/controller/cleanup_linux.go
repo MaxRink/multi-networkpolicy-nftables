@@ -20,11 +20,11 @@ func debugLog(hostPrefix, format string, args ...interface{}) {
 	msg := fmt.Sprintf(time.Now().UTC().Format("15:04:05.000")+" "+format+"\n", args...)
 	klog.Infof(format, args...)
 	path := fmt.Sprintf("%s/tmp/cleanup-debug.log", hostPrefix)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644) //nolint:gosec // debug log path derived from trusted hostPrefix
 	if err != nil {
 		return
 	}
-	defer f.Close()       //nolint:errcheck
+	defer f.Close() //nolint:errcheck
 	_, _ = f.WriteString(msg)
 }
 
