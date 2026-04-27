@@ -52,6 +52,9 @@ func CleanupOnShutdown(ctx context.Context, r *NodeReconciler, cl client.Client)
 
 // SetupWithManager wires node, pod, policy, namespace, and NAD watches.
 func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.Add(&cleanupRunnable{r: r}); err != nil {
+		return fmt.Errorf("register cleanup runnable: %w", err)
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}, builder.WithPredicates(NodePredicate(r.NodeName))).
 		Watches(&corev1.Pod{},
