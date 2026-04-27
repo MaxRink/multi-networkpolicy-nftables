@@ -114,19 +114,15 @@ func main() {
 
 	cmd := &cobra.Command{
 		Use:  "multi-networkpolicy-node",
-		Long: `TBD`,
+		Long: `Run the multi-networkpolicy nftables controller on a node.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return run(opts)
 		},
 	}
 	opts.AddFlags(cmd.Flags())
 
-	klog.Infof("Executing ...")
-
 	if err := cmd.Execute(); err != nil {
 		klog.Infof("Execute failed: %v", err)
 		os.Exit(1)
 	}
-
-	klog.Infof("Exiting")
 }

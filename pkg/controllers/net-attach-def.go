@@ -21,14 +21,14 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// NetDefInfo contains information that defines a object.
+// NetDefInfo holds information about a network attachment definition.
 type NetDefInfo struct {
 	Netdef     *netdefv1.NetworkAttachmentDefinition
 	PluginType string
 }
 
-// Name ...
+// Name returns the network attachment definition name.
 func (info *NetDefInfo) Name() string { return info.Netdef.Name }
 
-// NetDefMap ...
+// NetDefMap maps namespaced network attachment definitions to their info.
 type NetDefMap map[types.NamespacedName]NetDefInfo

@@ -40,9 +40,9 @@ func PolicyPredicate() predicate.Predicate {
 // NodePredicate filters node events to only the named node.
 func NodePredicate(nodeName string) predicate.Predicate {
 	return predicate.Funcs{
-		CreateFunc: func(e event.CreateEvent) bool { return e.Object.GetName() == nodeName },
-		DeleteFunc: func(e event.DeleteEvent) bool { return e.Object.GetName() == nodeName },
-		UpdateFunc: func(e event.UpdateEvent) bool { return e.ObjectNew.GetName() == nodeName },
+		CreateFunc:  func(e event.CreateEvent) bool { return e.Object.GetName() == nodeName },
+		DeleteFunc:  func(e event.DeleteEvent) bool { return e.Object.GetName() == nodeName },
+		UpdateFunc:  func(e event.UpdateEvent) bool { return e.ObjectNew.GetName() == nodeName },
 		GenericFunc: func(e event.GenericEvent) bool { return e.Object.GetName() == nodeName },
 	}
 }

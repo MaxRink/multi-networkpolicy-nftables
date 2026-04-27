@@ -42,7 +42,6 @@ func CompareInternalPolicy(a, b internalPolicy) int {
 }
 
 // ApplyPolicyRulesForPodAndFamily applies nftables rules for the given pod using the provided deps and config.
-// This is the decoupled version called by NodeReconciler (pkg/controller).
 func ApplyPolicyRulesForPodAndFamily(deps controllers.PolicyDeps, cfg controllers.CommonRuleConfig, policyMap controllers.PolicyMap, pod *v1.Pod, podInfo *controllers.PodInfo, nft *nftables.Conn) error {
 	klog.V(4).Infof("Generate rules for Pod: [%s]\n", podNamespacedName(pod))
 

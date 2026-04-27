@@ -14,8 +14,7 @@ import (
 
 // mapPodToNode maps a Pod event to a reconcile.Request for the pod's node.
 // Pods not yet scheduled (empty NodeName) produce no request.
-func mapPodToNode(nodeName string) handler.MapFunc {
-	_ = nodeName
+func mapPodToNode(_ string) handler.MapFunc {
 	return func(_ context.Context, obj client.Object) []reconcile.Request {
 		pod, ok := obj.(*corev1.Pod)
 		if !ok || pod.Spec.NodeName == "" {
