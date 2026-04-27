@@ -2,6 +2,10 @@
 
 package controller
 
-import "context"
+import (
+	"context"
 
-func cleanupAllPods(_ context.Context, _ *NodeReconciler) error { return nil }
+	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+func cleanupAllPods(_ context.Context, _ *NodeReconciler, _ client.Client) error { return nil }

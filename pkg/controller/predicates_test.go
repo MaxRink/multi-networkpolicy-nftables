@@ -35,6 +35,25 @@ func TestPodPredicate_Update_NoChange(t *testing.T) {
 	}
 }
 
+func TestPodPredicate_Update_NetworkStatusAnnotationChanged(t *testing.T) {
+	pred := PodPredicate()
+	oldPod := &corev1.Pod{
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"a": "1"}},
+	}
+	newPod := &corev1.Pod{
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		ObjectMeta: metav1.ObjectMeta{
+			Labels:      map[string]string{"a": "1"},
+			Annotations: map[string]string{"k8s.v1.cni.cncf.io/network-status": "[{\"name\":\"net1\"}]"},
+		},
+	}
+
+	if !pred.Update(event.UpdateEvent{ObjectOld: oldPod, ObjectNew: newPod}) {
+		t.Fatal("expected network-status annotation change to pass")
+	}
+}
+
 func TestPodPredicate_Delete(t *testing.T) {
 	if !PodPredicate().Delete(event.DeleteEvent{Object: &corev1.Pod{}}) {
 		t.Fatal("expected delete event to pass")

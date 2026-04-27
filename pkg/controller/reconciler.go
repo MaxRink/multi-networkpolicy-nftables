@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	cnitypes "github.com/containernetworking/cni/pkg/types"
 	multiv1beta1 "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/apis/k8s.cni.cncf.io/v1beta1"
@@ -30,6 +31,7 @@ var _ manager.LeaderElectionRunnable = (*cleanupRunnable)(nil)
 type NodeReconciler struct {
 	NodeName       string
 	Client         client.Client
+	CleanupClient  client.Client // direct (non-cached) client for shutdown cleanup
 	PolicyDeps     controllers.PolicyDeps
 	HostPrefix     string
 	NetworkPlugins []string
@@ -39,18 +41,27 @@ type NodeReconciler struct {
 
 // cleanupRunnable removes nftables rules from all pods on this node when the manager stops.
 type cleanupRunnable struct {
-	r *NodeReconciler
+	r             *NodeReconciler
+	cleanupClient client.Client
 }
 
 func (c *cleanupRunnable) Start(ctx context.Context) error {
 	<-ctx.Done()
-	return cleanupAllPods(context.Background(), c.r)
+	return cleanupAllPods(context.Background(), c.r, c.cleanupClient)
 }
 
 func (c *cleanupRunnable) NeedLeaderElection() bool { return false }
 
 func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.Add(&cleanupRunnable{r: r}); err != nil {
+	cleanupCl := r.CleanupClient
+	if cleanupCl == nil {
+		directCl, err := client.New(mgr.GetConfig(), client.Options{Scheme: mgr.GetScheme()})
+		if err != nil {
+			return fmt.Errorf("create direct client for cleanup: %w", err)
+		}
+		cleanupCl = directCl
+	}
+	if err := mgr.Add(&cleanupRunnable{r: r, cleanupClient: cleanupCl}); err != nil {
 		return fmt.Errorf("register cleanup runnable: %w", err)
 	}
 	return ctrl.NewControllerManagedBy(mgr).
@@ -85,6 +96,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	deps := r.policyDeps()
+	retryNeeded := false
 	for i := range podList.Items {
 		pod := &podList.Items[i]
 		if !controllers.IsMultiNetworkpolicyTarget(pod) {
@@ -94,9 +106,14 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		podInfo, err := deps.GetPodInfo(pod)
 		if err != nil {
 			klog.Errorf("failed to get pod info for %s/%s: %v", pod.Namespace, pod.Name, err)
+			retryNeeded = true
 			continue
 		}
 		if podInfo == nil || len(podInfo.Interfaces) == 0 {
+			if pod.Status.Phase == corev1.PodRunning {
+				klog.V(4).Infof("pod %s/%s is running but has no interfaces yet, will retry", pod.Namespace, pod.Name)
+				retryNeeded = true
+			}
 			continue
 		}
 
@@ -105,6 +122,9 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
+	if retryNeeded {
+		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+	}
 	return ctrl.Result{}, nil
 }
 

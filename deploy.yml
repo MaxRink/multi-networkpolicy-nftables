@@ -88,6 +88,9 @@ spec:
         name: multi-networkpolicy
     spec:
       hostNetwork: true
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        kubernetes.io/arch: amd64
       tolerations:
       - operator: Exists
         effect: NoSchedule

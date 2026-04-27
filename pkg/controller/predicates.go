@@ -7,7 +7,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// PodPredicate filters pod events: allows Create/Delete, allows Update only if pod phase changed or labels changed.
+// PodPredicate filters pod events: allows Create/Delete, allows Update only if pod phase,
+// labels, or network-related annotations changed.
 func PodPredicate() predicate.Predicate {
 	return predicate.Funcs{
 		CreateFunc: func(event.CreateEvent) bool { return true },
@@ -19,7 +20,13 @@ func PodPredicate() predicate.Predicate {
 				return false
 			}
 
-			return oldPod.Status.Phase != newPod.Status.Phase || labelsChanged(oldPod.Labels, newPod.Labels)
+			if oldPod.Status.Phase != newPod.Status.Phase {
+				return true
+			}
+			if labelsChanged(oldPod.Labels, newPod.Labels) {
+				return true
+			}
+			return networkAnnotationsChanged(oldPod.Annotations, newPod.Annotations)
 		},
 		GenericFunc: func(event.GenericEvent) bool { return false },
 	}
@@ -58,5 +65,19 @@ func labelsChanged(oldLabels, newLabels map[string]string) bool {
 		}
 	}
 
+	return false
+}
+
+var networkAnnotationKeys = []string{
+	"k8s.v1.cni.cncf.io/network-status",
+	"k8s.v1.cni.cncf.io/networks",
+}
+
+func networkAnnotationsChanged(oldAnnotations, newAnnotations map[string]string) bool {
+	for _, key := range networkAnnotationKeys {
+		if oldAnnotations[key] != newAnnotations[key] {
+			return true
+		}
+	}
 	return false
 }

@@ -11,14 +11,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func cleanupAllPods(ctx context.Context, r *NodeReconciler) error {
+func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.Client) error {
 	var podList corev1.PodList
-	if err := r.Client.List(ctx, &podList, client.MatchingFields{PodHostnameIndex: r.NodeName}); err != nil {
+	if err := directClient.List(ctx, &podList); err != nil {
+		klog.Errorf("cleanup: failed to list pods: %v", err)
 		return err
 	}
 	deps := r.policyDeps()
 	for i := range podList.Items {
 		pod := &podList.Items[i]
+		if pod.Spec.NodeName != r.NodeName {
+			continue
+		}
 		if !controllers.IsMultiNetworkpolicyTarget(pod) {
 			continue
 		}
@@ -26,6 +30,7 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler) error {
 		if err != nil || podInfo == nil || len(podInfo.Interfaces) == 0 {
 			continue
 		}
+		klog.V(4).Infof("cleanup: removing rules for %s/%s", pod.Namespace, pod.Name)
 		if err := applyRulesForPod(deps, r.CommonCfg, nil, pod, podInfo, r.HostPrefix); err != nil {
 			klog.Errorf("cleanup: failed to remove rules for %s/%s: %v", pod.Namespace, pod.Name, err)
 		}
