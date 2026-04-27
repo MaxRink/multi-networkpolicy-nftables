@@ -111,6 +111,7 @@ spec:
           name: host
           readOnly: true
       hostNetwork: true
+      terminationGracePeriodSeconds: 60
       nodeSelector:
         kubernetes.io/arch: amd64
       serviceAccountName: multi-networkpolicy
