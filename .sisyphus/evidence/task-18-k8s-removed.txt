@@ -1,6 +1,0 @@
-=== code check ===
-CODE:CLEAN
-=== go.mod check ===
-GOMOD:CLEAN
-=== vendor/build checks ===
-BUILD_OK

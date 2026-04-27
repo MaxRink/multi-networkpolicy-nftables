@@ -1,8 +1,0 @@
-=== Server struct check ===
-REMOVED
-=== k8s.io/kubernetes import check ===
-REMOVED
-BUILD_OK
-CMD_OK
-CTRL_OK
-ALL_OK
