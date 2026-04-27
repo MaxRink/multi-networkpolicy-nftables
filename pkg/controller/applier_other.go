@@ -15,6 +15,6 @@ func applyRulesForPod(_ context.Context, _ controllers.PolicyDeps, _ controllers
 	return fmt.Errorf("nftables rule application is unsupported on %s", runtime.GOOS)
 }
 
-func flushRulesForPod(_ *v1.Pod, _ *controllers.PodInfo, _ string) error {
+func flushRulesForPod(_, _, _, _ string) error {
 	return nil
 }

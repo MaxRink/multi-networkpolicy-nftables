@@ -262,16 +262,6 @@ func resolvePluginType(ctx context.Context, cl client.Client, namespacedName typ
 	return "", fmt.Errorf("parse CNI config for network attachment %s: plugin type is empty", namespacedName)
 }
 
-// directNetDefResolver implements controllers.NetDefResolver using a non-cached
-// client. Used during shutdown cleanup when the informer cache may already be stopped.
-type directNetDefResolver struct {
-	cl client.Client
-}
-
-func (d *directNetDefResolver) GetPluginType(namespacedName types.NamespacedName) string {
-	return resolvePluginType(d.cl, namespacedName)
-}
-
 func buildPolicyMap(policies []multiv1beta1.MultiNetworkPolicy) controllers.PolicyMap {
 	pm := make(controllers.PolicyMap, len(policies))
 	for i := range policies {
