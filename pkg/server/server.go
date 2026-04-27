@@ -22,7 +22,6 @@ import (
 	"strings"
 
 	multiv1beta1 "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/apis/k8s.cni.cncf.io/v1beta1"
-	netdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
 
 	nftables "github.com/google/nftables"
@@ -161,21 +160,7 @@ func podNamespacedName(o *v1.Pod) string {
 	return o.GetNamespace() + "/" + o.GetName()
 }
 
-func namespaceName(o *v1.Namespace) string {
-	if o == nil {
-		return "<nil>"
-	}
-	return o.GetName()
-}
-
 func policyNamespacedName(o *multiv1beta1.MultiNetworkPolicy) string {
-	if o == nil {
-		return "<nil>"
-	}
-	return o.GetNamespace() + "/" + o.GetName()
-}
-
-func nadNamespacedName(o *netdefv1.NetworkAttachmentDefinition) string {
 	if o == nil {
 		return "<nil>"
 	}

@@ -90,7 +90,7 @@ func run(opts *server.Options) error {
 		criConn = nil
 	}
 	if criConn != nil {
-		defer criConn.Close()
+		defer criConn.Close() //nolint:errcheck // best-effort cleanup on shutdown
 	}
 
 	reconciler := &controller.NodeReconciler{
