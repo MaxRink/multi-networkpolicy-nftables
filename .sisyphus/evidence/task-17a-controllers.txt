@@ -1,0 +1,13 @@
+CLEAN
+# github.com/telekom/multi-networkpolicy-nftables/pkg/server
+pkg/server/server.go:66:35: undefined: controllers.PodChangeTracker
+pkg/server/server.go:67:35: undefined: controllers.PolicyChangeTracker
+pkg/server/server.go:68:35: undefined: controllers.NetDefChangeTracker
+pkg/server/server.go:69:35: undefined: controllers.NamespaceChangeTracker
+pkg/server/server.go:115:27: undefined: controllers.NewPodConfig
+pkg/server/server.go:130:26: undefined: controllers.NewNamespaceConfig
+pkg/server/server.go:139:30: undefined: controllers.NewNetworkPolicyConfig
+pkg/server/server.go:147:30: undefined: controllers.NewNetDefConfig
+pkg/server/server.go:261:31: undefined: controllers.NewPolicyChangeTracker
+pkg/server/server.go:265:31: undefined: controllers.NewNetDefChangeTracker
+pkg/server/server.go:265:31: too many errors
