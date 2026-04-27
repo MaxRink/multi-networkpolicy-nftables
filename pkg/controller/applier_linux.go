@@ -49,18 +49,17 @@ func applyRulesForPod(deps controllers.PolicyDeps, cfg controllers.CommonRuleCon
 // It uses DelTable (which removes the table along with all chains/rules) and
 // avoids AsLasting() — the lasting netlink connection has proven unreliable
 // during shutdown, where Flush() returns nil but changes don't persist.
-func flushRulesForPod(pod *v1.Pod, podInfo *controllers.PodInfo, hostPrefix string) error {
-	netnsPath := podInfo.NetNSPath
+func flushRulesForPod(podNamespace, podName, netnsPath, hostPrefix string) error {
 	if hostPrefix != "" {
 		netnsPath = fmt.Sprintf("%s/%s", hostPrefix, netnsPath)
 	}
 	netNs, err := ns.GetNS(netnsPath)
 	if err != nil {
-		return fmt.Errorf("cannot get pod (%s/%s) netns (%s): %w", pod.Namespace, pod.Name, netnsPath, err)
+		return fmt.Errorf("cannot get pod (%s/%s) netns (%s): %w", podNamespace, podName, netnsPath, err)
 	}
 	defer func() {
 		if cerr := netNs.Close(); cerr != nil {
-			klog.Errorf("cannot close pod (%s/%s) netns: %v", pod.Namespace, pod.Name, cerr)
+			klog.Errorf("cannot close pod (%s/%s) netns: %v", podNamespace, podName, cerr)
 		}
 	}()
 	fd := netNs.Fd()
@@ -72,25 +71,25 @@ func flushRulesForPod(pod *v1.Pod, podInfo *controllers.PodInfo, hostPrefix stri
 	// during DaemonSet shutdown.
 	nft, err := nftables.New(nftables.WithNetNSFd(int(fd)))
 	if err != nil {
-		return fmt.Errorf("failed to open nftables for pod (%s/%s): %w", pod.Namespace, pod.Name, err)
+		return fmt.Errorf("failed to open nftables for pod (%s/%s): %w", podNamespace, podName, err)
 	}
 	tables, err := nft.ListTables()
 	if err != nil {
-		return fmt.Errorf("failed to list tables for pod (%s/%s): %w", pod.Namespace, pod.Name, err)
+		return fmt.Errorf("failed to list tables for pod (%s/%s): %w", podNamespace, podName, err)
 	}
 	if len(tables) == 0 {
-		debugLog(hostPrefix, "flush-cleanup %s/%s: no tables found, nothing to clean", pod.Namespace, pod.Name)
+		debugLog(hostPrefix, "flush-cleanup %s/%s: no tables found, nothing to clean", podNamespace, podName)
 		return nil
 	}
-	debugLog(hostPrefix, "flush-cleanup %s/%s: deleting %d tables", pod.Namespace, pod.Name, len(tables))
+	debugLog(hostPrefix, "flush-cleanup %s/%s: deleting %d tables", podNamespace, podName, len(tables))
 	for _, t := range tables {
-		debugLog(hostPrefix, "flush-cleanup %s/%s: DelTable %s (family=%d)", pod.Namespace, pod.Name, t.Name, t.Family)
+		debugLog(hostPrefix, "flush-cleanup %s/%s: DelTable %s (family=%d)", podNamespace, podName, t.Name, t.Family)
 		nft.DelTable(t)
 	}
 	if err := nft.Flush(); err != nil {
-		return fmt.Errorf("failed to flush table deletions for pod (%s/%s): %w", pod.Namespace, pod.Name, err)
+		return fmt.Errorf("failed to flush table deletions for pod (%s/%s): %w", podNamespace, podName, err)
 	}
 	tablesAfter, _ := nft.ListTables()
-	debugLog(hostPrefix, "flush-cleanup %s/%s: %d tables remaining after flush", pod.Namespace, pod.Name, len(tablesAfter))
+	debugLog(hostPrefix, "flush-cleanup %s/%s: %d tables remaining after flush", podNamespace, podName, len(tablesAfter))
 	return nil
 }

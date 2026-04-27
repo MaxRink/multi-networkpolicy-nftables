@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	cnitypes "github.com/containernetworking/cni/pkg/types"
@@ -47,11 +48,14 @@ type cleanupRunnable struct {
 
 func (c *cleanupRunnable) Start(ctx context.Context) error {
 	<-ctx.Done()
-	debugLog(c.r.HostPrefix, "cleanupRunnable: context canceled, starting cleanup")
+	fmt.Fprintf(os.Stderr, "cleanupRunnable: context canceled, starting cleanup\n")
+	klog.Info("cleanupRunnable: context canceled, starting cleanup")
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
 	defer cancel()
 	err := cleanupAllPods(cleanupCtx, c.r, c.cleanupClient)
-	debugLog(c.r.HostPrefix, "cleanupRunnable: cleanupAllPods returned err=%v", err)
+	fmt.Fprintf(os.Stderr, "cleanupRunnable: cleanupAllPods returned err=%v\n", err)
+	klog.Infof("cleanupRunnable: cleanupAllPods returned err=%v", err)
+	klog.Flush()
 	return err
 }
 
@@ -175,9 +179,6 @@ func (r *NodeReconciler) GetPluginType(namespacedName types.NamespacedName) stri
 	return resolvePluginType(r.Client, namespacedName)
 }
 
-// resolvePluginType looks up a NetworkAttachmentDefinition via the given client
-// and returns the CNI plugin type. Extracted so both the cached client (normal
-// reconciliation) and the direct client (shutdown cleanup) can reuse it.
 func resolvePluginType(cl client.Client, namespacedName types.NamespacedName) string {
 	var nad netdefv1.NetworkAttachmentDefinition
 	if err := cl.Get(context.Background(), namespacedName, &nad); err != nil {
@@ -200,16 +201,6 @@ func resolvePluginType(cl client.Client, namespacedName types.NamespacedName) st
 	}
 
 	return ""
-}
-
-// directNetDefResolver implements controllers.NetDefResolver using a non-cached
-// client. Used during shutdown cleanup when the informer cache may already be stopped.
-type directNetDefResolver struct {
-	cl client.Client
-}
-
-func (d *directNetDefResolver) GetPluginType(namespacedName types.NamespacedName) string {
-	return resolvePluginType(d.cl, namespacedName)
 }
 
 func buildPolicyMap(policies []multiv1beta1.MultiNetworkPolicy) controllers.PolicyMap {
