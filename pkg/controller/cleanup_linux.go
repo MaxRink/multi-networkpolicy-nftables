@@ -37,7 +37,6 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.
 	}
 	debugLog(r.HostPrefix, "cleanup: found %d pods on node %s", len(podList.Items), r.NodeName)
 	resolver := &directNetDefResolver{cl: directClient}
-	deps := r.policyDeps()
 	targeted := 0
 	for i := range podList.Items {
 		pod := &podList.Items[i]
@@ -55,7 +54,7 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.
 			continue
 		}
 		debugLog(r.HostPrefix, "cleanup: removing rules for %s/%s (netns=%s, ifaces=%d)", pod.Namespace, pod.Name, podInfo.NetNSPath, len(podInfo.Interfaces))
-		if err := applyRulesForPod(deps, r.CommonCfg, nil, pod, podInfo, r.HostPrefix); err != nil {
+		if err := flushRulesForPod(pod, podInfo, r.HostPrefix); err != nil {
 			debugLog(r.HostPrefix, "cleanup: FAILED to remove rules for %s/%s: %v", pod.Namespace, pod.Name, err)
 		} else {
 			debugLog(r.HostPrefix, "cleanup: SUCCESS removed rules for %s/%s", pod.Namespace, pod.Name)
