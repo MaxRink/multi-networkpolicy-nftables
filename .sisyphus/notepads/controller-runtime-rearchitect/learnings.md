@@ -90,3 +90,29 @@
 - Signal handling removed from main.go — ctrl.SetupSignalHandler() handles SIGTERM/SIGINT
 - cobra RunE (not Run) lets errors propagate to main()
 - LeaderElection: false is CRITICAL for DaemonSet
+
+## [2026-04-27] Task 16: graceful shutdown
+- cleanupRunnable implements Start(ctx)+NeedLeaderElection() — registered via mgr.Add in SetupWithManager
+- cleanup_linux.go calls applyRulesForPod with nil policyMap → removes all nftables rules
+- cleanup_other.go is a no-op stub for macOS builds
+- Start() blocks on ctx.Done() then runs cleanup with context.Background()
+
+## [2026-04-27] Task 17a: controllers legacy removal
+- All ChangeTracker, Config, Handler types removed from 4 pkg/controllers/ files
+- Kept: RuntimeKind, InterfaceInfo, PodInfo, IsMultiNetworkpolicyTarget, PodMap, GetCriRuntimeClient, CloseCriConnection
+- Kept: PolicyInfo, PolicyMap type; NamespaceInfo, NamespaceMap, GetNamespaceInfo; NetDefInfo, NetDefMap
+- Test files for removed code replaced with bare package declaration
+- pod_test.go kept only "runtime kind" describe block
+
+## [2026-04-27] Task 17b: server.go Server struct removal
+- Server struct + all methods removed; only internalPolicy, CompareInternalPolicy, ApplyPolicyRulesForPodAndFamily, 5 helper funcs remain
+- k8s.io/kubernetes imports (api, runner) removed from server.go
+- Options.Run() and Options.Stop() removed from options.go  
+- server.go now ~100-150 lines with only the needed standalone functions
+- All import cycles resolved; GOOS=linux go build ./... passes
+
+## [2026-04-27] Task 18: k8s.io/kubernetes removal
+- Removed k8s.io/kubernetes from go.mod after T17 cleared all imports
+- go mod tidy cleaned up transitive dependencies
+- go mod vendor updated vendor/ (much smaller now)
+- controller-runtime v0.21.0 kept as direct dep
