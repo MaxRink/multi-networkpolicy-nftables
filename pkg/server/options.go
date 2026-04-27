@@ -80,7 +80,7 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.hostPrefix, "host-prefix", o.hostPrefix, "If non-empty, will use this string as prefix for host filesystem.")
 	fs.StringSliceVar(&o.networkPlugins, "network-plugins", []string{"macvlan"}, "List of network plugins to be be considered for network policies.")
 	fs.StringVar(&o.podIptables, "pod-iptables", o.podIptables, "If non-empty, will use this path to store pod's iptables for troubleshooting helper.")
-	fs.IntVar(&o.syncPeriod, "sync-period", defaultSyncPeriod, "sync period for multi-networkpolicy syncRunner")
+	fs.IntVar(&o.syncPeriod, "sync-period", defaultSyncPeriod, "sync period in seconds for reconciliation")
 	fs.BoolVar(&o.acceptICMP, "accept-icmp", false, "accept all ICMP traffic")
 	fs.BoolVar(&o.acceptICMPv6, "accept-icmpv6", false, "accept all ICMPv6 traffic")
 	fs.StringVar(&o.allowSrcPrefixText, "allow-src-prefix", "", "Accept source IP prefix list, comma separated CIDRs (e.g. \"fe80::/10\")")

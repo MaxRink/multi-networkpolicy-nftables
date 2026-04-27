@@ -23,28 +23,88 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
-	"time"
 
 	nftables "github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"github.com/google/nftables/userdata"
 	multiv1beta1 "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/apis/k8s.cni.cncf.io/v1beta1"
-	multifake "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/client/clientset/versioned/fake"
 	netdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
-	netfake "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/client/clientset/versioned/fake"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/nftest"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/informers"
-	k8sfake "k8s.io/client-go/kubernetes/fake"
 )
 
 const DEBUG = false
+
+// testServer is a test-local mock replacing the removed Server struct.
+type testServer struct {
+	podMap       controllers.PodMap
+	namespaceMap controllers.NamespaceMap
+	netdefMap    controllers.NetDefMap
+	cfg          controllers.CommonRuleConfig
+	pods         map[types.NamespacedName]*corev1.Pod
+}
+
+func (s *testServer) ListPods(selector labels.Selector) ([]*corev1.Pod, error) {
+	if selector == nil {
+		selector = labels.Everything()
+	}
+
+	pods := make([]*corev1.Pod, 0, len(s.pods))
+	for _, pod := range s.pods {
+		if selector.Matches(labels.Set(pod.Labels)) {
+			pods = append(pods, pod)
+		}
+	}
+
+	return pods, nil
+}
+
+func (s *testServer) GetNamespaceInfo(namespace string) (*controllers.NamespaceInfo, error) {
+	if s == nil || s.namespaceMap == nil {
+		return nil, fmt.Errorf("not found")
+	}
+
+	nsInfo, ok := s.namespaceMap[namespace]
+	if !ok {
+		return nil, fmt.Errorf("not found")
+	}
+
+	return &nsInfo, nil
+}
+
+func (s *testServer) GetPodInfo(pod *corev1.Pod) (*controllers.PodInfo, error) {
+	if s == nil || s.podMap == nil || pod == nil {
+		return nil, fmt.Errorf("not found")
+	}
+
+	podInfo, ok := s.podMap[types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}]
+	if !ok {
+		return nil, fmt.Errorf("not found")
+	}
+
+	return &podInfo, nil
+}
+
+func (s *testServer) commonRuleConfig() controllers.CommonRuleConfig { return s.cfg }
+
+func (s *testServer) GetPluginType(namespacedName types.NamespacedName) string {
+	if s == nil || s.netdefMap == nil {
+		return ""
+	}
+
+	netDefInfo, ok := s.netdefMap[namespacedName]
+	if !ok {
+		return ""
+	}
+
+	return netDefInfo.PluginType
+}
 
 func TestBootstrap(t *testing.T) {
 	// Open a system connection in a separate network namespace it requires root
@@ -168,15 +228,12 @@ func TestApplyCommonChainRules(t *testing.T) {
 		t.Fatalf("bootstrapNetfilterRules() returned nil state")
 	}
 
-	mockServer := &Server{
-		Options: &Options{
-			acceptICMPv6:   true,
-			acceptICMP:     true,
-			allowSrcPrefix: []string{"fc00::/8", "fd00::/8", "10.0.0.1/32", "10.0.1.0/24"},
-			allowDstPrefix: []string{"fe00::/8", "ff00::/8", "10.0.0.2/32", "10.0.2.0/24"},
-		},
-	}
-	err = nftState.applyCommonChainRules(mockServer.commonRuleConfig())
+	err = nftState.applyCommonChainRules(controllers.CommonRuleConfig{
+		AcceptICMPv6:   true,
+		AcceptICMP:     true,
+		AllowSrcPrefix: []string{"fc00::/8", "fd00::/8", "10.0.0.1/32", "10.0.1.0/24"},
+		AllowDstPrefix: []string{"fe00::/8", "ff00::/8", "10.0.0.2/32", "10.0.2.0/24"},
+	})
 	if err != nil {
 		t.Fatalf("applyCommonChainRules() failed: %v", err)
 	}
@@ -1125,75 +1182,16 @@ func checkVerdictPresence(rules []*nftables.Rule, name string) bool {
 	return false
 }
 
-var informerFactory informers.SharedInformerFactory
-
 // NewFakeServer creates fake server object for unit-test
-func NewFakeServer(hostname string) *Server {
-	fakeClient := k8sfake.NewClientset()
-	netClient := netfake.NewSimpleClientset()
-	policyClient := multifake.NewSimpleClientset()
+func NewFakeServer(hostname string) *testServer {
+	_ = hostname
 
-	policyChanges := controllers.NewPolicyChangeTracker()
-	if policyChanges == nil {
-		return nil
+	return &testServer{
+		podMap:       make(controllers.PodMap),
+		namespaceMap: make(controllers.NamespaceMap),
+		netdefMap:    make(controllers.NetDefMap),
+		pods:         make(map[types.NamespacedName]*corev1.Pod),
 	}
-	netdefChanges := controllers.NewNetDefChangeTracker()
-	if netdefChanges == nil {
-		return nil
-	}
-	nsChanges := controllers.NewNamespaceChangeTracker()
-	if nsChanges == nil {
-		return nil
-	}
-	// expects that /var/run/containerd/containerd.sock, for docker/containerd
-	hostPrefix := "/"
-	networkPlugins := []string{"multi"}
-	containerRuntime := controllers.RuntimeKind(controllers.Cri)
-	podChanges := controllers.NewPodChangeTracker(containerRuntime, "/var/run/containerd/containerd.sock", hostname, hostPrefix, networkPlugins, netdefChanges)
-	if podChanges == nil {
-		return nil
-	}
-	informerFactory = informers.NewSharedInformerFactoryWithOptions(fakeClient, 15*time.Minute)
-	podConfig := controllers.NewPodConfig(informerFactory.Core().V1().Pods(), 15*time.Minute)
-
-	nodeRef := &corev1.ObjectReference{
-		Kind:      "Node",
-		Name:      hostname,
-		UID:       types.UID(hostname),
-		Namespace: "",
-	}
-
-	server := &Server{
-		Client:              fakeClient,
-		Hostname:            hostname,
-		NetworkPolicyClient: policyClient,
-		NetDefClient:        netClient,
-		ConfigSyncPeriod:    15 * time.Minute,
-		NodeRef:             nodeRef,
-		Options:             &Options{},
-
-		hostPrefix:    hostPrefix,
-		policyChanges: policyChanges,
-		podChanges:    podChanges,
-		netdefChanges: netdefChanges,
-		nsChanges:     nsChanges,
-		podMap:        make(controllers.PodMap),
-		policyMap:     make(controllers.PolicyMap),
-		namespaceMap:  make(controllers.NamespaceMap),
-		podLister:     informerFactory.Core().V1().Pods().Lister(),
-	}
-	podConfig.RegisterEventHandler(server)
-	informerFactory.Start(wait.NeverStop)
-
-	syncTimeout := make(chan struct{})
-	go func() {
-		time.Sleep(30 * time.Second)
-		close(syncTimeout)
-	}()
-	informerFactory.WaitForCacheSync(syncTimeout)
-
-	go podConfig.Run(wait.NeverStop)
-	return server
 }
 
 func NewFakePodWithNetAnnotation(namespace, name, annot, status string, labels map[string]string) *corev1.Pod {
@@ -1219,32 +1217,19 @@ func NewFakePodWithNetAnnotation(namespace, name, annot, status string, labels m
 	}
 }
 
-func AddNamespace(s *Server, name string) error {
-	namespace := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-			Labels: map[string]string{
-				"nsname": name,
-			},
+func AddNamespace(s *testServer, name string) {
+	s.namespaceMap[name] = controllers.NamespaceInfo{
+		Name: name,
+		Labels: map[string]string{
+			"nsname": name,
 		},
 	}
-	if updated := s.nsChanges.Update(nil, namespace); !updated {
-		return fmt.Errorf("failed to update nasespace %q", namespace)
-	}
-	s.namespaceMap.Update(s.nsChanges)
-	return nil
 }
 
-func AddPod(s *Server, pod *corev1.Pod) error {
-	if added := s.podChanges.Update(nil, pod); !added {
-		return fmt.Errorf("failed to add pod '%s/%s'", pod.Namespace, pod.Name)
-	}
-	s.podMap.Update(s.podChanges)
-	if err := informerFactory.Core().V1().Pods().Informer().GetIndexer().Add(pod); err != nil {
-		return fmt.Errorf("failed to update indexer: %w", err)
-	}
-
-	return nil
+func AddPod(s *testServer, pod *corev1.Pod) {
+	namespacedName := types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}
+	s.podMap[namespacedName] = *controllers.NewPodInfoFromPod(pod, nil, "test-host", []string{"multi"}, s)
+	s.pods[namespacedName] = pod.DeepCopy()
 }
 
 func NewFakeNetworkStatus(netns, netname, eth0, net1 string) string {
@@ -1301,7 +1286,7 @@ func NewCNIConfig(cniName, cniType string) string {
 	return fmt.Sprintf(cniConfigTemp, cniName, cniType)
 }
 
-func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *Server, *controllers.PodInfo, error) {
+func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *testServer, *controllers.PodInfo, error) {
 	podMockInfo := &controllers.PodInfo{
 		Name:      "mock-pod",
 		Namespace: "default",
@@ -1318,16 +1303,20 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *Server
 	if nftState == nil {
 		return nil, "", nil, podMockInfo, fmt.Errorf("bootstrapNetfilterRules() returned nil state")
 	}
-	var mockServer *Server
+	var mockServer *testServer
 	testNs := "testns1"
 	if createServer {
 		mockServer = NewFakeServer("server")
-		if err := AddNamespace(mockServer, testNs); err != nil {
-			return nftState, testNs, mockServer, podMockInfo, fmt.Errorf("failed to add namespace %q: %w", testNs, err)
-		}
+		AddNamespace(mockServer, testNs)
 
-		mockServer.netdefChanges.Update(nil, NewNetDef(testNs, "policy-net-1", NewCNIConfig("testCNI", "multi")))
-		mockServer.netdefChanges.Update(nil, NewNetDef(testNs, "policy-net-2", NewCNIConfig("testCNI", "multi")))
+		mockServer.netdefMap[types.NamespacedName{Namespace: testNs, Name: "policy-net-1"}] = controllers.NetDefInfo{
+			Netdef:     NewNetDef(testNs, "policy-net-1", NewCNIConfig("testCNI", "multi")),
+			PluginType: "multi",
+		}
+		mockServer.netdefMap[types.NamespacedName{Namespace: testNs, Name: "policy-net-2"}] = controllers.NetDefInfo{
+			Netdef:     NewNetDef(testNs, "policy-net-2", NewCNIConfig("testCNI", "multi")),
+			PluginType: "multi",
+		}
 
 		pod1 := NewFakePodWithNetAnnotation(
 			testNs,
@@ -1335,9 +1324,7 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *Server
 			"policy-net-1",
 			NewFakeNetworkStatus(testNs, "policy-net-1", "192.168.1.1", "10.1.1.1"),
 			map[string]string{"app": "test"})
-		if err := AddPod(mockServer, pod1); err != nil {
-			return nftState, testNs, mockServer, podMockInfo, fmt.Errorf("failed to add pod: %w", err)
-		}
+		AddPod(mockServer, pod1)
 
 		pod2 := NewFakePodWithNetAnnotation(
 			testNs,
@@ -1345,16 +1332,14 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *Server
 			"policy-net-1",
 			NewFakeNetworkStatus(testNs, "policy-net-1", "192.168.1.2", "10.1.1.2"),
 			map[string]string{"app": "test2"})
-		if err := AddPod(mockServer, pod2); err != nil {
-			return nftState, testNs, mockServer, podMockInfo, fmt.Errorf("failed to add pod: %w", err)
-		}
+		AddPod(mockServer, pod2)
 	} else {
-		mockServer = &Server{
-			Options: &Options{
-				acceptICMPv6:   true,
-				acceptICMP:     true,
-				allowSrcPrefix: []string{"fc00::/8", "fd00::/8", "10.0.0.1/32", "10.0.1.0/24"},
-				allowDstPrefix: []string{"fe00::/8", "ff00::/8", "10.0.0.2/32", "10.0.2.0/24"},
+		mockServer = &testServer{
+			cfg: controllers.CommonRuleConfig{
+				AcceptICMPv6:   true,
+				AcceptICMP:     true,
+				AllowSrcPrefix: []string{"fc00::/8", "fd00::/8", "10.0.0.1/32", "10.0.1.0/24"},
+				AllowDstPrefix: []string{"fe00::/8", "ff00::/8", "10.0.0.2/32", "10.0.2.0/24"},
 			},
 		}
 	}
