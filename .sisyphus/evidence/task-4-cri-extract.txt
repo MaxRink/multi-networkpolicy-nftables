@@ -1,2 +1,0 @@
-22:func GetPodNetNSPath(criClient pb.RuntimeServiceClient, pod *corev1.Pod) (string, error) {
-77:func NewPodInfoFromPod(pod *corev1.Pod, criClient pb.RuntimeServiceClient, hostname string, networkPlugins []string, netdefResolver NetDefResolver) *PodInfo {

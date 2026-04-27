@@ -1,4 +1,0 @@
-=== RUN   TestSetupScheme
---- PASS: TestSetupScheme (0.00s)
-PASS
-ok  	github.com/telekom/multi-networkpolicy-nftables/pkg/controller	0.648s
