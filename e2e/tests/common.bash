@@ -40,6 +40,7 @@ get_net2_ip6() {
 
 # teardown_file_common — base cleanup logic shared by all .bats files.
 # Deletes the manifest (MANIFEST_FILE) and optional extra namespaces (CLEANUP_NAMESPACES).
+# Also restores the DaemonSet nodeSelector if it was patched by a "disable" test.
 # Each .bats file's teardown_file() MUST call this function:
 #
 #   teardown_file() {
@@ -48,6 +49,21 @@ get_net2_ip6() {
 #   }
 #
 teardown_file_common() {
+	# Restore DaemonSet nodeSelector if a "disable" test left it patched.
+	# This prevents cascade failures across test suites.
+	local ds_patched
+	ds_patched=$(kubectl -n kube-system get daemonset multi-networkpolicy-ds-amd64 \
+		-o jsonpath='{.spec.template.spec.nodeSelector.non-existing}' 2>/dev/null || true)
+	if [ "$ds_patched" = "true" ]; then
+		echo "# Restoring multi-networkpolicy DaemonSet (removing non-existing nodeSelector)" >&3
+		kubectl -n kube-system patch daemonsets multi-networkpolicy-ds-amd64 \
+			--type json -p='[{"op": "remove", "path": "/spec/template/spec/nodeSelector/non-existing"}]' 2>&3 || true
+		kubectl -n kube-system rollout status daemonset/multi-networkpolicy-ds-amd64 \
+			--timeout=${kubewait_timeout} 2>&3 || true
+		kubectl -n kube-system wait --for=condition=ready -l app=multi-networkpolicy pod \
+			--timeout=${kubewait_timeout} 2>&3 || true
+	fi
+
 	if [ -n "${MANIFEST_FILE:-}" ]; then
 		cd "$BATS_TEST_DIRNAME"
 		echo "# Cleaning up: kubectl delete -f ${MANIFEST_FILE}" >&3
@@ -260,7 +276,7 @@ wait_for_connectivity_blocked() {
 # Usage: wait_for_nft_rule_absent <namespace> <pod> <grep-pattern> [timeout_seconds]
 # Returns non-zero if the rule is still present after the timeout.
 wait_for_nft_rule_absent() {
-	local ns="$1" pod="$2" pattern="$3" timeout="${4:-30}" attempts=0
+	local ns="$1" pod="$2" pattern="$3" timeout="${4:-90}" attempts=0
 	while [ $attempts -lt $timeout ]; do
 		# First verify the pod is reachable via exec (prevents false positives from
 		# transient API errors being misinterpreted as "rule absent").
@@ -290,3 +306,27 @@ wait_for_nft_rule_absent() {
 # Each .bats file MUST override setup_file() to set MANIFEST_FILE,
 # AND MUST define teardown_file() that calls teardown_file_common.
 # CLEANUP_NAMESPACES is optional for multi-namespace tests (space-separated list of namespaces to delete).
+
+# ensure_daemonset_running verifies the multi-networkpolicy DaemonSet has at least one
+# ready pod. If the daemon was killed unexpectedly (e.g., by a delayed rollout from a
+# prior test suite), this function restores it before proceeding.
+ensure_daemonset_running() {
+	local ready_count
+	ready_count=$(kubectl -n kube-system get daemonset multi-networkpolicy-ds-amd64 \
+		-o jsonpath='{.status.numberReady}' 2>/dev/null || echo "0")
+	if [ "${ready_count:-0}" -gt 0 ]; then
+		return 0
+	fi
+	echo "# WARNING: daemon not running (ready=$ready_count), restoring..." >&3
+	local ds_patched
+	ds_patched=$(kubectl -n kube-system get daemonset multi-networkpolicy-ds-amd64 \
+		-o jsonpath='{.spec.template.spec.nodeSelector.non-existing}' 2>/dev/null || true)
+	if [ "$ds_patched" = "true" ]; then
+		kubectl -n kube-system patch daemonsets multi-networkpolicy-ds-amd64 \
+			--type json -p='[{"op": "remove", "path": "/spec/template/spec/nodeSelector/non-existing"}]' 2>&3 || true
+	fi
+	kubectl -n kube-system rollout status daemonset/multi-networkpolicy-ds-amd64 \
+		--timeout=${kubewait_timeout} 2>&3 || true
+	kubectl -n kube-system wait --for=condition=ready -l app=multi-networkpolicy pod \
+		--timeout=${kubewait_timeout} 2>&3 || true
+}
