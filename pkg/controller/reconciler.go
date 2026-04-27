@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"time"
 
 	cnitypes "github.com/containernetworking/cni/pkg/types"
@@ -21,18 +20,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
 var _ controllers.PolicyDeps = (*NodeReconciler)(nil)
 var _ controllers.NetDefResolver = (*NodeReconciler)(nil)
-var _ manager.Runnable = (*cleanupRunnable)(nil)
-var _ manager.LeaderElectionRunnable = (*cleanupRunnable)(nil)
 
 type NodeReconciler struct {
 	NodeName       string
 	Client         client.Client
-	CleanupClient  client.Client // direct (non-cached) client for shutdown cleanup
 	PolicyDeps     controllers.PolicyDeps
 	HostPrefix     string
 	NetworkPlugins []string
@@ -40,39 +35,11 @@ type NodeReconciler struct {
 	CriClient      pb.RuntimeServiceClient
 }
 
-// cleanupRunnable removes nftables rules from all pods on this node when the manager stops.
-type cleanupRunnable struct {
-	r             *NodeReconciler
-	cleanupClient client.Client
+func CleanupOnShutdown(ctx context.Context, r *NodeReconciler, cl client.Client) error {
+	return cleanupAllPods(ctx, r, cl)
 }
-
-func (c *cleanupRunnable) Start(ctx context.Context) error {
-	<-ctx.Done()
-	fmt.Fprintf(os.Stderr, "cleanupRunnable: context canceled, starting cleanup\n")
-	klog.Info("cleanupRunnable: context canceled, starting cleanup")
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
-	defer cancel()
-	err := cleanupAllPods(cleanupCtx, c.r, c.cleanupClient)
-	fmt.Fprintf(os.Stderr, "cleanupRunnable: cleanupAllPods returned err=%v\n", err)
-	klog.Infof("cleanupRunnable: cleanupAllPods returned err=%v", err)
-	klog.Flush()
-	return err
-}
-
-func (c *cleanupRunnable) NeedLeaderElection() bool { return false }
 
 func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	cleanupCl := r.CleanupClient
-	if cleanupCl == nil {
-		directCl, err := client.New(mgr.GetConfig(), client.Options{Scheme: mgr.GetScheme()})
-		if err != nil {
-			return fmt.Errorf("create direct client for cleanup: %w", err)
-		}
-		cleanupCl = directCl
-	}
-	if err := mgr.Add(&cleanupRunnable{r: r, cleanupClient: cleanupCl}); err != nil {
-		return fmt.Errorf("register cleanup runnable: %w", err)
-	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}, builder.WithPredicates(NodePredicate(r.NodeName))).
 		Watches(&corev1.Pod{},

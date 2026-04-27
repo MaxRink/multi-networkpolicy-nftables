@@ -21,6 +21,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -37,6 +38,7 @@ import (
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
 
@@ -71,7 +73,7 @@ func run(opts *server.Options) error {
 	ctrl.SetLogger(klog.NewKlogr())
 
 	syncPeriod := time.Duration(cfg.SyncPeriodSeconds) * time.Second
-	gracefulTimeout := 55 * time.Second
+	gracefulTimeout := 10 * time.Second
 	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
 		Scheme:                  scheme,
 		LeaderElection:          false,
@@ -110,8 +112,20 @@ func run(opts *server.Options) error {
 		return fmt.Errorf("setup reconciler: %w", err)
 	}
 
+	directClient, err := client.New(restCfg, client.Options{Scheme: scheme})
+	if err != nil {
+		return fmt.Errorf("create direct client for cleanup: %w", err)
+	}
+
 	klog.Infof("Starting manager for node %s", cfg.NodeName)
-	return mgr.Start(ctx)
+	if err := mgr.Start(ctx); err != nil {
+		return err
+	}
+
+	klog.Info("Manager stopped, running post-shutdown cleanup")
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	return controller.CleanupOnShutdown(cleanupCtx, reconciler, directClient)
 }
 
 func main() {
