@@ -17,6 +17,7 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.
 		klog.Errorf("cleanup: failed to list pods: %v", err)
 		return err
 	}
+	resolver := &directNetDefResolver{cl: directClient}
 	deps := r.policyDeps()
 	for i := range podList.Items {
 		pod := &podList.Items[i]
@@ -26,8 +27,8 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.
 		if !controllers.IsMultiNetworkpolicyTarget(pod) {
 			continue
 		}
-		podInfo, err := deps.GetPodInfo(pod)
-		if err != nil || podInfo == nil || len(podInfo.Interfaces) == 0 {
+		podInfo := controllers.NewPodInfoFromPod(pod, r.CriClient, r.NodeName, r.NetworkPlugins, resolver)
+		if podInfo == nil || len(podInfo.Interfaces) == 0 {
 			continue
 		}
 		klog.V(4).Infof("cleanup: removing rules for %s/%s", pod.Namespace, pod.Name)

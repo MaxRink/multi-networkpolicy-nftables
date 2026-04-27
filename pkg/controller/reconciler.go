@@ -167,8 +167,15 @@ func (r *NodeReconciler) GetPodInfo(pod *corev1.Pod) (*controllers.PodInfo, erro
 }
 
 func (r *NodeReconciler) GetPluginType(namespacedName types.NamespacedName) string {
+	return resolvePluginType(r.Client, namespacedName)
+}
+
+// resolvePluginType looks up a NetworkAttachmentDefinition via the given client
+// and returns the CNI plugin type. Extracted so both the cached client (normal
+// reconciliation) and the direct client (shutdown cleanup) can reuse it.
+func resolvePluginType(cl client.Client, namespacedName types.NamespacedName) string {
 	var nad netdefv1.NetworkAttachmentDefinition
-	if err := r.Client.Get(context.Background(), namespacedName, &nad); err != nil {
+	if err := cl.Get(context.Background(), namespacedName, &nad); err != nil {
 		return ""
 	}
 
@@ -188,6 +195,16 @@ func (r *NodeReconciler) GetPluginType(namespacedName types.NamespacedName) stri
 	}
 
 	return ""
+}
+
+// directNetDefResolver implements controllers.NetDefResolver using a non-cached
+// client. Used during shutdown cleanup when the informer cache may already be stopped.
+type directNetDefResolver struct {
+	cl client.Client
+}
+
+func (d *directNetDefResolver) GetPluginType(namespacedName types.NamespacedName) string {
+	return resolvePluginType(d.cl, namespacedName)
 }
 
 func buildPolicyMap(policies []multiv1beta1.MultiNetworkPolicy) controllers.PolicyMap {
