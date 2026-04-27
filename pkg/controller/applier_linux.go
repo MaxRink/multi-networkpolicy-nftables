@@ -41,5 +41,32 @@ func applyRulesForPod(deps controllers.PolicyDeps, cfg controllers.CommonRuleCon
 			klog.Errorf("failed to close nftables for pod (%s/%s): %v", pod.Namespace, pod.Name, cerr)
 		}
 	}()
-	return server.ApplyPolicyRulesForPodAndFamily(deps, cfg, policyMap, pod, podInfo, nft)
+
+	isCleanup := policyMap == nil
+	if isCleanup {
+		debugDumpNftState(hostPrefix, "BEFORE-CLEANUP", pod, nft)
+	}
+	applyErr := server.ApplyPolicyRulesForPodAndFamily(deps, cfg, policyMap, pod, podInfo, nft)
+	if isCleanup {
+		debugDumpNftState(hostPrefix, "AFTER-CLEANUP", pod, nft)
+	}
+	return applyErr
+}
+
+func debugDumpNftState(hostPrefix, label string, pod *v1.Pod, nft *nftables.Conn) {
+	tables, err := nft.ListTables()
+	if err != nil {
+		debugLog(hostPrefix, "nft-debug %s %s/%s: ListTables error: %v", label, pod.Namespace, pod.Name, err)
+		return
+	}
+	for _, t := range tables {
+		chains, _ := nft.ListChainsOfTableFamily(t.Family)
+		for _, c := range chains {
+			if c.Table.Name != t.Name {
+				continue
+			}
+			rules, _ := nft.GetRules(t, c)
+			debugLog(hostPrefix, "nft-debug %s %s/%s: table=%s chain=%s rules=%d", label, pod.Namespace, pod.Name, t.Name, c.Name, len(rules))
+		}
+	}
 }
