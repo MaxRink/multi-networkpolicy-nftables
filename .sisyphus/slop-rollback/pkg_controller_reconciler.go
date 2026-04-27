@@ -4,12 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	cnitypes "github.com/containernetworking/cni/pkg/types"
-	multiv1beta1 "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/apis/k8s.cni.cncf.io/v1beta1"
 	netdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	netdefutils "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/utils"
+	multiv1beta1 "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/apis/k8s.cni.cncf.io/v1beta1"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -18,8 +17,8 @@ import (
 	klog "k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
@@ -31,7 +30,6 @@ var _ manager.LeaderElectionRunnable = (*cleanupRunnable)(nil)
 type NodeReconciler struct {
 	NodeName       string
 	Client         client.Client
-	CleanupClient  client.Client // direct (non-cached) client for shutdown cleanup
 	PolicyDeps     controllers.PolicyDeps
 	HostPrefix     string
 	NetworkPlugins []string
@@ -41,32 +39,18 @@ type NodeReconciler struct {
 
 // cleanupRunnable removes nftables rules from all pods on this node when the manager stops.
 type cleanupRunnable struct {
-	r             *NodeReconciler
-	cleanupClient client.Client
+	r *NodeReconciler
 }
 
 func (c *cleanupRunnable) Start(ctx context.Context) error {
 	<-ctx.Done()
-	debugLog(c.r.HostPrefix, "cleanupRunnable: context cancelled, starting cleanup")
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
-	defer cancel()
-	err := cleanupAllPods(cleanupCtx, c.r, c.cleanupClient)
-	debugLog(c.r.HostPrefix, "cleanupRunnable: cleanupAllPods returned err=%v", err)
-	return err
+	return cleanupAllPods(context.Background(), c.r)
 }
 
 func (c *cleanupRunnable) NeedLeaderElection() bool { return false }
 
 func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	cleanupCl := r.CleanupClient
-	if cleanupCl == nil {
-		directCl, err := client.New(mgr.GetConfig(), client.Options{Scheme: mgr.GetScheme()})
-		if err != nil {
-			return fmt.Errorf("create direct client for cleanup: %w", err)
-		}
-		cleanupCl = directCl
-	}
-	if err := mgr.Add(&cleanupRunnable{r: r, cleanupClient: cleanupCl}); err != nil {
+	if err := mgr.Add(&cleanupRunnable{r: r}); err != nil {
 		return fmt.Errorf("register cleanup runnable: %w", err)
 	}
 	return ctrl.NewControllerManagedBy(mgr).
@@ -101,7 +85,6 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	deps := r.policyDeps()
-	retryNeeded := false
 	for i := range podList.Items {
 		pod := &podList.Items[i]
 		if !controllers.IsMultiNetworkpolicyTarget(pod) {
@@ -111,14 +94,9 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		podInfo, err := deps.GetPodInfo(pod)
 		if err != nil {
 			klog.Errorf("failed to get pod info for %s/%s: %v", pod.Namespace, pod.Name, err)
-			retryNeeded = true
 			continue
 		}
 		if podInfo == nil || len(podInfo.Interfaces) == 0 {
-			if pod.Status.Phase == corev1.PodRunning {
-				klog.V(4).Infof("pod %s/%s is running but has no interfaces yet, will retry", pod.Namespace, pod.Name)
-				retryNeeded = true
-			}
 			continue
 		}
 
@@ -127,9 +105,6 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 	}
 
-	if retryNeeded {
-		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
-	}
 	return ctrl.Result{}, nil
 }
 
@@ -172,15 +147,8 @@ func (r *NodeReconciler) GetPodInfo(pod *corev1.Pod) (*controllers.PodInfo, erro
 }
 
 func (r *NodeReconciler) GetPluginType(namespacedName types.NamespacedName) string {
-	return resolvePluginType(r.Client, namespacedName)
-}
-
-// resolvePluginType looks up a NetworkAttachmentDefinition via the given client
-// and returns the CNI plugin type. Extracted so both the cached client (normal
-// reconciliation) and the direct client (shutdown cleanup) can reuse it.
-func resolvePluginType(cl client.Client, namespacedName types.NamespacedName) string {
 	var nad netdefv1.NetworkAttachmentDefinition
-	if err := cl.Get(context.Background(), namespacedName, &nad); err != nil {
+	if err := r.Client.Get(context.Background(), namespacedName, &nad); err != nil {
 		return ""
 	}
 
@@ -200,16 +168,6 @@ func resolvePluginType(cl client.Client, namespacedName types.NamespacedName) st
 	}
 
 	return ""
-}
-
-// directNetDefResolver implements controllers.NetDefResolver using a non-cached
-// client. Used during shutdown cleanup when the informer cache may already be stopped.
-type directNetDefResolver struct {
-	cl client.Client
-}
-
-func (d *directNetDefResolver) GetPluginType(namespacedName types.NamespacedName) string {
-	return resolvePluginType(d.cl, namespacedName)
 }
 
 func buildPolicyMap(policies []multiv1beta1.MultiNetworkPolicy) controllers.PolicyMap {

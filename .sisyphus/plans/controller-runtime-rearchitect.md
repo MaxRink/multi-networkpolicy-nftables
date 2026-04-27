@@ -986,7 +986,7 @@ Max Concurrent: 6 (Wave 2)
 
   **Commit**: NO (groups with Wave 3)
 
-- [ ] 11. Implement event map functions (mapToNode)
+- [x] 11. Implement event map functions (mapToNode)
 
   **What to do**:
   - Create file `pkg/controller/mappers.go`
@@ -1059,7 +1059,7 @@ Max Concurrent: 6 (Wave 2)
 
   **Commit**: NO (groups with Wave 4)
 
-- [ ] 12. Implement predicates for watched resources
+- [x] 12. Implement predicates for watched resources
 
   **What to do**:
   - Create file `pkg/controller/predicates.go`
@@ -1129,7 +1129,7 @@ Max Concurrent: 6 (Wave 2)
 
   **Commit**: NO (groups with Wave 4)
 
-- [ ] 13. Implement NodeReconciler.Reconcile() core logic
+- [x] 13. Implement NodeReconciler.Reconcile() core logic
 
   **What to do**:
   - Create file `pkg/controller/reconciler.go`
@@ -1234,7 +1234,7 @@ Max Concurrent: 6 (Wave 2)
 
   **Commit**: NO (groups with Wave 4)
 
-- [ ] 14. Implement NodeReconciler.SetupWithManager()
+- [x] 14. Implement NodeReconciler.SetupWithManager()
 
   **What to do**:
   - In `pkg/controller/reconciler.go` (same file as T13), implement:
@@ -1318,7 +1318,7 @@ Max Concurrent: 6 (Wave 2)
   - Files: `pkg/controller/reconciler.go`, `pkg/controller/reconciler_test.go`, `pkg/controller/mappers.go`, `pkg/controller/mappers_test.go`, `pkg/controller/predicates.go`, `pkg/controller/predicates_test.go`
   - Pre-commit: `go test -v ./pkg/controller/...`
 
-- [ ] 15. Wire controller-runtime Manager in cmd/main.go
+- [x] 15. Wire controller-runtime Manager in cmd/main.go
 
   **What to do**:
   - Rewrite `cmd/multi-networkpolicy-nftables/main.go` to use controller-runtime Manager:
@@ -1460,7 +1460,7 @@ Max Concurrent: 6 (Wave 2)
   - Files: `cmd/multi-networkpolicy-nftables/main.go`, `deploy.yml`, `pkg/server/options.go`
   - Pre-commit: `go build ./cmd/multi-networkpolicy-nftables/`
 
-- [ ] 16. Implement graceful shutdown (nftables cleanup)
+- [x] 16. Implement graceful shutdown (nftables cleanup)
 
   **What to do**:
   - Implement shutdown logic that cleans up nftables rules from all pod network namespaces when the daemon stops
@@ -1531,7 +1531,7 @@ Max Concurrent: 6 (Wave 2)
 
   **Commit**: NO (groups with T15 commit)
 
-- [ ] 17. Remove old code (ChangeTrackers, Configs, Handlers, Server, Runner)
+- [x] 17. Remove old code (ChangeTrackers, Configs, Handlers, Server, Runner)
 
   **What to do**:
   - **pkg/controllers/pod.go**: Remove `PodChangeTracker` struct + all its methods, `PodConfig` struct + all its methods, `PodHandler` interface, `PodMap.Update()` method. Keep: `PodInfo`, `InterfaceInfo`, `IsMultiNetworkpolicyTarget()`, `GetCriRuntimeClient()`, `NewPodInfoFromPod()` (from T4), `GetPodNetNSPath()` (from T4), `RuntimeKind` type.
@@ -1616,7 +1616,7 @@ Max Concurrent: 6 (Wave 2)
   - Files: `pkg/controllers/pod.go`, `pkg/controllers/networkpolicy.go`, `pkg/controllers/namespace.go`, `pkg/controllers/net-attach-def.go`, `pkg/server/server.go`, `pkg/server/options.go`
   - Pre-commit: `go build ./cmd/multi-networkpolicy-nftables/`
 
-- [ ] 18. Remove k8s.io/kubernetes dep + go mod tidy + vendor
+- [x] 18. Remove k8s.io/kubernetes dep + go mod tidy + vendor
 
   **What to do**:
   - Verify no Go files still import any `k8s.io/kubernetes/...` package: `grep -rn "k8s.io/kubernetes" pkg/ cmd/ --include="*.go"`
@@ -1686,7 +1686,7 @@ Max Concurrent: 6 (Wave 2)
   - Files: `go.mod`, `go.sum`, `vendor/`
   - Pre-commit: `go build ./cmd/multi-networkpolicy-nftables/`
 
-- [ ] 19. Migrate klog v2 → logr (mechanical translation)
+- [x] 19. Migrate klog v2 → logr (mechanical translation)
 
   **What to do**:
   - Replace ALL `klog.Infof(...)`, `klog.Errorf(...)`, `klog.Warningf(...)`, `klog.V(N).Infof(...)` calls with logr equivalents:
@@ -1773,19 +1773,19 @@ Max Concurrent: 6 (Wave 2)
 >
 > **Do NOT auto-proceed after verification. Wait for user's explicit approval before marking work complete.**
 
-- [ ] F1. **Plan Compliance Audit** — `oracle`
+- [x] F1. **Plan Compliance Audit** — `oracle`
   Read the plan end-to-end. For each "Must Have": verify implementation exists (read file, run command). For each "Must NOT Have": search codebase for forbidden patterns — reject with file:line if found. Check evidence files exist in .sisyphus/evidence/. Compare deliverables against plan.
   Output: `Must Have [N/N] | Must NOT Have [N/N] | Tasks [N/N] | VERDICT: APPROVE/REJECT`
 
-- [ ] F2. **Code Quality Review** — `unspecified-high`
+- [x] F2. **Code Quality Review** — `unspecified-high`
   Run `go build ./cmd/multi-networkpolicy-nftables/` + `golangci-lint run` + `sudo go test -v -count=1 ./...`. Review all changed files for: `as any`/type assertions without checks, empty catches, commented-out code, unused imports. Check AI slop: excessive comments, over-abstraction, generic names.
   Output: `Build [PASS/FAIL] | Lint [PASS/FAIL] | Tests [N pass/N fail] | Files [N clean/N issues] | VERDICT`
 
-- [ ] F3. **Real Manual QA** — `unspecified-high`
+- [x] F3. **Real Manual QA** — `unspecified-high`
   Start from clean state. Execute EVERY QA scenario from EVERY task — follow exact steps, capture evidence. Test cross-task integration (reconciler + nftables + CRI working together). Test edge cases: empty state, pod deletion mid-reconcile, rapid policy changes. Save to `.sisyphus/evidence/final-qa/`.
   Output: `Scenarios [N/N pass] | Integration [N/N] | Edge Cases [N tested] | VERDICT`
 
-- [ ] F4. **Scope Fidelity Check** — `deep`
+- [x] F4. **Scope Fidelity Check** — `deep`
   For each task: read "What to do", read actual diff (git log/diff). Verify 1:1 — everything in spec was built (no missing), nothing beyond spec was built (no creep). Check "Must NOT do" compliance. Detect cross-task contamination: Task N touching Task M's files. Flag unaccounted changes.
   Output: `Tasks [N/N compliant] | Contamination [CLEAN/N issues] | Unaccounted [CLEAN/N files] | VERDICT`
 
