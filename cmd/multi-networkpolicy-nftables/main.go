@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controller"
@@ -174,17 +175,18 @@ func run(opts *server.Options) error {
 		return fmt.Errorf("setup scheme: %w", err)
 	}
 
+	ctrl.SetLogger(klog.NewKlogr())
+
+	syncPeriod := time.Duration(cfg.SyncPeriodSeconds) * time.Second
 	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
 		Scheme:         scheme,
 		LeaderElection: false,
 		Metrics:        metricsserver.Options{BindAddress: "0"},
+		Cache:          cache.Options{SyncPeriod: &syncPeriod},
 	})
 	if err != nil {
 		return fmt.Errorf("create manager: %w", err)
 	}
-
-	// Bridge klog to controller-runtime's logr logger
-	klog.SetLogger(mgr.GetLogger())
 
 	ctx := ctrl.SetupSignalHandler()
 	if err := controller.SetupIndexes(ctx, mgr); err != nil {

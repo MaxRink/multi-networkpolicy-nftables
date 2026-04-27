@@ -75,6 +75,7 @@ type ReconcilerConfig struct {
 	ContainerRuntime         controllers.RuntimeKind
 	ContainerRuntimeEndpoint string
 	NetworkPlugins           []string
+	SyncPeriodSeconds        int
 	CommonRuleConfig         controllers.CommonRuleConfig
 }
 
