@@ -14,18 +14,22 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// debugLog writes to a host-mounted file for post-mortem debugging of cleanup.
-// The file persists after pod deletion because it's on the host filesystem.
+// debugLog writes to stderr (captured in container logs) and a host-mounted
+// file for post-mortem debugging of cleanup.
 func debugLog(hostPrefix, format string, args ...interface{}) {
 	msg := fmt.Sprintf(time.Now().UTC().Format("15:04:05.000")+" "+format+"\n", args...)
+	fmt.Fprint(os.Stderr, msg)
 	klog.Infof(format, args...)
 	path := fmt.Sprintf("%s/tmp/cleanup-debug.log", hostPrefix)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644) //nolint:gosec // debug log path derived from trusted hostPrefix
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "debugLog: cannot open %s: %v\n", path, err)
 		return
 	}
 	defer f.Close() //nolint:errcheck
-	_, _ = f.WriteString(msg)
+	if _, werr := f.WriteString(msg); werr != nil {
+		fmt.Fprintf(os.Stderr, "debugLog: write failed: %v\n", werr)
+	}
 }
 
 func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.Client) error {
@@ -43,9 +47,6 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.
 			continue
 		}
 		targeted++
-		// Resolve netns path directly via CRI — no need for full
-		// NewPodInfoFromPod which also resolves NADs/interfaces (unnecessary
-		// for cleanup and prone to failure during shutdown).
 		netnsPath, err := controllers.GetPodNetNSPath(r.CriClient, pod)
 		if err != nil || netnsPath == "" {
 			debugLog(r.HostPrefix, "cleanup: pod %s/%s: cannot resolve netns (err=%v), skipping", pod.Namespace, pod.Name, err)

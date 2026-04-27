@@ -9,6 +9,7 @@ setup_file() {
 	cd $BATS_TEST_DIRNAME
 	load "common"
 	export MANIFEST_FILE="simple-v4-egress-multi.yml"
+	ensure_daemonset_running
 	kubectl apply --wait --timeout=${kubewait_timeout} -f "${MANIFEST_FILE}"
 	kubectl -n test-simple-v4-egress-multi wait --for=condition=ready -l app=test-simple-v4-egress-multi pod --timeout=${kubewait_timeout}
 	wait_for_nft_rules "test-simple-v4-egress-multi" "pod-server" "test-multinetwork-policy-simple-1"
@@ -105,6 +106,7 @@ teardown_file() {
 }
 
 @test "disable multi-networkpolicy and check nftables rules" {
+	ensure_daemonset_running
  	# disable multi-networkpolicy pods by adding invalid nodeSelector
 	kubectl -n kube-system patch daemonsets multi-networkpolicy-ds-amd64 -p '{"spec": {"template": {"spec": {"nodeSelector": {"non-existing": "true"}}}}}'
 	# check multi-networkpolicy pod is deleted
