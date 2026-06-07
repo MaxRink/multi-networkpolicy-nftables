@@ -26,7 +26,11 @@ func debugLog(hostPrefix, format string, args ...interface{}) {
 		fmt.Fprintf(os.Stderr, "debugLog: cannot open %s: %v\n", path, err)
 		return
 	}
-	defer f.Close() //nolint:errcheck
+	defer func() {
+		if cerr := f.Close(); cerr != nil {
+			fmt.Fprintf(os.Stderr, "debugLog: close failed: %v\n", cerr)
+		}
+	}()
 	if _, werr := f.WriteString(msg); werr != nil {
 		fmt.Fprintf(os.Stderr, "debugLog: write failed: %v\n", werr)
 	}
