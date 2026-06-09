@@ -1387,11 +1387,37 @@ func TestCleanupLegacyTables(t *testing.T) {
 	})
 	_ = daemonChain
 
+	baseChain := c.AddChain(&nftables.Chain{
+		Name:  "input",
+		Table: legacyFilter,
+	})
+
 	foreignChain := c.AddChain(&nftables.Chain{
 		Name:  "foreign-chain",
 		Table: legacyFilter,
 	})
 	_ = foreignChain
+
+	c.AddRule(&nftables.Rule{
+		Table:    legacyFilter,
+		Chain:    baseChain,
+		UserData: userDataComment(inputInterfaceFilterComment),
+		Exprs: []expr.Any{
+			&expr.Counter{},
+			&expr.Verdict{
+				Kind:  expr.VerdictJump,
+				Chain: ingressChain,
+			},
+		},
+	})
+	c.AddRule(&nftables.Rule{
+		Table:    legacyFilter,
+		Chain:    baseChain,
+		UserData: userDataComment("foreign-rule"),
+		Exprs: []expr.Any{
+			&expr.Counter{},
+		},
+	})
 
 	if err := c.Flush(); err != nil {
 		t.Fatalf("setup flush failed: %v", err)
@@ -1420,5 +1446,81 @@ func TestCleanupLegacyTables(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("foreign chain %q was incorrectly removed from legacy table", "foreign-chain")
+	}
+
+	rules, err := c.GetRules(legacyFilter, &nftables.Chain{Name: "input"})
+	if err != nil {
+		t.Fatalf("GetRules(%q, %q) failed: %v", legacyFilter.Name, "input", err)
+	}
+	foundForeignRule := false
+	for _, rule := range rules {
+		comment, _ := userdata.GetString(rule.UserData, userdata.TypeComment)
+		if comment == inputInterfaceFilterComment {
+			t.Errorf("daemon rule %q was not removed from legacy base chain", inputInterfaceFilterComment)
+		}
+		if comment == "foreign-rule" {
+			foundForeignRule = true
+		}
+	}
+	if !foundForeignRule {
+		t.Errorf("foreign rule in legacy base chain was incorrectly removed")
+	}
+}
+
+func TestCleanupChainsKeepsForeignTableChains(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.FlushRuleset()
+	defer c.CloseLasting()
+	c.FlushRuleset()
+
+	inetFamily := nftables.TableFamilyINet
+
+	ownedTable := c.AddTable(&nftables.Table{Family: inetFamily, Name: filterTableName})
+	foreignTable := c.AddTable(&nftables.Table{Family: inetFamily, Name: "foreign-filter"})
+
+	c.AddChain(&nftables.Chain{
+		Name:  "stale-owned-chain",
+		Table: ownedTable,
+	})
+	c.AddChain(&nftables.Chain{
+		Name:  "foreign-empty-chain",
+		Table: foreignTable,
+	})
+
+	if err := c.Flush(); err != nil {
+		t.Fatalf("setup flush failed: %v", err)
+	}
+
+	nftState := &nftState{
+		nft:    c,
+		filter: ownedTable,
+		nat:    &nftables.Table{Family: inetFamily, Name: natTableName},
+		chains: make(map[string]*nftables.Chain),
+	}
+	if err := nftState.cleanupChains(); err != nil {
+		t.Fatalf("cleanupChains() returned error: %v", err)
+	}
+
+	chains, err := c.ListChainsOfTableFamily(inetFamily)
+	if err != nil {
+		t.Fatalf("ListChainsOfTableFamily failed: %v", err)
+	}
+
+	foundOwnedChain := false
+	foundForeignChain := false
+	for _, chain := range chains {
+		switch {
+		case chain.Table.Name == filterTableName && chain.Name == "stale-owned-chain":
+			foundOwnedChain = true
+		case chain.Table.Name == foreignTable.Name && chain.Name == "foreign-empty-chain":
+			foundForeignChain = true
+		}
+	}
+	if foundOwnedChain {
+		t.Errorf("unused chain in daemon-owned table was not removed")
+	}
+	if !foundForeignChain {
+		t.Errorf("foreign empty chain was incorrectly removed")
 	}
 }

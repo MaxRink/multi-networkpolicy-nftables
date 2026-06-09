@@ -161,17 +161,33 @@ func addTable(nft *nftables.Conn, table *nftables.Table) (*nftables.Table, error
 	return t, nil
 }
 
-// legacyDaemonChainNames holds the chain names that the daemon used to create
-// inside the generic "filter" / "nat" tables before table isolation was introduced.
-// These are the only names we are allowed to delete — foreign chains must be left alone.
+const (
+	inputInterfaceFilterComment  = "input-interface-filter"
+	outputInterfaceFilterComment = "output-interface-filter"
+	natFilterRuleComment         = "nat-filter-rule"
+)
+
+// legacyDaemonChainNames holds the non-base chain names that the daemon used to
+// create inside the generic "filter" / "nat" tables before table isolation was
+// introduced. These are the only chains we are allowed to delete; shared base
+// chains such as "input", "output", and "prerouting" must be left in place.
 var legacyDaemonChainNames = map[string]bool{
 	ingressChain: true,
 	egressChain:  true,
 	fmt.Sprintf("%s-%s", ingressChain, common): true,
 	fmt.Sprintf("%s-%s", egressChain, common):  true,
+}
+
+var legacyDaemonBaseChainNames = map[string]bool{
 	"input":      true,
 	"output":     true,
 	"prerouting": true,
+}
+
+var legacyDaemonRuleComments = map[string]bool{
+	inputInterfaceFilterComment:  true,
+	outputInterfaceFilterComment: true,
+	natFilterRuleComment:         true,
 }
 
 // cleanupLegacyTables removes daemon-owned objects (chains / sets) that were
@@ -202,6 +218,32 @@ func cleanupLegacyTables(nft *nftables.Conn) error {
 		if err != nil {
 			return fmt.Errorf("cleanupLegacyTables: failed to list chains for table %q: %w", table.Name, err)
 		}
+
+		for _, chain := range chains {
+			if chain.Table.Name != table.Name {
+				continue
+			}
+			if !legacyDaemonBaseChainNames[chain.Name] {
+				continue
+			}
+			rules, err := nft.GetRules(table, chain)
+			if err != nil {
+				return fmt.Errorf("cleanupLegacyTables: failed to list rules for legacy chain %q in table %q: %w", chain.Name, table.Name, err)
+			}
+			for _, rule := range rules {
+				if !legacyDaemonRule(rule) {
+					continue
+				}
+				comment, _ := userdata.GetString(rule.UserData, userdata.TypeComment)
+				klog.V(2).Infof("cleanupLegacyTables: removing daemon-owned rule %q from legacy chain %q in table %q", comment, chain.Name, table.Name)
+				if err := nft.DelRule(rule); err != nil {
+					klog.Errorf("cleanupLegacyTables: failed to delete daemon-owned rule %q from legacy chain %q in table %q: %v", comment, chain.Name, table.Name, err)
+					continue
+				}
+				flushed = true
+			}
+		}
+
 		for _, chain := range chains {
 			if chain.Table.Name != table.Name {
 				continue
@@ -234,6 +276,14 @@ func cleanupLegacyTables(nft *nftables.Conn) error {
 		}
 	}
 	return nil
+}
+
+func legacyDaemonRule(rule *nftables.Rule) bool {
+	comment, ok := userdata.GetString(rule.UserData, userdata.TypeComment)
+	if !ok {
+		return false
+	}
+	return legacyDaemonRuleComments[comment]
 }
 
 func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (*nftState, error) {
@@ -302,9 +352,6 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 		return nftState, fmt.Errorf("failed to update set %q: %w", nftState.interfaceFilterSet.Name, err)
 	}
 
-	inputInterfaceFilterComment := "input-interface-filter"
-	outputInterfaceFilterComment := "output-interface-filter"
-
 	filterInputRule := &nftables.Rule{
 		Table:    nftState.filter,
 		Chain:    nftState.input,
@@ -358,7 +405,7 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 	if _, err := nftState.updateRule(&nftables.Rule{
 		Table:    nftState.nat,
 		Chain:    nftState.prerouting,
-		UserData: userDataComment("nat-filter-rule"),
+		UserData: userDataComment(natFilterRuleComment),
 		Exprs: []expr.Any{
 			&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 0x1},
 			&expr.Lookup{
@@ -1922,6 +1969,9 @@ func (n *nftState) cleanupChains() error {
 
 	performFlush := false
 	for _, chain := range chains {
+		if chain.Table.Name != n.filter.Name && chain.Table.Name != n.nat.Name {
+			continue
+		}
 		rules, err := n.nft.GetRules(chain.Table, chain)
 		if err != nil {
 			return fmt.Errorf("failed to get rules for table %q, chain %q: %w", chain.Table.Name, chain.Name, err)
