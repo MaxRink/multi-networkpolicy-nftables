@@ -201,18 +201,22 @@ func run(opts *server.Options) error {
 		criClient = nil
 		criConn = nil
 	}
-	if criConn != nil {
-		defer criConn.Close() //nolint:errcheck // best-effort cleanup on shutdown
-	}
 
 	reconciler := &controller.NodeReconciler{
-		NodeName:       cfg.NodeName,
-		Client:         mgr.GetClient(),
-		HostPrefix:     cfg.HostPrefix,
-		NetworkPlugins: cfg.NetworkPlugins,
-		CommonCfg:      cfg.CommonRuleConfig,
-		CriClient:      criClient,
+		NodeName:                 cfg.NodeName,
+		Client:                   mgr.GetClient(),
+		HostPrefix:               cfg.HostPrefix,
+		NetworkPlugins:           cfg.NetworkPlugins,
+		CommonCfg:                cfg.CommonRuleConfig,
+		CriClient:                criClient,
+		CriConn:                  criConn,
+		ContainerRuntimeEndpoint: cfg.ContainerRuntimeEndpoint,
 	}
+	defer func() {
+		if cerr := reconciler.CloseCRI(); cerr != nil {
+			klog.Errorf("failed to close CRI connection: %v", cerr)
+		}
+	}()
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup reconciler: %w", err)
 	}
