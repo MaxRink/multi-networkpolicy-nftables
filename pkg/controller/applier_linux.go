@@ -3,8 +3,10 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"math"
+	"os"
 
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/google/nftables"
@@ -45,7 +47,7 @@ func applyRulesForPod(deps controllers.PolicyDeps, cfg controllers.CommonRuleCon
 	return server.ApplyPolicyRulesForPodAndFamily(deps, cfg, policyMap, pod, podInfo, nft)
 }
 
-// flushRulesForPod removes all nftables tables from the pod's network namespace.
+// flushRulesForPod removes nftables tables managed by this daemon from the pod's network namespace.
 // It enters the pod namespace at the OS thread level via Do() which calls
 // runtime.LockOSThread() + setns(). A plain nftables.New() inside Do()
 // creates a netlink socket that is bound to the current (pod) namespace.
@@ -74,18 +76,27 @@ func flushRulesForPod(podNamespace, podName, netnsPath, hostPrefix string) error
 		if nftErr != nil {
 			return fmt.Errorf("failed to open nftables for pod (%s/%s): %w", podNamespace, podName, nftErr)
 		}
-		tables, listErr := nft.ListTables()
-		if listErr != nil {
-			return fmt.Errorf("failed to list tables for pod (%s/%s): %w", podNamespace, podName, listErr)
+		managedTables := []nftables.Table{
+			{Family: nftables.TableFamilyINet, Name: "filter"},
+			{Family: nftables.TableFamilyINet, Name: "nat"},
 		}
-		if len(tables) == 0 {
-			debugLog(hostPrefix, "flush-cleanup %s/%s: no tables found, nothing to clean", podNamespace, podName)
+		deleted := 0
+		for i := range managedTables {
+			table := &managedTables[i]
+			existing, listErr := nft.ListTableOfFamily(table.Name, table.Family)
+			if errors.Is(listErr, os.ErrNotExist) {
+				continue
+			}
+			if listErr != nil {
+				return fmt.Errorf("failed to list table %q for pod (%s/%s): %w", table.Name, podNamespace, podName, listErr)
+			}
+			debugLog(hostPrefix, "flush-cleanup %s/%s: DelTable %s (family=%d)", podNamespace, podName, existing.Name, existing.Family)
+			nft.DelTable(existing)
+			deleted++
+		}
+		if deleted == 0 {
+			debugLog(hostPrefix, "flush-cleanup %s/%s: no managed tables found, nothing to clean", podNamespace, podName)
 			return nil
-		}
-		debugLog(hostPrefix, "flush-cleanup %s/%s: deleting %d tables", podNamespace, podName, len(tables))
-		for _, t := range tables {
-			debugLog(hostPrefix, "flush-cleanup %s/%s: DelTable %s (family=%d)", podNamespace, podName, t.Name, t.Family)
-			nft.DelTable(t)
 		}
 		if flushErr := nft.Flush(); flushErr != nil {
 			return fmt.Errorf("failed to flush table deletions for pod (%s/%s): %w", podNamespace, podName, flushErr)
