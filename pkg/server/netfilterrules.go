@@ -119,6 +119,19 @@ func truncateNftName(name string, maxLen int) string {
 	return prefix + suffix
 }
 
+func nftNameWithSuffix(base, separator, suffix string) string {
+	sanitizedSeparator := strings.Map(sanitizeNftChar, separator)
+	sanitizedSuffix := strings.Map(sanitizeNftChar, suffix)
+	suffixLen := len(sanitizedSeparator) + len(sanitizedSuffix)
+	if suffixLen == 0 {
+		return truncateNftName(base, nftNameMaxLen)
+	}
+	if suffixLen >= nftNameMaxLen {
+		return truncateNftName(base+sanitizedSeparator+sanitizedSuffix, nftNameMaxLen)
+	}
+	return truncateNftName(base, nftNameMaxLen-suffixLen) + sanitizedSeparator + sanitizedSuffix
+}
+
 func bootstrapNetfilterChains(nftState *nftState) {
 	// the netfilter hook system
 	// ref: https://wiki.nftables.org/wiki-nftables/index.php/Netfilter_hooks
@@ -1422,7 +1435,7 @@ func (n *nftState) addIPRules(chainName string, addrs []string, chain *nftables.
 
 func (n *nftState) applyPolicyPeersRules(s *Server, chainName string, chain *nftables.Chain, policyName string, peers []multiv1beta1.MultiNetworkPolicyPeer,
 	podInfo *controllers.PodInfo, policyNetworks []string, peerIndex int) error {
-	peersName := fmt.Sprintf("%s-%s-%d", chainName, peersChainSuffix, peerIndex)
+	peersName := nftNameWithSuffix(chainName, "-", fmt.Sprintf("%s-%d", peersChainSuffix, peerIndex))
 
 	peersChain, err := n.addChain(&nftables.Chain{
 		Name:  peersName,
@@ -1520,7 +1533,7 @@ func (n *nftState) findRule(rule *nftables.Rule) (*nftables.Rule, error) {
 }
 
 func (n *nftState) getInetSet(chain *nftables.Chain, portsName, suffix string) *nftables.Set {
-	setName := fmt.Sprintf("%s_%s", getSetName(portsName), suffix)
+	setName := nftNameWithSuffix(getSetName(portsName), "_", suffix)
 	return &nftables.Set{
 		Table:    chain.Table,
 		Name:     setName,
@@ -1577,7 +1590,7 @@ func (n *nftState) applyProtoPortsRules(chainName string, chain *nftables.Chain,
 }
 
 func (n *nftState) applyPolicyPortsRules(chainName string, chain *nftables.Chain, policyName string, ports []multiv1beta1.MultiNetworkPolicyPort, portIndex int) error {
-	portsName := fmt.Sprintf("%s-%s-%d", chainName, portsChainSuffix, portIndex)
+	portsName := nftNameWithSuffix(chainName, "-", fmt.Sprintf("%s-%d", portsChainSuffix, portIndex))
 	// create ports chain
 	portChain, err := n.addChain(&nftables.Chain{
 		Name:  portsName,
