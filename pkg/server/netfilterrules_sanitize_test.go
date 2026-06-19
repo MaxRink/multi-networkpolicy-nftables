@@ -178,6 +178,72 @@ func TestTruncateNftNameDeterministicSuffix(t *testing.T) {
 	}
 }
 
+func TestNftNameWithSuffixReservesSuffixBudget(t *testing.T) {
+	longBase := strings.Repeat("policy-", 80)
+	tests := []struct {
+		name      string
+		separator string
+		suffix    string
+	}{
+		{
+			name:      "ports chain",
+			separator: "-",
+			suffix:    portsChainSuffix + "-12",
+		},
+		{
+			name:      "peers chain",
+			separator: "-",
+			suffix:    peersChainSuffix + "-34",
+		},
+		{
+			name:      "tcp set",
+			separator: "_",
+			suffix:    "tcp",
+		},
+		{
+			name:      "udp set",
+			separator: "_",
+			suffix:    "udp",
+		},
+		{
+			name:      "sctp set",
+			separator: "_",
+			suffix:    "sctp",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := nftNameWithSuffix(longBase, tt.separator, tt.suffix)
+			if len(result) > nftNameMaxLen {
+				t.Fatalf("nftNameWithSuffix result length %d exceeds %d: %q", len(result), nftNameMaxLen, result)
+			}
+			wantSuffix := tt.separator + tt.suffix
+			if !strings.HasSuffix(result, wantSuffix) {
+				t.Fatalf("nftNameWithSuffix result %q does not preserve suffix %q", result, wantSuffix)
+			}
+		})
+	}
+}
+
+func TestPolicyChildNftNamesStayWithinLimit(t *testing.T) {
+	policyChainName := truncateNftName(strings.Repeat("very-long-policy-", 40), nftNameMaxLen)
+	portsName := nftNameWithSuffix(policyChainName, "-", portsChainSuffix+"-123")
+	peersName := nftNameWithSuffix(policyChainName, "-", peersChainSuffix+"-456")
+
+	for name, value := range map[string]string{
+		"ports chain": portsName,
+		"peers chain": peersName,
+		"tcp set":     nftNameWithSuffix(getSetName(portsName), "_", "tcp"),
+		"udp set":     nftNameWithSuffix(getSetName(portsName), "_", "udp"),
+		"sctp set":    nftNameWithSuffix(getSetName(portsName), "_", "sctp"),
+	} {
+		if len(value) > nftNameMaxLen {
+			t.Fatalf("%s length %d exceeds %d: %q", name, len(value), nftNameMaxLen, value)
+		}
+	}
+}
+
 func TestUserDataCommentMaxLen(t *testing.T) {
 	// A comment within limit passes through unchanged.
 	short := strings.Repeat("a", 100)
