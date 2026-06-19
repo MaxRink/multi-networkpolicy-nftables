@@ -71,7 +71,7 @@ func NewNetDefConfig(netdefInformer netdefinformerv1.NetworkAttachmentDefinition
 		}, resyncPeriod,
 	)
 	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("cannot add net-attach-def informer event handler: %v", err))
+		utilruntime.HandleError(fmt.Errorf("cannot add net-attach-def informer event handler: %w", err))
 	}
 
 	return result

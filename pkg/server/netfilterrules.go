@@ -629,7 +629,7 @@ func getPrefixesAsSetInterval(prefixes []string) ([]nftables.SetElement, []nftab
 	for index, addr := range prefixes {
 		net, err := netip.ParsePrefix(addr) // validate
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to parse CIDR %q prefix[%d]: %v", addr, index, err)
+			return nil, nil, fmt.Errorf("failed to parse CIDR %q prefix[%d]: %w", addr, index, err)
 		}
 		if net.Addr().Is4() {
 			// specific first element to inform nftables this is an interval set
@@ -789,45 +789,45 @@ func (n *nftState) applyCommonChainRules(s *Server) error {
 	klog.V(8).Info("applying common chain rules")
 	if s.Options.acceptICMPv6 {
 		if err := n.allowICMP(n.commonIngressChain, true); err != nil {
-			return fmt.Errorf("failed to allow ICMPv6 in common ingress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMPv6 in common ingress chain: %w", err)
 		}
 		if err := n.allowICMP(n.commonEgressChain, true); err != nil {
-			return fmt.Errorf("failed to allow ICMPv6 in common egress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMPv6 in common egress chain: %w", err)
 		}
 	} else {
 		if err := n.allowNeighborDiscovery(n.commonIngressChain); err != nil {
-			return fmt.Errorf("failed to allow ICMPv6 neighbor discovery in common ingress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMPv6 neighbor discovery in common ingress chain: %w", err)
 		}
 		if err := n.allowNeighborDiscovery(n.commonEgressChain); err != nil {
-			return fmt.Errorf("failed to allow ICMPv6 neighbor discovery in common egress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMPv6 neighbor discovery in common egress chain: %w", err)
 		}
 	}
 	if s.Options.acceptICMP {
 		if err := n.allowICMP(n.commonIngressChain, false); err != nil {
-			return fmt.Errorf("failed to allow ICMP in common ingress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMP in common ingress chain: %w", err)
 		}
 		if err := n.allowICMP(n.commonEgressChain, false); err != nil {
-			return fmt.Errorf("failed to allow ICMP in common egress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMP in common egress chain: %w", err)
 		}
 	}
 
 	if len(s.Options.allowSrcPrefix) != 0 {
 		if err := n.applyCommonPrefixRules(n.commonIngressChain, s.Options.allowSrcPrefix, common); err != nil {
-			return fmt.Errorf("failed to apply common ingress rules: %v", err)
+			return fmt.Errorf("failed to apply common ingress rules: %w", err)
 		}
 	}
 
 	if len(s.Options.allowDstPrefix) != 0 {
 		if err := n.applyCommonPrefixRules(n.commonEgressChain, s.Options.allowDstPrefix, common); err != nil {
-			return fmt.Errorf("failed to apply common egress rules: %v", err)
+			return fmt.Errorf("failed to apply common egress rules: %w", err)
 		}
 	}
 	// Always allow conntracked connections
 	if err := n.allowConntracked(n.commonIngressChain); err != nil {
-		return fmt.Errorf("failed to apply common ingress conntrack rules: %v", err)
+		return fmt.Errorf("failed to apply common ingress conntrack rules: %w", err)
 	}
 	if err := n.allowConntracked(n.commonEgressChain); err != nil {
-		return fmt.Errorf("failed to apply common egress conntrack rules: %v", err)
+		return fmt.Errorf("failed to apply common egress conntrack rules: %w", err)
 	}
 
 	return nil
@@ -1689,7 +1689,7 @@ func (n *nftState) applyPodRules(s *Server, chain *nftables.Chain, podInfo *cont
 		if podIntf.CheckPolicyNetwork(policyNetworks) {
 			newRule, err := n.applyPodInterfaceRules(chain, policyChain, policy, podIntf)
 			if err != nil {
-				return newRules, fmt.Errorf("failed to apply pod interface rules for policy %q: %v", policyNamespacedName(policy), err)
+				return newRules, fmt.Errorf("failed to apply pod interface rules for policy %q: %w", policyNamespacedName(policy), err)
 			}
 			if newRule {
 				newRules = true

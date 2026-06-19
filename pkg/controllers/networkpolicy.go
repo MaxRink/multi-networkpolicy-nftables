@@ -68,7 +68,7 @@ func NewNetworkPolicyConfig(policyInformer multiinformerv1beta1.MultiNetworkPoli
 		}, resyncPeriod,
 	)
 	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("cannot add multi-networkpolicy informer event handler: %v", err))
+		utilruntime.HandleError(fmt.Errorf("cannot add multi-networkpolicy informer event handler: %w", err))
 	}
 
 	return result

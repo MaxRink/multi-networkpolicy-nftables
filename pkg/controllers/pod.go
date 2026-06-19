@@ -111,7 +111,7 @@ func NewPodConfig(podInformer coreinformers.PodInformer, resyncPeriod time.Durat
 		resyncPeriod,
 	)
 	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("cannot add pod informer event handler: %v", err))
+		utilruntime.HandleError(fmt.Errorf("cannot add pod informer event handler: %w", err))
 	}
 	return result
 }
@@ -302,14 +302,14 @@ func (pct *PodChangeTracker) getPodNetNSPath(pod *v1.Pod) (string, error) {
 			defer rpcCancel()
 			r, err := pct.criClient.ContainerStatus(rpcCtx, request)
 			if err != nil {
-				return "", fmt.Errorf("cannot get containerStatus: %v", err)
+				return "", fmt.Errorf("cannot get containerStatus: %w", err)
 			}
 
 			info := r.GetInfo()
 			var infop interface{}
 			err = json.Unmarshal([]byte(info["info"]), &infop)
 			if err != nil {
-				return "", fmt.Errorf("cannot unmarshal containerStatus info: %v", err)
+				return "", fmt.Errorf("cannot unmarshal containerStatus info: %w", err)
 			}
 			pid, ok := infop.(map[string]interface{})["pid"].(float64)
 			if !ok {
@@ -597,7 +597,7 @@ func GetCriRuntimeClient(runtimeEndpoint, hostPrefix string) (pb.RuntimeServiceC
 	// Set up a connection to the server.
 	conn, err := getRuntimeClientConnection(runtimeEndpoint, hostPrefix)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to connect: %v", err)
+		return nil, nil, fmt.Errorf("failed to connect: %w", err)
 	}
 	runtimeClient := pb.NewRuntimeServiceClient(conn)
 	return runtimeClient, conn, nil

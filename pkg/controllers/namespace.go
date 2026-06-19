@@ -67,7 +67,7 @@ func NewNamespaceConfig(nsInformer coreinformers.NamespaceInformer, resyncPeriod
 		resyncPeriod,
 	)
 	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("cannot add namespace informer event handler: %v", err))
+		utilruntime.HandleError(fmt.Errorf("cannot add namespace informer event handler: %w", err))
 	}
 	return result
 }
