@@ -267,8 +267,11 @@ func TestReconcile_RequeuesWhenApplyRulesFails(t *testing.T) {
 	}
 
 	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
-	if err != nil {
-		t.Fatalf("Reconcile() error = %v", err)
+	if err == nil {
+		t.Fatal("Reconcile() error = nil, want apply failure")
+	}
+	if !strings.Contains(err.Error(), "apply rules for") || !strings.Contains(err.Error(), "apply failed") {
+		t.Fatalf("Reconcile() error = %v, want apply failure context", err)
 	}
 	if !called {
 		t.Fatalf("expected applyRulesForPod to be called")

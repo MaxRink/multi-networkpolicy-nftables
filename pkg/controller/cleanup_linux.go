@@ -4,6 +4,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -30,6 +31,7 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.
 	}
 	debugLog(r.HostPrefix, "cleanup: found %d pods on node %s", len(podList.Items), r.NodeName)
 	targeted := 0
+	var cleanupErrs []error
 	for i := range podList.Items {
 		pod := &podList.Items[i]
 		if !controllers.IsMultiNetworkpolicyTarget(pod) {
@@ -39,20 +41,29 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.
 		criClient, err := r.criRuntimeClient()
 		if err != nil {
 			debugLog(r.HostPrefix, "cleanup: pod %s/%s: cannot connect to CRI (err=%v), skipping", pod.Namespace, pod.Name, err)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("pod %s/%s: connect to CRI: %w", pod.Namespace, pod.Name, err))
 			continue
 		}
 		netnsPath, err := controllers.GetPodNetNSPath(criClient, pod)
 		if err != nil || netnsPath == "" {
 			debugLog(r.HostPrefix, "cleanup: pod %s/%s: cannot resolve netns (err=%v), skipping", pod.Namespace, pod.Name, err)
+			if err == nil {
+				err = fmt.Errorf("empty netns path")
+			}
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("pod %s/%s: resolve netns: %w", pod.Namespace, pod.Name, err))
 			continue
 		}
 		debugLog(r.HostPrefix, "cleanup: removing rules for %s/%s (netns=%s)", pod.Namespace, pod.Name, netnsPath)
 		if err := flushRulesForPod(pod.Namespace, pod.Name, netnsPath, r.HostPrefix); err != nil {
 			debugLog(r.HostPrefix, "cleanup: FAILED to remove rules for %s/%s: %v", pod.Namespace, pod.Name, err)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("pod %s/%s: flush rules: %w", pod.Namespace, pod.Name, err))
 		} else {
 			debugLog(r.HostPrefix, "cleanup: SUCCESS removed rules for %s/%s", pod.Namespace, pod.Name)
 		}
 	}
 	debugLog(r.HostPrefix, "cleanup: finished for node %s (total=%d targeted=%d)", r.NodeName, len(podList.Items), targeted)
+	if len(cleanupErrs) > 0 {
+		return errors.Join(cleanupErrs...)
+	}
 	return nil
 }

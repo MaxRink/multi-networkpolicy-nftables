@@ -54,6 +54,62 @@ func TestPodPredicate_Update_NetworkStatusAnnotationChanged(t *testing.T) {
 	}
 }
 
+func TestPodPredicate_Update_ContainerIDChanged(t *testing.T) {
+	pred := PodPredicate()
+	oldPod := &corev1.Pod{
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:        "app",
+				ContainerID: "containerd://old",
+			}},
+		},
+		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"a": "1"}},
+	}
+	newPod := &corev1.Pod{
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:        "app",
+				ContainerID: "containerd://new",
+			}},
+		},
+		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"a": "1"}},
+	}
+
+	if !pred.Update(event.UpdateEvent{ObjectOld: oldPod, ObjectNew: newPod}) {
+		t.Fatal("expected container ID change to pass")
+	}
+}
+
+func TestPodPredicate_Update_ContainerStatusOrderOnly(t *testing.T) {
+	pred := PodPredicate()
+	oldPod := &corev1.Pod{
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "app", ContainerID: "containerd://app"},
+				{Name: "sidecar", ContainerID: "containerd://sidecar"},
+			},
+		},
+		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"a": "1"}},
+	}
+	newPod := &corev1.Pod{
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "sidecar", ContainerID: "containerd://sidecar"},
+				{Name: "app", ContainerID: "containerd://app"},
+			},
+		},
+		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"a": "1"}},
+	}
+
+	if pred.Update(event.UpdateEvent{ObjectOld: oldPod, ObjectNew: newPod}) {
+		t.Fatal("expected container status reorder to be filtered")
+	}
+}
+
 func TestPodPredicate_Delete(t *testing.T) {
 	if !PodPredicate().Delete(event.DeleteEvent{Object: &corev1.Pod{}}) {
 		t.Fatal("expected delete event to pass")

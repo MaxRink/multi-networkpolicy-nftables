@@ -16,6 +16,16 @@
 package server
 
 const (
+	// FilterTableName is the daemon-owned nftables table name for filter rules.
+	// A daemon-specific prefix prevents collisions with other programs sharing
+	// the pod network namespace.
+	FilterTableName = "multi-networkpolicy-filter"
+	// NatTableName is the daemon-owned nftables table name for NAT rules.
+	NatTableName = "multi-networkpolicy-nat"
+
+	legacyFilterTableName = "filter"
+	legacyNatTableName    = "nat"
+
 	ingressChain = "multi-ingress"
 	egressChain  = "multi-egress"
 
