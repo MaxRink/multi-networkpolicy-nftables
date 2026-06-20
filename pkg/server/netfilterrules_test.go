@@ -207,6 +207,68 @@ func TestBootstrap(t *testing.T) {
 	}
 }
 
+func TestApplyPolicyRulesForPodAndFamilyReturnsPolicyRuleError(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.FlushRuleset()
+	defer c.CloseLasting()
+	c.FlushRuleset()
+
+	namespace := "testns1"
+	pod := NewFakePodWithNetAnnotation(
+		namespace,
+		"testpod1",
+		"policy-net-1",
+		NewFakeNetworkStatus(namespace, "policy-net-1", "192.168.1.1", "10.1.1.1"),
+		map[string]string{"app": "selected"},
+	)
+	podInfo := &controllers.PodInfo{
+		Name:      pod.Name,
+		Namespace: pod.Namespace,
+		Interfaces: []controllers.InterfaceInfo{{
+			NetattachName: fmt.Sprintf("%s/%s", namespace, "policy-net-1"),
+			InterfaceName: "net1",
+			IPs:           []string{"10.1.1.1"},
+		}},
+	}
+	badPort := intstr.IntOrString{Type: intstr.Int, IntVal: 70000}
+	policy := &multiv1beta1.MultiNetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      "bad-port",
+			Annotations: map[string]string{
+				PolicyNetworkAnnotation: "policy-net-1",
+			},
+		},
+		Spec: multiv1beta1.MultiNetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": "selected"}},
+			PolicyTypes: []multiv1beta1.MultiPolicyType{
+				multiv1beta1.PolicyTypeIngress,
+			},
+			Ingress: []multiv1beta1.MultiNetworkPolicyIngressRule{{
+				Ports: []multiv1beta1.MultiNetworkPolicyPort{{Port: &badPort}},
+			}},
+		},
+	}
+
+	err := ApplyPolicyRulesForPodAndFamily(
+		NewFakeServer("server"),
+		controllers.CommonRuleConfig{},
+		controllers.PolicyMap{
+			types.NamespacedName{Namespace: namespace, Name: policy.Name}: {Policy: policy},
+		},
+		pod,
+		podInfo,
+		c,
+	)
+	if err == nil {
+		t.Fatal("ApplyPolicyRulesForPodAndFamily() error = nil, want invalid policy rule error")
+	}
+	if !strings.Contains(err.Error(), "failed to apply pod ingress rules") || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("ApplyPolicyRulesForPodAndFamily() error = %v, want invalid port context", err)
+	}
+}
+
 func TestApplyCommonChainRules(t *testing.T) {
 	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
 	defer nftest.CleanupSystemConn(t, newNS, DEBUG)

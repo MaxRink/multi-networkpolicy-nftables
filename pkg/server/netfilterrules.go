@@ -1936,6 +1936,7 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 	}
 
 	performFlush := false
+	var cleanupErrs []error
 
 	for _, chain := range chains {
 		if chain.Table.Name == table.Name {
@@ -1950,6 +1951,7 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 					klog.Warningf("failed to get key for rule %q in chain %q: %v — deleting as stale", comment, rule.Chain.Name, err)
 					if delErr := n.nft.DelRule(rule); delErr != nil {
 						klog.Errorf("failed to delete unhashable rule %q in chain %q: %v", comment, rule.Chain.Name, delErr)
+						cleanupErrs = append(cleanupErrs, fmt.Errorf("delete unhashable rule %q in chain %q: %w", comment, rule.Chain.Name, delErr))
 					} else {
 						performFlush = true
 					}
@@ -1961,6 +1963,7 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 					err = n.nft.DelRule(rule)
 					if err != nil {
 						klog.Errorf("failed to delete rule %q in chain %q: %v", comment, rule.Chain.Name, err)
+						cleanupErrs = append(cleanupErrs, fmt.Errorf("delete rule %q in chain %q: %w", comment, rule.Chain.Name, err))
 						continue
 					}
 					performFlush = true
@@ -1969,7 +1972,10 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 		}
 	}
 
-	sets, _ := n.nft.GetSets(table)
+	sets, err := n.nft.GetSets(table)
+	if err != nil {
+		return fmt.Errorf("failed to list sets for table %q: %w", table.Name, err)
+	}
 	for _, set := range sets {
 		if _, exists := n.sets[fmt.Sprintf("%s-%s", set.Table.Name, set.Name)]; !exists && !set.Anonymous {
 			klog.V(8).Infof("deleting set %q in table %q", set.Name, set.Table.Name)
@@ -1982,6 +1988,9 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 		if err := n.nft.Flush(); err != nil {
 			return fmt.Errorf("failed to flush rules/sets cleanup: %w", err)
 		}
+	}
+	if len(cleanupErrs) > 0 {
+		return errors.Join(cleanupErrs...)
 	}
 
 	return nil

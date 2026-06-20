@@ -110,7 +110,7 @@ func ApplyPolicyRulesForPodAndFamily(deps controllers.PolicyDeps, cfg controller
 		for _, policy := range ingressPolicies {
 			newRules, err := nftState.applyPodRules(deps, cfg, nftState.ingressChain, podInfo, policy.policy, policy.policyNetworks)
 			if err != nil {
-				klog.Errorf("failed to apply pod ingress rules: %v", err)
+				return fmt.Errorf("failed to apply pod ingress rules for policy %q: %w", policyNamespacedName(policy.policy), err)
 			}
 			if newRules {
 				forceUpdate = true
@@ -120,7 +120,7 @@ func ApplyPolicyRulesForPodAndFamily(deps controllers.PolicyDeps, cfg controller
 			}
 		}
 		if err := nftState.applyDropRemaining(nftState.ingressChain, forceUpdate); err != nil {
-			klog.Errorf("failed to apply drop-remaining ingress rules: %v", err)
+			return fmt.Errorf("failed to apply drop-remaining ingress rules: %w", err)
 		}
 	}
 
@@ -129,7 +129,7 @@ func ApplyPolicyRulesForPodAndFamily(deps controllers.PolicyDeps, cfg controller
 		for _, policy := range egressPolicies {
 			newRules, err := nftState.applyPodRules(deps, cfg, nftState.egressChain, podInfo, policy.policy, policy.policyNetworks)
 			if err != nil {
-				klog.Errorf("failed to apply pod egress rules: %v", err)
+				return fmt.Errorf("failed to apply pod egress rules for policy %q: %w", policyNamespacedName(policy.policy), err)
 			}
 			if newRules {
 				forceUpdate = true
@@ -139,7 +139,7 @@ func ApplyPolicyRulesForPodAndFamily(deps controllers.PolicyDeps, cfg controller
 			}
 		}
 		if err := nftState.applyDropRemaining(nftState.egressChain, forceUpdate); err != nil {
-			klog.Errorf("failed to apply drop-remaining egress rules: %v", err)
+			return fmt.Errorf("failed to apply drop-remaining egress rules: %w", err)
 		}
 	}
 	if err := nftState.nft.Flush(); err != nil {
