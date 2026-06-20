@@ -76,9 +76,12 @@ func flushRulesForPod(podNamespace, podName, netnsPath, hostPrefix string) error
 		if nftErr != nil {
 			return fmt.Errorf("failed to open nftables for pod (%s/%s): %w", podNamespace, podName, nftErr)
 		}
+		if err := server.CleanupLegacyTables(nft); err != nil {
+			return fmt.Errorf("failed to clean legacy daemon-owned tables for pod (%s/%s): %w", podNamespace, podName, err)
+		}
 		managedTables := []nftables.Table{
-			{Family: nftables.TableFamilyINet, Name: "filter"},
-			{Family: nftables.TableFamilyINet, Name: "nat"},
+			{Family: nftables.TableFamilyINet, Name: server.FilterTableName},
+			{Family: nftables.TableFamilyINet, Name: server.NatTableName},
 		}
 		deleted := 0
 		for i := range managedTables {

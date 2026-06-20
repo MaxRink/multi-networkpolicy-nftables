@@ -7,8 +7,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// PodPredicate filters pod events: allows Create/Delete, allows Update only if pod phase,
-// labels, or network-related annotations changed.
+// PodPredicate filters pod events: allows Create/Delete, allows Update only if
+// pod phase, labels, container IDs, or network-related annotations changed.
 func PodPredicate() predicate.Predicate {
 	return predicate.Funcs{
 		CreateFunc: func(event.CreateEvent) bool { return true },
@@ -24,6 +24,9 @@ func PodPredicate() predicate.Predicate {
 				return true
 			}
 			if labelsChanged(oldPod.Labels, newPod.Labels) {
+				return true
+			}
+			if containerStatusesChanged(oldPod.Status.ContainerStatuses, newPod.Status.ContainerStatuses) {
 				return true
 			}
 			return networkAnnotationsChanged(oldPod.Annotations, newPod.Annotations)
@@ -65,6 +68,25 @@ func labelsChanged(oldLabels, newLabels map[string]string) bool {
 		}
 	}
 
+	return false
+}
+
+func containerStatusesChanged(oldStatuses, newStatuses []corev1.ContainerStatus) bool {
+	if len(oldStatuses) != len(newStatuses) {
+		return true
+	}
+
+	oldByName := make(map[string]string, len(oldStatuses))
+	for _, status := range oldStatuses {
+		oldByName[status.Name] = status.ContainerID
+	}
+
+	for _, status := range newStatuses {
+		oldID, ok := oldByName[status.Name]
+		if !ok || oldID != status.ContainerID {
+			return true
+		}
+	}
 	return false
 }
 

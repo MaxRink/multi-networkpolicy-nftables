@@ -196,14 +196,126 @@ func addTable(nft *nftables.Conn, table *nftables.Table) (*nftables.Table, error
 	return t, nil
 }
 
+const (
+	inputInterfaceFilterComment  = "input-interface-filter"
+	outputInterfaceFilterComment = "output-interface-filter"
+	natFilterRuleComment         = "nat-filter-rule"
+)
+
+var legacyDaemonChainNames = map[string]bool{
+	ingressChain: true,
+	egressChain:  true,
+	fmt.Sprintf("%s-%s", ingressChain, common): true,
+	fmt.Sprintf("%s-%s", egressChain, common):  true,
+}
+
+var legacyDaemonBaseChainNames = map[string]bool{
+	"input":      true,
+	"output":     true,
+	"prerouting": true,
+}
+
+var legacyDaemonRuleComments = map[string]bool{
+	inputInterfaceFilterComment:  true,
+	outputInterfaceFilterComment: true,
+	natFilterRuleComment:         true,
+}
+
+// CleanupLegacyTables removes only daemon-owned objects that older daemon
+// versions created in generic "filter" and "nat" inet tables. It must not
+// delete the shared tables themselves.
+func CleanupLegacyTables(nft *nftables.Conn) error {
+	legacyNames := map[string]bool{
+		legacyFilterTableName: true,
+		legacyNatTableName:    true,
+	}
+
+	allTables, err := nft.ListTablesOfFamily(nftables.TableFamilyINet)
+	if err != nil {
+		return fmt.Errorf("cleanup legacy tables: list inet tables: %w", err)
+	}
+
+	flushed := false
+	for _, table := range allTables {
+		if !legacyNames[table.Name] {
+			continue
+		}
+
+		chains, err := nft.ListChainsOfTableFamily(nftables.TableFamilyINet)
+		if err != nil {
+			return fmt.Errorf("cleanup legacy tables: list chains for table %q: %w", table.Name, err)
+		}
+
+		for _, chain := range chains {
+			if chain.Table.Name != table.Name || !legacyDaemonBaseChainNames[chain.Name] {
+				continue
+			}
+			rules, err := nft.GetRules(table, chain)
+			if err != nil {
+				return fmt.Errorf("cleanup legacy tables: list rules for chain %q in table %q: %w", chain.Name, table.Name, err)
+			}
+			for _, rule := range rules {
+				if !legacyDaemonRule(rule) {
+					continue
+				}
+				comment, _ := userdata.GetString(rule.UserData, userdata.TypeComment)
+				klog.V(2).Infof("removing daemon-owned legacy rule %q from chain %q in table %q", comment, chain.Name, table.Name)
+				if err := nft.DelRule(rule); err != nil {
+					klog.Errorf("failed to delete daemon-owned legacy rule %q from chain %q in table %q: %v", comment, chain.Name, table.Name, err)
+					continue
+				}
+				flushed = true
+			}
+		}
+
+		for _, chain := range chains {
+			if chain.Table.Name != table.Name || !legacyDaemonChainNames[chain.Name] {
+				continue
+			}
+			klog.V(2).Infof("removing daemon-owned legacy chain %q from table %q", chain.Name, table.Name)
+			nft.DelChain(chain)
+			flushed = true
+		}
+
+		sets, err := nft.GetSets(table)
+		if err != nil {
+			return fmt.Errorf("cleanup legacy tables: list sets for table %q: %w", table.Name, err)
+		}
+		for _, set := range sets {
+			if set.Name != podInterfacesName {
+				continue
+			}
+			klog.V(2).Infof("removing daemon-owned legacy set %q from table %q", set.Name, table.Name)
+			nft.DelSet(set)
+			flushed = true
+		}
+	}
+
+	if flushed {
+		if err := nft.Flush(); err != nil {
+			return fmt.Errorf("cleanup legacy tables: flush: %w", err)
+		}
+	}
+	return nil
+}
+
+func legacyDaemonRule(rule *nftables.Rule) bool {
+	comment, ok := userdata.GetString(rule.UserData, userdata.TypeComment)
+	return ok && legacyDaemonRuleComments[comment]
+}
+
 func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (*nftState, error) {
 	if podInfo == nil || len(podInfo.Interfaces) == 0 {
 		return nil, fmt.Errorf("podInfo or podInfo.Interfaces is nil/empty")
 	}
 
+	if err := CleanupLegacyTables(nft); err != nil {
+		return nil, err
+	}
+
 	filterTable, err := addTable(nft, &nftables.Table{
 		Family: nftables.TableFamilyINet,
-		Name:   "filter",
+		Name:   FilterTableName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to add table: %w", err)
@@ -211,7 +323,7 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 
 	natTable, err := addTable(nft, &nftables.Table{
 		Family: nftables.TableFamilyINet,
-		Name:   "nat",
+		Name:   NatTableName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to add table: %w", err)
@@ -261,9 +373,6 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 	if err := nftState.updateSet(nftState.interfaceFilterSet, interfaceSetElements); err != nil {
 		return nftState, fmt.Errorf("failed to update set %q: %w", nftState.interfaceFilterSet.Name, err)
 	}
-
-	inputInterfaceFilterComment := "input-interface-filter"
-	outputInterfaceFilterComment := "output-interface-filter"
 
 	filterInputRule := &nftables.Rule{
 		Table:    nftState.filter,
@@ -318,7 +427,7 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 	if _, err := nftState.updateRule(&nftables.Rule{
 		Table:    nftState.nat,
 		Chain:    nftState.prerouting,
-		UserData: userDataComment("nat-filter-rule"),
+		UserData: userDataComment(natFilterRuleComment),
 		Exprs: []expr.Any{
 			&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 0x1},
 			&expr.Lookup{
@@ -1885,7 +1994,14 @@ func (n *nftState) cleanupChains() error {
 	}
 
 	performFlush := false
+	managedTableNames := map[string]bool{
+		n.filter.Name: true,
+		n.nat.Name:    true,
+	}
 	for _, chain := range chains {
+		if !managedTableNames[chain.Table.Name] {
+			continue
+		}
 		rules, err := n.nft.GetRules(chain.Table, chain)
 		if err != nil {
 			return fmt.Errorf("failed to get rules for table %q, chain %q: %w", chain.Table.Name, chain.Name, err)

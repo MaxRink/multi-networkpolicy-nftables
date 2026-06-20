@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -81,6 +82,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	deps := r.policyDeps()
 	retryNeeded := false
+	var retryErrs []error
 	for i := range podList.Items {
 		pod := &podList.Items[i]
 		if !controllers.IsMultiNetworkpolicyTarget(pod) {
@@ -91,6 +93,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		if err != nil {
 			klog.Errorf("failed to get pod info for %s/%s: %v", pod.Namespace, pod.Name, err)
 			retryNeeded = true
+			retryErrs = append(retryErrs, fmt.Errorf("get pod info for %s/%s: %w", pod.Namespace, pod.Name, err))
 			continue
 		}
 		if podInfo == nil || len(podInfo.Interfaces) == 0 {
@@ -104,9 +107,13 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		if err := r.applyRulesForPod(deps, r.CommonCfg, policyMap, pod, podInfo, r.HostPrefix); err != nil {
 			klog.Errorf("failed to apply rules for %s/%s: %v", pod.Namespace, pod.Name, err)
 			retryNeeded = true
+			retryErrs = append(retryErrs, fmt.Errorf("apply rules for %s/%s: %w", pod.Namespace, pod.Name, err))
 		}
 	}
 
+	if len(retryErrs) > 0 {
+		return ctrl.Result{RequeueAfter: 2 * time.Second}, errors.Join(retryErrs...)
+	}
 	if retryNeeded {
 		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 	}
