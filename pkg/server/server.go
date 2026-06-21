@@ -17,6 +17,7 @@ limitations under the License.
 package server
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -471,6 +472,7 @@ func (s *Server) syncMultiPolicy() error {
 		return fmt.Errorf("failed to list pods for sync: %w", err)
 	}
 	cleanedPods := 0
+	var cleanupErrs []error
 	for _, p := range pods {
 		s.podMap.Update(s.podChanges)
 		if !controllers.IsMultiNetworkpolicyTarget(p) {
@@ -481,7 +483,10 @@ func (s *Server) syncMultiPolicy() error {
 		if multiutils.CheckNodeNameIdentical(s.Hostname, p.Spec.NodeName) {
 			if err := s.applyPolicyForPod(p); err != nil {
 				if shutdown {
-					return fmt.Errorf("failed to cleanup netfilter rules for pod [%s]: %w", podNamespacedName(p), err)
+					cleanupErr := fmt.Errorf("failed to cleanup netfilter rules for pod [%s]: %w", podNamespacedName(p), err)
+					klog.Errorf("%v", cleanupErr)
+					cleanupErrs = append(cleanupErrs, cleanupErr)
+					continue
 				}
 				klog.Errorf("can't apply netfilter rules for pod [%s]: %v", podNamespacedName(p), err)
 				continue
@@ -494,7 +499,10 @@ func (s *Server) syncMultiPolicy() error {
 		}
 	}
 	if shutdown {
-		klog.Infof("Shutdown cleanup completed for %d pod network namespaces", cleanedPods)
+		klog.Infof("Shutdown cleanup completed for %d pod network namespaces with %d failures", cleanedPods, len(cleanupErrs))
+		if len(cleanupErrs) > 0 {
+			return errors.Join(cleanupErrs...)
+		}
 	}
 	return nil
 }
