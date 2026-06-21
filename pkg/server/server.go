@@ -164,8 +164,9 @@ func (s *Server) Run(_ string, stopCh chan struct{}) {
 
 	// Delete all iptables by running the `syncMultiPolicy` with no MultiNetworkPolicies
 	s.policyMap = nil
-	// Currently not interested in this error as it is already logged.
-	_ = s.syncMultiPolicy()
+	if err := s.syncMultiPolicy(); err != nil {
+		klog.Errorf("shutdown cleanup failed: %v", err)
+	}
 }
 
 func (s *Server) setInitialized(value bool) {
@@ -460,15 +461,16 @@ func (s *Server) OnNamespaceSynced() {
 
 func (s *Server) syncMultiPolicy() error {
 	klog.V(4).Infof("syncMultiPolicy")
-	s.namespaceMap.Update(s.nsChanges)
-	s.podMap.Update(s.podChanges)
-	s.policyMap.Update(s.policyChanges)
+	shutdown := s.shuttingDown.Load()
+
+	s.updateSyncMaps(shutdown)
 
 	pods, err := s.podLister.Pods(metav1.NamespaceAll).List(labels.Everything())
 	if err != nil {
 		klog.Errorf("failed to get pods: %v", err)
 		return fmt.Errorf("failed to list pods for sync: %w", err)
 	}
+	cleanedPods := 0
 	for _, p := range pods {
 		s.podMap.Update(s.podChanges)
 		if !controllers.IsMultiNetworkpolicyTarget(p) {
@@ -478,13 +480,33 @@ func (s *Server) syncMultiPolicy() error {
 		klog.V(8).Infof("SYNC %s/%s", p.Namespace, p.Name)
 		if multiutils.CheckNodeNameIdentical(s.Hostname, p.Spec.NodeName) {
 			if err := s.applyPolicyForPod(p); err != nil {
+				if shutdown {
+					return fmt.Errorf("failed to cleanup netfilter rules for pod [%s]: %w", podNamespacedName(p), err)
+				}
 				klog.Errorf("can't apply netfilter rules for pod [%s]: %v", podNamespacedName(p), err)
+				continue
+			}
+			if shutdown {
+				cleanedPods++
 			}
 		} else {
 			klog.V(8).Infof("SYNC %s/%s: skipped", p.Namespace, p.Name)
 		}
 	}
+	if shutdown {
+		klog.Infof("Shutdown cleanup completed for %d pod network namespaces", cleanedPods)
+	}
 	return nil
+}
+
+func (s *Server) updateSyncMaps(shutdown bool) {
+	s.namespaceMap.Update(s.nsChanges)
+	s.podMap.Update(s.podChanges)
+	if shutdown {
+		s.policyMap = make(controllers.PolicyMap)
+		return
+	}
+	s.policyMap.Update(s.policyChanges)
 }
 
 func (s *Server) applyPolicyForPod(p *v1.Pod) error {

@@ -46,6 +46,33 @@ import (
 
 const DEBUG = false
 
+func TestUpdateSyncMapsKeepsShutdownPolicyMapEmpty(t *testing.T) {
+	s := &Server{
+		namespaceMap:  make(controllers.NamespaceMap),
+		podMap:        make(controllers.PodMap),
+		policyMap:     make(controllers.PolicyMap),
+		policyChanges: controllers.NewPolicyChangeTracker(),
+	}
+	policy := &multiv1beta1.MultiNetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "test",
+			Name:      "test-multinetwork-policy-simple-1",
+		},
+	}
+
+	s.policyChanges.Update(nil, policy)
+	s.updateSyncMaps(true)
+	if got := len(s.policyMap); got != 0 {
+		t.Fatalf("expected shutdown sync to keep an empty policy map, got %d policies", got)
+	}
+
+	s.policyChanges.Update(nil, policy)
+	s.updateSyncMaps(false)
+	if got := len(s.policyMap); got != 1 {
+		t.Fatalf("expected normal sync to apply pending policy changes, got %d policies", got)
+	}
+}
+
 func TestBootstrap(t *testing.T) {
 	// Open a system connection in a separate network namespace it requires root
 	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
@@ -1619,6 +1646,9 @@ func TestShutdownCleanupRemovesBootstrapChains(t *testing.T) {
 	}
 	if !ruleCommentExists(t, c, bootstrapState.filter, "multi-ingress-test-multinetwork-policy-simple-1", "policy:test/test-multinetwork-policy-simple-1, ports") {
 		t.Fatalf("expected generated policy rule to exist before shutdown cleanup")
+	}
+	if !ruleCommentExists(t, c, bootstrapState.filter, bootstrapState.ingressChain.Name, "policy:test/test-multinetwork-policy-simple-1, jump") {
+		t.Fatalf("expected generated policy jump to exist before shutdown cleanup")
 	}
 	if !chainExists(t, c, foreignTable.Name, foreignChain.Name) {
 		t.Fatalf("expected foreign empty chain to exist before shutdown cleanup")
