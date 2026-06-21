@@ -75,6 +75,8 @@ type nftState struct {
 	rules  map[string]*nftables.Rule
 	sets   map[string]*nftables.Set
 	chains map[string]*nftables.Chain
+
+	shutdownCleanup bool
 }
 
 func policyRuleNamespacedName(o *multiv1beta1.MultiNetworkPolicy) string {
@@ -335,7 +337,7 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 
 // shutdownNftState creates a minimal nftState for shutdown cleanup.
 // It resolves table references but registers no desired rules, sets, or chains,
-// causing cleanup to remove all existing nftables state.
+// causing cleanup to remove only daemon-owned nftables state.
 func shutdownNftState(nft *nftables.Conn) (*nftState, error) {
 	filterTable, err := addTable(nft, &nftables.Table{
 		Family: nftables.TableFamilyINet,
@@ -360,7 +362,47 @@ func shutdownNftState(nft *nftables.Conn) (*nftState, error) {
 		rules:  make(map[string]*nftables.Rule),
 		sets:   make(map[string]*nftables.Set),
 		chains: make(map[string]*nftables.Chain),
+
+		shutdownCleanup: true,
 	}, nil
+}
+
+func shutdownDaemonChain(chainName string) bool {
+	switch chainName {
+	case ingressChain, egressChain,
+		fmt.Sprintf("%s-%s", ingressChain, common),
+		fmt.Sprintf("%s-%s", egressChain, common):
+		return true
+	default:
+		return false
+	}
+}
+
+func shutdownDaemonRule(rule *nftables.Rule) bool {
+	if shutdownDaemonChain(rule.Chain.Name) {
+		return true
+	}
+
+	comment, _ := userdata.GetString(rule.UserData, userdata.TypeComment)
+	switch comment {
+	case "input-interface-filter", "output-interface-filter", "nat-filter-rule":
+		return true
+	default:
+		return false
+	}
+}
+
+func shutdownDaemonSet(set *nftables.Set) bool {
+	if set.Name != podInterfacesName {
+		return false
+	}
+
+	switch set.Comment {
+	case "Pod interfaces", "Pod interfaces NAT":
+		return true
+	default:
+		return false
+	}
 }
 
 func (n *nftState) updateRule(rule *nftables.Rule, action func(r *nftables.Rule) *nftables.Rule, forceUpdate bool) (bool, error) {
@@ -1826,6 +1868,10 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 				return fmt.Errorf("failed to list rules for table %q, chain %q: %w", table.Name, chain.Name, err)
 			}
 			for _, rule := range rules {
+				if n.shutdownCleanup && !shutdownDaemonRule(rule) {
+					continue
+				}
+
 				key, err := hash(rule)
 				if err != nil {
 					comment, _ := userdata.GetString(rule.UserData, userdata.TypeComment)
@@ -1853,6 +1899,10 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 
 	sets, _ := n.nft.GetSets(table)
 	for _, set := range sets {
+		if n.shutdownCleanup && !shutdownDaemonSet(set) {
+			continue
+		}
+
 		if _, exists := n.sets[fmt.Sprintf("%s-%s", set.Table.Name, set.Name)]; !exists && !set.Anonymous {
 			klog.V(8).Infof("deleting set %q in table %q", set.Name, set.Table.Name)
 			n.nft.DelSet(set)
@@ -1888,6 +1938,9 @@ func (n *nftState) cleanupChainsOfTable(table *nftables.Table) error {
 	performFlush := false
 	for _, chain := range chains {
 		if chain.Table.Name != table.Name {
+			continue
+		}
+		if n.shutdownCleanup && !shutdownDaemonChain(chain.Name) {
 			continue
 		}
 

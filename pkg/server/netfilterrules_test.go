@@ -1383,13 +1383,29 @@ func bootstrapChainNames() []struct{ table, name string } {
 	}
 }
 
+func shutdownDaemonChainNames() []struct{ table, name string } {
+	return []struct{ table, name string }{
+		{"filter", ingressChain},
+		{"filter", egressChain},
+		{"filter", fmt.Sprintf("%s-%s", ingressChain, common)},
+		{"filter", fmt.Sprintf("%s-%s", egressChain, common)},
+	}
+}
+
 func countBootstrapChains(t *testing.T, c *nftables.Conn) int {
+	return countChains(t, c, bootstrapChainNames())
+}
+
+func countShutdownDaemonChains(t *testing.T, c *nftables.Conn) int {
+	return countChains(t, c, shutdownDaemonChainNames())
+}
+
+func countChains(t *testing.T, c *nftables.Conn, expected []struct{ table, name string }) int {
 	t.Helper()
 	chains, err := c.ListChains()
 	if err != nil {
 		t.Fatalf("failed to list chains: %v", err)
 	}
-	expected := bootstrapChainNames()
 	found := 0
 	for _, chain := range chains {
 		for _, want := range expected {
@@ -1410,6 +1426,35 @@ func chainExists(t *testing.T, c *nftables.Conn, tableName, chainName string) bo
 	}
 	for _, chain := range chains {
 		if chain.Table.Name == tableName && chain.Name == chainName {
+			return true
+		}
+	}
+	return false
+}
+
+func setExists(t *testing.T, c *nftables.Conn, table *nftables.Table, setName string) bool {
+	t.Helper()
+	sets, err := c.GetSets(table)
+	if err != nil {
+		t.Fatalf("failed to list sets for table %q: %v", table.Name, err)
+	}
+	for _, set := range sets {
+		if set.Name == setName {
+			return true
+		}
+	}
+	return false
+}
+
+func ruleCommentExists(t *testing.T, c *nftables.Conn, table *nftables.Table, chainName, comment string) bool {
+	t.Helper()
+	rules, err := c.GetRules(table, &nftables.Chain{Table: table, Name: chainName})
+	if err != nil {
+		t.Fatalf("failed to list rules for table %q, chain %q: %v", table.Name, chainName, err)
+	}
+	for _, rule := range rules {
+		got, _ := userdata.GetString(rule.UserData, userdata.TypeComment)
+		if got == comment {
 			return true
 		}
 	}
@@ -1441,6 +1486,30 @@ func TestShutdownCleanupRemovesBootstrapChains(t *testing.T) {
 		t.Fatalf("expected %d bootstrap chains after bootstrap, got %d", len(bootstrapChainNames()), got)
 	}
 
+	foreignFilterChain := &nftables.Chain{Table: bootstrapState.filter, Name: "foreign-filter"}
+	c.AddChain(foreignFilterChain)
+	c.AddRule(&nftables.Rule{
+		Table:    bootstrapState.filter,
+		Chain:    bootstrapState.input,
+		UserData: userDataComment("foreign-input-rule"),
+		Exprs:    []expr.Any{&expr.Counter{}},
+	})
+	c.AddRule(&nftables.Rule{
+		Table:    bootstrapState.filter,
+		Chain:    foreignFilterChain,
+		UserData: userDataComment("foreign-filter-rule"),
+		Exprs:    []expr.Any{&expr.Counter{}},
+	})
+	if err := c.AddSet(&nftables.Set{
+		Table:        bootstrapState.filter,
+		Name:         "foreign_ifaces",
+		KeyType:      nftables.TypeIFName,
+		KeyByteOrder: binaryutil.NativeEndian,
+		Comment:      "foreign interfaces",
+	}, nil); err != nil {
+		t.Fatalf("failed to add foreign filter set: %v", err)
+	}
+
 	foreignTable := &nftables.Table{Family: nftables.TableFamilyINet, Name: "foreign"}
 	foreignChain := &nftables.Chain{Table: foreignTable, Name: "foreign-empty"}
 	c.AddTable(foreignTable)
@@ -1451,8 +1520,18 @@ func TestShutdownCleanupRemovesBootstrapChains(t *testing.T) {
 	if !chainExists(t, c, foreignTable.Name, foreignChain.Name) {
 		t.Fatalf("expected foreign empty chain to exist before shutdown cleanup")
 	}
-
-	_ = bootstrapState
+	if !chainExists(t, c, bootstrapState.filter.Name, foreignFilterChain.Name) {
+		t.Fatalf("expected foreign filter chain to exist before shutdown cleanup")
+	}
+	if !ruleCommentExists(t, c, bootstrapState.filter, bootstrapState.input.Name, "foreign-input-rule") {
+		t.Fatalf("expected foreign input rule to exist before shutdown cleanup")
+	}
+	if !ruleCommentExists(t, c, bootstrapState.filter, foreignFilterChain.Name, "foreign-filter-rule") {
+		t.Fatalf("expected foreign filter rule to exist before shutdown cleanup")
+	}
+	if !setExists(t, c, bootstrapState.filter, "foreign_ifaces") {
+		t.Fatalf("expected foreign set to exist before shutdown cleanup")
+	}
 
 	shutdownState, err := shutdownNftState(c)
 	if err != nil {
@@ -1463,11 +1542,23 @@ func TestShutdownCleanupRemovesBootstrapChains(t *testing.T) {
 		t.Fatalf("cleanup() during shutdown failed: %v", err)
 	}
 
-	if got := countBootstrapChains(t, c); got != 0 {
-		t.Errorf("expected 0 bootstrap chains after shutdown cleanup, got %d", got)
+	if got := countShutdownDaemonChains(t, c); got != 0 {
+		t.Errorf("expected 0 daemon chains after shutdown cleanup, got %d", got)
 	}
 	if !chainExists(t, c, foreignTable.Name, foreignChain.Name) {
 		t.Errorf("expected shutdown cleanup to preserve foreign empty chain")
+	}
+	if !chainExists(t, c, bootstrapState.filter.Name, foreignFilterChain.Name) {
+		t.Errorf("expected shutdown cleanup to preserve foreign filter chain")
+	}
+	if !ruleCommentExists(t, c, bootstrapState.filter, bootstrapState.input.Name, "foreign-input-rule") {
+		t.Errorf("expected shutdown cleanup to preserve foreign input rule")
+	}
+	if !ruleCommentExists(t, c, bootstrapState.filter, foreignFilterChain.Name, "foreign-filter-rule") {
+		t.Errorf("expected shutdown cleanup to preserve foreign filter rule")
+	}
+	if !setExists(t, c, bootstrapState.filter, "foreign_ifaces") {
+		t.Errorf("expected shutdown cleanup to preserve foreign set")
 	}
 }
 
