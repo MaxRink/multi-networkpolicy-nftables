@@ -35,6 +35,16 @@ func TestPodPredicate_Update_NoChange(t *testing.T) {
 	}
 }
 
+func TestPodPredicate_Update_NodeNameChanged(t *testing.T) {
+	pred := PodPredicate()
+	oldPod := &corev1.Pod{Spec: corev1.PodSpec{}, Status: corev1.PodStatus{Phase: corev1.PodPending}}
+	newPod := &corev1.Pod{Spec: corev1.PodSpec{NodeName: "node-a"}, Status: corev1.PodStatus{Phase: corev1.PodPending}}
+
+	if !pred.Update(event.UpdateEvent{ObjectOld: oldPod, ObjectNew: newPod}) {
+		t.Fatal("expected nodeName change to pass")
+	}
+}
+
 func TestPodPredicate_Update_NetworkStatusAnnotationChanged(t *testing.T) {
 	pred := PodPredicate()
 	oldPod := &corev1.Pod{
@@ -131,6 +141,52 @@ func TestPolicyPredicate_Update_StatusOnly(t *testing.T) {
 
 	if PolicyPredicate().Update(event.UpdateEvent{ObjectOld: oldObj, ObjectNew: newObj}) {
 		t.Fatal("expected same generation to be filtered")
+	}
+}
+
+func TestPolicyPredicate_Update_PolicyNetworkAnnotationChanged(t *testing.T) {
+	oldObj := &multiv1beta1.MultiNetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Generation: 3,
+			Annotations: map[string]string{
+				policyNetworkAnnotation: "net-a",
+			},
+		},
+	}
+	newObj := &multiv1beta1.MultiNetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Generation: 3,
+			Annotations: map[string]string{
+				policyNetworkAnnotation: "net-b",
+			},
+		},
+	}
+
+	if !PolicyPredicate().Update(event.UpdateEvent{ObjectOld: oldObj, ObjectNew: newObj}) {
+		t.Fatal("expected policy network annotation change to pass")
+	}
+}
+
+func TestPolicyPredicate_Update_UnrelatedAnnotationOnly(t *testing.T) {
+	oldObj := &multiv1beta1.MultiNetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Generation: 3,
+			Annotations: map[string]string{
+				"example.com/other": "old",
+			},
+		},
+	}
+	newObj := &multiv1beta1.MultiNetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Generation: 3,
+			Annotations: map[string]string{
+				"example.com/other": "new",
+			},
+		},
+	}
+
+	if PolicyPredicate().Update(event.UpdateEvent{ObjectOld: oldObj, ObjectNew: newObj}) {
+		t.Fatal("expected unrelated annotation change to be filtered")
 	}
 }
 
