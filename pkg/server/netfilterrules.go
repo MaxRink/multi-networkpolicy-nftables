@@ -234,6 +234,11 @@ var legacyDaemonRuleComments = map[string]bool{
 	natFilterRuleComment:         true,
 }
 
+var legacyDaemonSetComments = map[string]bool{
+	"Pod interfaces":     true,
+	"Pod interfaces NAT": true,
+}
+
 // CleanupLegacyTables removes only daemon-owned objects that older daemon
 // versions created in generic "filter" and "nat" inet tables. It must not
 // delete the shared tables themselves.
@@ -248,7 +253,6 @@ func CleanupLegacyTables(nft *nftables.Conn) error {
 		return fmt.Errorf("cleanup legacy tables: list inet tables: %w", err)
 	}
 
-	flushed := false
 	for _, table := range allTables {
 		if !legacyNames[table.Name] {
 			continue
@@ -277,12 +281,23 @@ func CleanupLegacyTables(nft *nftables.Conn) error {
 					klog.Errorf("failed to delete daemon-owned legacy rule %q from chain %q in table %q: %v", comment, chain.Name, table.Name, err)
 					continue
 				}
-				flushed = true
+				if err := nft.Flush(); err != nil {
+					return fmt.Errorf("cleanup legacy tables: flush daemon-owned rule delete for chain %q in table %q: %w", chain.Name, table.Name, err)
+				}
 			}
 		}
 
+		flushed := false
 		for _, chain := range chains {
 			if chain.Table.Name != table.Name || !legacyDaemonChainNames[chain.Name] {
+				continue
+			}
+			referenced, err := legacyChainReferenced(nft, table, chain.Name)
+			if err != nil {
+				return err
+			}
+			if referenced {
+				klog.V(2).Infof("preserving daemon-owned legacy chain %q in table %q because remaining rules still reference it", chain.Name, table.Name)
 				continue
 			}
 			klog.V(2).Infof("removing daemon-owned legacy chain %q from table %q", chain.Name, table.Name)
@@ -295,18 +310,17 @@ func CleanupLegacyTables(nft *nftables.Conn) error {
 			return fmt.Errorf("cleanup legacy tables: list sets for table %q: %w", table.Name, err)
 		}
 		for _, set := range sets {
-			if set.Name != podInterfacesName {
+			if !legacyDaemonSet(set) {
 				continue
 			}
 			klog.V(2).Infof("removing daemon-owned legacy set %q from table %q", set.Name, table.Name)
 			nft.DelSet(set)
 			flushed = true
 		}
-	}
-
-	if flushed {
-		if err := nft.Flush(); err != nil {
-			return fmt.Errorf("cleanup legacy tables: flush: %w", err)
+		if flushed {
+			if err := nft.Flush(); err != nil {
+				return fmt.Errorf("cleanup legacy tables: flush: %w", err)
+			}
 		}
 	}
 	return nil
@@ -315,6 +329,45 @@ func CleanupLegacyTables(nft *nftables.Conn) error {
 func legacyDaemonRule(rule *nftables.Rule) bool {
 	comment, ok := userdata.GetString(rule.UserData, userdata.TypeComment)
 	return ok && legacyDaemonRuleComments[comment]
+}
+
+func legacyDaemonSet(set *nftables.Set) bool {
+	return set.Name == podInterfacesName && legacyDaemonSetComments[set.Comment]
+}
+
+func legacyChainReferenced(nft *nftables.Conn, table *nftables.Table, chainName string) (bool, error) {
+	chains, err := nft.ListChainsOfTableFamily(table.Family)
+	if err != nil {
+		return false, fmt.Errorf("cleanup legacy tables: list chains for table %q: %w", table.Name, err)
+	}
+	for _, chain := range chains {
+		if chain.Table.Name != table.Name {
+			continue
+		}
+		rules, err := nft.GetRules(table, chain)
+		if err != nil {
+			return false, fmt.Errorf("cleanup legacy tables: list rules for chain %q in table %q: %w", chain.Name, table.Name, err)
+		}
+		for _, rule := range rules {
+			if ruleReferencesChain(rule, chainName) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func ruleReferencesChain(rule *nftables.Rule, chainName string) bool {
+	for _, ruleExpr := range rule.Exprs {
+		verdict, ok := ruleExpr.(*expr.Verdict)
+		if !ok {
+			continue
+		}
+		if verdict.Chain == chainName && (verdict.Kind == expr.VerdictJump || verdict.Kind == expr.VerdictGoto) {
+			return true
+		}
+	}
+	return false
 }
 
 func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (*nftState, error) {
