@@ -374,11 +374,15 @@ func shutdownDaemonChain(chainName string) bool {
 		fmt.Sprintf("%s-%s", egressChain, common):
 		return true
 	default:
-		return false
+		return strings.HasPrefix(chainName, ingressChain+"-") ||
+			strings.HasPrefix(chainName, egressChain+"-")
 	}
 }
 
 func shutdownDaemonRule(rule *nftables.Rule) bool {
+	if rule == nil || rule.Chain == nil {
+		return false
+	}
 	if shutdownDaemonChain(rule.Chain.Name) {
 		return true
 	}
@@ -393,6 +397,25 @@ func shutdownDaemonRule(rule *nftables.Rule) bool {
 }
 
 func shutdownDaemonSet(set *nftables.Set) bool {
+	if set == nil {
+		return false
+	}
+
+	if strings.HasPrefix(set.Name, ingressChain+"-") ||
+		strings.HasPrefix(set.Name, egressChain+"-") ||
+		strings.HasPrefix(set.Name, getSetName(ingressChain)+"_") ||
+		strings.HasPrefix(set.Name, getSetName(egressChain)+"_") {
+		return true
+	}
+
+	switch set.Name {
+	case fmt.Sprintf("%s_%s_%s", common, protoIPv4, sourceAddressSuffix),
+		fmt.Sprintf("%s_%s_%s", common, protoIPv4, destinationAddressSuffix),
+		fmt.Sprintf("%s_%s_%s", common, protoIPv6, sourceAddressSuffix),
+		fmt.Sprintf("%s_%s_%s", common, protoIPv6, destinationAddressSuffix):
+		return true
+	}
+
 	if set.Name != podInterfacesName {
 		return false
 	}
