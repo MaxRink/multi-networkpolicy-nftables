@@ -227,14 +227,29 @@ func run(opts *server.Options) error {
 	}
 
 	klog.Infof("Starting manager for node %s", cfg.NodeName)
-	if err := mgr.Start(ctx); err != nil {
-		return err
+	return startManagerAndCleanup(ctx, mgr, 45*time.Second, func(cleanupCtx context.Context) error {
+		return controller.CleanupOnShutdown(cleanupCtx, reconciler, directClient)
+	})
+}
+
+func startManagerAndCleanup(
+	ctx context.Context,
+	mgr managerStarter,
+	cleanupTimeout time.Duration,
+	cleanup func(context.Context) error,
+) error {
+	startErr := mgr.Start(ctx)
+	if startErr != nil {
+		klog.Errorf("manager stopped with error, running post-shutdown cleanup: %v", startErr)
+	} else {
+		klog.Info("Manager stopped, running post-shutdown cleanup")
 	}
 
-	klog.Info("Manager stopped, running post-shutdown cleanup")
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
-	return controller.CleanupOnShutdown(cleanupCtx, reconciler, directClient)
+	cleanupErr := cleanup(cleanupCtx)
+
+	return errors.Join(startErr, cleanupErr)
 }
 
 func main() {
