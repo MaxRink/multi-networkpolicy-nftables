@@ -1870,19 +1870,33 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 }
 
 func (n *nftState) cleanupChains() error {
-	chains, err := n.nft.ListChainsOfTableFamily(nftables.TableFamilyINet)
+	for _, table := range []*nftables.Table{n.filter, n.nat} {
+		if err := n.cleanupChainsOfTable(table); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (n *nftState) cleanupChainsOfTable(table *nftables.Table) error {
+	chains, err := n.nft.ListChainsOfTableFamily(table.Family)
 	if err != nil {
 		return fmt.Errorf("failed to list chains: %w", err)
 	}
 
 	performFlush := false
 	for _, chain := range chains {
-		rules, err := n.nft.GetRules(chain.Table, chain)
+		if chain.Table.Name != table.Name {
+			continue
+		}
+
+		rules, err := n.nft.GetRules(table, chain)
 		if err != nil {
-			return fmt.Errorf("failed to get rules for table %q, chain %q: %w", chain.Table.Name, chain.Name, err)
+			return fmt.Errorf("failed to get rules for table %q, chain %q: %w", table.Name, chain.Name, err)
 		}
 		if _, used := n.chains[chainID(chain)]; !used && len(rules) < 1 {
-			klog.V(8).Infof("deleting chain %q in table %q", chain.Name, chain.Table.Name)
+			klog.V(8).Infof("deleting chain %q in table %q", chain.Name, table.Name)
 			n.nft.DelChain(chain)
 			performFlush = true
 		}

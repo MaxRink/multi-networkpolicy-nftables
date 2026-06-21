@@ -1402,6 +1402,20 @@ func countBootstrapChains(t *testing.T, c *nftables.Conn) int {
 	return found
 }
 
+func chainExists(t *testing.T, c *nftables.Conn, tableName, chainName string) bool {
+	t.Helper()
+	chains, err := c.ListChains()
+	if err != nil {
+		t.Fatalf("failed to list chains: %v", err)
+	}
+	for _, chain := range chains {
+		if chain.Table.Name == tableName && chain.Name == chainName {
+			return true
+		}
+	}
+	return false
+}
+
 func TestShutdownCleanupRemovesBootstrapChains(t *testing.T) {
 	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
 	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
@@ -1427,6 +1441,17 @@ func TestShutdownCleanupRemovesBootstrapChains(t *testing.T) {
 		t.Fatalf("expected %d bootstrap chains after bootstrap, got %d", len(bootstrapChainNames()), got)
 	}
 
+	foreignTable := &nftables.Table{Family: nftables.TableFamilyINet, Name: "foreign"}
+	foreignChain := &nftables.Chain{Table: foreignTable, Name: "foreign-empty"}
+	c.AddTable(foreignTable)
+	c.AddChain(foreignChain)
+	if err := c.Flush(); err != nil {
+		t.Fatalf("nft flush after foreign chain setup failed: %v", err)
+	}
+	if !chainExists(t, c, foreignTable.Name, foreignChain.Name) {
+		t.Fatalf("expected foreign empty chain to exist before shutdown cleanup")
+	}
+
 	_ = bootstrapState
 
 	shutdownState, err := shutdownNftState(c)
@@ -1440,6 +1465,9 @@ func TestShutdownCleanupRemovesBootstrapChains(t *testing.T) {
 
 	if got := countBootstrapChains(t, c); got != 0 {
 		t.Errorf("expected 0 bootstrap chains after shutdown cleanup, got %d", got)
+	}
+	if !chainExists(t, c, foreignTable.Name, foreignChain.Name) {
+		t.Errorf("expected shutdown cleanup to preserve foreign empty chain")
 	}
 }
 
