@@ -466,7 +466,7 @@ func (s *Server) syncMultiPolicy() error {
 
 	s.updateSyncMaps(shutdown)
 
-	pods, err := s.podLister.Pods(metav1.NamespaceAll).List(labels.Everything())
+	pods, err := s.podsForSync(shutdown)
 	if err != nil {
 		klog.Errorf("failed to get pods: %v", err)
 		return fmt.Errorf("failed to list pods for sync: %w", err)
@@ -505,6 +505,39 @@ func (s *Server) syncMultiPolicy() error {
 		}
 	}
 	return nil
+}
+
+func (s *Server) podsForSync(shutdown bool) ([]*v1.Pod, error) {
+	if !shutdown {
+		return s.podLister.Pods(metav1.NamespaceAll).List(labels.Everything())
+	}
+
+	pods := make([]*v1.Pod, 0, len(s.podMap))
+	for key, info := range s.podMap {
+		if info.NetNSPath == "" {
+			continue
+		}
+		nodeName := info.NodeName
+		if nodeName == "" {
+			nodeName = s.Hostname
+		}
+		pods = append(pods, &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: key.Namespace,
+				Name:      key.Name,
+			},
+			Spec: v1.PodSpec{
+				NodeName: nodeName,
+			},
+			Status: v1.PodStatus{
+				Phase: v1.PodRunning,
+			},
+		})
+	}
+	slices.SortFunc(pods, func(a, b *v1.Pod) int {
+		return strings.Compare(podNamespacedName(a), podNamespacedName(b))
+	})
+	return pods, nil
 }
 
 func (s *Server) updateSyncMaps(shutdown bool) {

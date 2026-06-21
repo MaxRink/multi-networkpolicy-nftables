@@ -86,6 +86,7 @@ spec:
       - operator: Exists
         effect: NoSchedule
       serviceAccountName: multi-networkpolicy
+      terminationGracePeriodSeconds: 120
       containers:
       - name: multi-networkpolicy
         # crio support requires multus:latest for now. support 3.3 or later.

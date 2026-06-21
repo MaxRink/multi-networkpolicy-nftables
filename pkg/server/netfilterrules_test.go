@@ -73,6 +73,55 @@ func TestUpdateSyncMapsKeepsShutdownPolicyMapEmpty(t *testing.T) {
 	}
 }
 
+func TestPodsForSyncUsesPodMapDuringShutdown(t *testing.T) {
+	s := &Server{
+		Hostname: "node-a",
+		podMap: controllers.PodMap{
+			types.NamespacedName{Namespace: "test-b", Name: "pod-b"}: {
+				Namespace: "test-b",
+				Name:      "pod-b",
+				NetNSPath: "/proc/234/ns/net",
+				NodeName:  "node-b",
+			},
+			types.NamespacedName{Namespace: "test-a", Name: "pod-a"}: {
+				Namespace: "test-a",
+				Name:      "pod-a",
+				NetNSPath: "/proc/123/ns/net",
+			},
+			types.NamespacedName{Namespace: "test-c", Name: "pod-c"}: {
+				Namespace: "test-c",
+				Name:      "pod-c",
+			},
+		},
+	}
+
+	pods, err := s.podsForSync(true)
+	if err != nil {
+		t.Fatalf("podsForSync(true): %v", err)
+	}
+	if len(pods) != 2 {
+		t.Fatalf("got %d pods, want 2", len(pods))
+	}
+
+	want := []struct {
+		namespace string
+		name      string
+		nodeName  string
+	}{
+		{namespace: "test-a", name: "pod-a", nodeName: "node-a"},
+		{namespace: "test-b", name: "pod-b", nodeName: "node-b"},
+	}
+	for i, expected := range want {
+		pod := pods[i]
+		if pod.Namespace != expected.namespace || pod.Name != expected.name || pod.Spec.NodeName != expected.nodeName {
+			t.Fatalf("pod[%d] = %s/%s on %q, want %s/%s on %q", i, pod.Namespace, pod.Name, pod.Spec.NodeName, expected.namespace, expected.name, expected.nodeName)
+		}
+		if !controllers.IsMultiNetworkpolicyTarget(pod) {
+			t.Fatalf("pod[%d] = %s/%s is not eligible for shutdown cleanup", i, pod.Namespace, pod.Name)
+		}
+	}
+}
+
 func TestBootstrap(t *testing.T) {
 	// Open a system connection in a separate network namespace it requires root
 	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)

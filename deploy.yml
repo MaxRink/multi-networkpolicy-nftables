@@ -122,6 +122,7 @@ spec:
       - operator: Exists
         effect: NoSchedule
       serviceAccountName: multi-networkpolicy
+      terminationGracePeriodSeconds: 120
       containers:
       - name: multi-networkpolicy
         image: ghcr.io/k8snetworkplumbingwg/multi-networkpolicy-nftables:snapshot

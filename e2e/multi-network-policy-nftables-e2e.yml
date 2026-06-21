@@ -119,6 +119,7 @@ spec:
       - operator: Exists
         effect: NoSchedule
       serviceAccountName: multi-networkpolicy
+      terminationGracePeriodSeconds: 120
       containers:
       - name: multi-networkpolicy
         image: localhost:5000/multi-networkpolicy-nftables:e2e
