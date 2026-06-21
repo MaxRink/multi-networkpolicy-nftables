@@ -7,6 +7,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
+const policyNetworkAnnotation = "k8s.v1.cni.cncf.io/policy-for"
+
 // PodPredicate filters pod events: allows Create/Delete, allows Update only if
 // pod phase, labels, container IDs, or network-related annotations changed.
 func PodPredicate() predicate.Predicate {
@@ -23,6 +25,9 @@ func PodPredicate() predicate.Predicate {
 			if oldPod.Status.Phase != newPod.Status.Phase {
 				return true
 			}
+			if oldPod.Spec.NodeName != newPod.Spec.NodeName {
+				return true
+			}
 			if labelsChanged(oldPod.Labels, newPod.Labels) {
 				return true
 			}
@@ -35,13 +40,17 @@ func PodPredicate() predicate.Predicate {
 	}
 }
 
-// PolicyPredicate filters policy events: allows Create/Delete, allows Update only if Generation changed.
+// PolicyPredicate filters policy events: allows Create/Delete, allows Update when
+// spec generation or network-selection annotation changed.
 func PolicyPredicate() predicate.Predicate {
 	return predicate.Funcs{
 		CreateFunc: func(event.CreateEvent) bool { return true },
 		DeleteFunc: func(event.DeleteEvent) bool { return true },
 		UpdateFunc: func(e event.UpdateEvent) bool {
-			return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration()
+			if e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() {
+				return true
+			}
+			return policyNetworkAnnotationChanged(e.ObjectOld.GetAnnotations(), e.ObjectNew.GetAnnotations())
 		},
 		GenericFunc: func(event.GenericEvent) bool { return false },
 	}
@@ -102,4 +111,8 @@ func networkAnnotationsChanged(oldAnnotations, newAnnotations map[string]string)
 		}
 	}
 	return false
+}
+
+func policyNetworkAnnotationChanged(oldAnnotations, newAnnotations map[string]string) bool {
+	return oldAnnotations[policyNetworkAnnotation] != newAnnotations[policyNetworkAnnotation]
 }
