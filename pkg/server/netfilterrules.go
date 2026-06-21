@@ -77,6 +77,7 @@ type nftState struct {
 	chains map[string]*nftables.Chain
 
 	shutdownCleanup bool
+	shutdownChains  map[string]struct{}
 }
 
 func policyRuleNamespacedName(o *multiv1beta1.MultiNetworkPolicy) string {
@@ -364,6 +365,7 @@ func shutdownNftState(nft *nftables.Conn) (*nftState, error) {
 		chains: make(map[string]*nftables.Chain),
 
 		shutdownCleanup: true,
+		shutdownChains:  make(map[string]struct{}),
 	}, nil
 }
 
@@ -379,6 +381,12 @@ func shutdownDaemonChain(chainName string) bool {
 	}
 }
 
+func shutdownDaemonPolicyComment(comment string) bool {
+	return strings.HasPrefix(comment, "policy:") &&
+		(strings.Contains(comment, "name:"+ingressChain) ||
+			strings.Contains(comment, "name:"+egressChain))
+}
+
 func shutdownDaemonRule(rule *nftables.Rule) bool {
 	if rule == nil || rule.Chain == nil {
 		return false
@@ -392,8 +400,15 @@ func shutdownDaemonRule(rule *nftables.Rule) bool {
 	case "input-interface-filter", "output-interface-filter", "nat-filter-rule":
 		return true
 	default:
-		return false
+		return shutdownDaemonPolicyComment(comment)
 	}
+}
+
+func shutdownDaemonSetName(name string) bool {
+	return strings.HasPrefix(name, ingressChain+"-") ||
+		strings.HasPrefix(name, egressChain+"-") ||
+		strings.HasPrefix(name, getSetName(ingressChain)+"_") ||
+		strings.HasPrefix(name, getSetName(egressChain)+"_")
 }
 
 func shutdownDaemonSet(set *nftables.Set) bool {
@@ -401,10 +416,7 @@ func shutdownDaemonSet(set *nftables.Set) bool {
 		return false
 	}
 
-	if strings.HasPrefix(set.Name, ingressChain+"-") ||
-		strings.HasPrefix(set.Name, egressChain+"-") ||
-		strings.HasPrefix(set.Name, getSetName(ingressChain)+"_") ||
-		strings.HasPrefix(set.Name, getSetName(egressChain)+"_") {
+	if shutdownDaemonSetName(set.Name) || shutdownDaemonSetName(set.Comment) {
 		return true
 	}
 
@@ -425,6 +437,43 @@ func shutdownDaemonSet(set *nftables.Set) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func (n *nftState) markShutdownChain(table *nftables.Table, chainName string) {
+	if n.shutdownChains == nil || table == nil || chainName == "" {
+		return
+	}
+	n.shutdownChains[fmt.Sprintf("%s-%s", table.Name, chainName)] = struct{}{}
+}
+
+func (n *nftState) shutdownDaemonChain(table *nftables.Table, chainName string) bool {
+	if shutdownDaemonChain(chainName) {
+		return true
+	}
+	if n.shutdownChains == nil || table == nil {
+		return false
+	}
+	_, ok := n.shutdownChains[fmt.Sprintf("%s-%s", table.Name, chainName)]
+	return ok
+}
+
+func (n *nftState) collectShutdownChains(table *nftables.Table, rules []*nftables.Rule) {
+	for _, rule := range rules {
+		if !shutdownDaemonRule(rule) {
+			continue
+		}
+		n.markShutdownChain(table, rule.Chain.Name)
+		for _, ruleExpr := range rule.Exprs {
+			verdict, ok := ruleExpr.(*expr.Verdict)
+			if !ok || verdict.Chain == "" {
+				continue
+			}
+			switch verdict.Kind {
+			case expr.VerdictJump, expr.VerdictGoto:
+				n.markShutdownChain(table, verdict.Chain)
+			}
+		}
 	}
 }
 
@@ -1890,6 +1939,9 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 			if err != nil {
 				return fmt.Errorf("failed to list rules for table %q, chain %q: %w", table.Name, chain.Name, err)
 			}
+			if n.shutdownCleanup {
+				n.collectShutdownChains(table, rules)
+			}
 			for _, rule := range rules {
 				if n.shutdownCleanup && !shutdownDaemonRule(rule) {
 					continue
@@ -1963,7 +2015,7 @@ func (n *nftState) cleanupChainsOfTable(table *nftables.Table) error {
 		if chain.Table.Name != table.Name {
 			continue
 		}
-		if n.shutdownCleanup && !shutdownDaemonChain(chain.Name) {
+		if n.shutdownCleanup && !n.shutdownDaemonChain(table, chain.Name) {
 			continue
 		}
 

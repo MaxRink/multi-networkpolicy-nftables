@@ -1537,91 +1537,111 @@ func ruleCommentExists(t *testing.T, c *nftables.Conn, table *nftables.Table, ch
 	return false
 }
 
-func addGeneratedPolicyState(t *testing.T, c *nftables.Conn, table *nftables.Table, ingress *nftables.Chain) []struct{ table, name string } {
+func addGeneratedPolicyState(t *testing.T, state *nftState, entry *nftables.Chain) ([]struct{ table, name string }, []string) {
 	t.Helper()
 
-	policyChainName := fmt.Sprintf("%s-test-multinetwork-policy-simple-1", ingressChain)
+	c := state.nft
+	table := state.filter
+	policyName := "test/test-multinetwork-policy-simple-1"
+	policyChainName := fmt.Sprintf("%s-test-multinetwork-policy-simple-1", egressChain)
 	portsChainName := fmt.Sprintf("%s-%s-0", policyChainName, portsChainSuffix)
 	peersChainName := fmt.Sprintf("%s-%s-0", policyChainName, peersChainSuffix)
 
+	policyChain, err := state.addChain(&nftables.Chain{
+		Name:  policyChainName,
+		Table: table,
+	})
+	if err != nil {
+		t.Fatalf("failed to add generated policy chain: %v", err)
+	}
+	portsChain, err := state.addChain(&nftables.Chain{
+		Name:  portsChainName,
+		Table: table,
+	})
+	if err != nil {
+		t.Fatalf("failed to add generated ports chain: %v", err)
+	}
+	peersChain, err := state.addChain(&nftables.Chain{
+		Name:  peersChainName,
+		Table: table,
+	})
+	if err != nil {
+		t.Fatalf("failed to add generated peers chain: %v", err)
+	}
+
 	generatedChains := []struct{ table, name string }{
-		{table.Name, policyChainName},
-		{table.Name, portsChainName},
-		{table.Name, peersChainName},
+		{table.Name, policyChain.Name},
+		{table.Name, portsChain.Name},
+		{table.Name, peersChain.Name},
 	}
-	for _, chain := range generatedChains {
-		c.AddChain(&nftables.Chain{Table: table, Name: chain.name})
-	}
-
-	policyChain := &nftables.Chain{Table: table, Name: policyChainName}
-	portsChain := &nftables.Chain{Table: table, Name: portsChainName}
-	peersChain := &nftables.Chain{Table: table, Name: peersChainName}
 
 	c.AddRule(&nftables.Rule{
 		Table:    table,
-		Chain:    ingress,
-		UserData: userDataComment("policy:test/test-multinetwork-policy-simple-1, jump"),
+		Chain:    entry,
+		UserData: userDataComment(fmt.Sprintf("policy:%s, name:%s, net-attach-def:one, interface:eth0, cni:macvlan, jump:%s", policyName, entry.Name, policyChain.Name)),
 		Exprs: []expr.Any{
 			&expr.Counter{},
-			&expr.Verdict{Kind: expr.VerdictJump, Chain: policyChainName},
+			&expr.Verdict{Kind: expr.VerdictJump, Chain: policyChain.Name},
 		},
 	})
 	c.AddRule(&nftables.Rule{
 		Table:    table,
 		Chain:    policyChain,
-		UserData: userDataComment("policy:test/test-multinetwork-policy-simple-1, ports"),
+		UserData: userDataComment(fmt.Sprintf("policy:%s, name:%s, jump:%s", policyName, policyChainName, portsChain.Name)),
 		Exprs: []expr.Any{
 			&expr.Counter{},
-			&expr.Verdict{Kind: expr.VerdictJump, Chain: portsChainName},
+			&expr.Verdict{Kind: expr.VerdictJump, Chain: portsChain.Name},
 		},
 	})
 	c.AddRule(&nftables.Rule{
 		Table:    table,
 		Chain:    policyChain,
-		UserData: userDataComment("policy:test/test-multinetwork-policy-simple-1, peers"),
+		UserData: userDataComment(fmt.Sprintf("policy:%s, name:%s, jump:%s", policyName, policyChainName, peersChain.Name)),
 		Exprs: []expr.Any{
 			&expr.Counter{},
-			&expr.Verdict{Kind: expr.VerdictJump, Chain: peersChainName},
+			&expr.Verdict{Kind: expr.VerdictJump, Chain: peersChain.Name},
 		},
 	})
 	c.AddRule(&nftables.Rule{
 		Table:    table,
 		Chain:    portsChain,
-		UserData: userDataComment("policy:test/test-multinetwork-policy-simple-1, port accept"),
+		UserData: userDataComment(fmt.Sprintf("policy:%s, name:%s, no ports skipped accept all", policyName, portsChainName)),
 		Exprs:    []expr.Any{&expr.Counter{}},
 	})
 	c.AddRule(&nftables.Rule{
 		Table:    table,
 		Chain:    peersChain,
-		UserData: userDataComment("policy:test/test-multinetwork-policy-simple-1, peer accept"),
+		UserData: userDataComment(fmt.Sprintf("policy:%s, name:%s, no peers skipped accept all", policyName, peersChainName)),
 		Exprs:    []expr.Any{&expr.Counter{}},
 	})
 
 	portsSetName := fmt.Sprintf("%s_%s", getSetName(portsChainName), "tcp")
-	if err := c.AddSet(&nftables.Set{
+	portsSet := &nftables.Set{
 		Table:        table,
 		Name:         portsSetName,
 		KeyType:      nftables.TypeInetService,
 		KeyByteOrder: binaryutil.BigEndian,
 		Interval:     true,
 		Comment:      portsSetName,
-	}, nil); err != nil {
+	}
+	if err := state.updateSet(portsSet, nil); err != nil {
 		t.Fatalf("failed to add generated ports set: %v", err)
 	}
 
 	peersSetName := fmt.Sprintf("%s_%s_%s_%s_%d", peersChainName, peerIPBlockPrefix, protoIPv4, sourceAddressSuffix, 0)
-	if err := c.AddSet(&nftables.Set{
+	peersSet := &nftables.Set{
 		Table:        table,
 		Name:         peersSetName,
 		KeyType:      nftables.TypeIPAddr,
 		KeyByteOrder: binaryutil.BigEndian,
 		Interval:     true,
 		Comment:      peersSetName,
-	}, nil); err != nil {
+	}
+	if err := state.updateSet(peersSet, nil); err != nil {
 		t.Fatalf("failed to add generated peers set: %v", err)
 	}
 
-	return generatedChains
+	return generatedChains, []string{portsSet.Name, peersSet.Name}
 }
 
 func TestShutdownCleanupRemovesBootstrapChains(t *testing.T) {
@@ -1649,7 +1669,7 @@ func TestShutdownCleanupRemovesBootstrapChains(t *testing.T) {
 		t.Fatalf("expected %d bootstrap chains after bootstrap, got %d", len(bootstrapChainNames()), got)
 	}
 
-	generatedPolicyChains := addGeneratedPolicyState(t, c, bootstrapState.filter, bootstrapState.ingressChain)
+	generatedPolicyChains, generatedPolicySets := addGeneratedPolicyState(t, bootstrapState, bootstrapState.egressChain)
 
 	foreignFilterChain := &nftables.Chain{Table: bootstrapState.filter, Name: "foreign-filter"}
 	c.AddChain(foreignFilterChain)
@@ -1687,16 +1707,15 @@ func TestShutdownCleanupRemovesBootstrapChains(t *testing.T) {
 			t.Fatalf("expected generated policy chain %s/%s to exist before shutdown cleanup", chain.table, chain.name)
 		}
 	}
-	if !setExists(t, c, bootstrapState.filter, "multi_ingress_test_multinetwork_policy_simple_1_ports_0_tcp") {
-		t.Fatalf("expected generated ports set to exist before shutdown cleanup")
+	for _, setName := range generatedPolicySets {
+		if !setExists(t, c, bootstrapState.filter, setName) {
+			t.Fatalf("expected generated set %s to exist before shutdown cleanup", setName)
+		}
 	}
-	if !setExists(t, c, bootstrapState.filter, "multi-ingress-test-multinetwork-policy-simple-1-peers-0_peer_ipblock_ipv4_saddrs_0") {
-		t.Fatalf("expected generated peers set to exist before shutdown cleanup")
-	}
-	if !ruleCommentExists(t, c, bootstrapState.filter, "multi-ingress-test-multinetwork-policy-simple-1", "policy:test/test-multinetwork-policy-simple-1, ports") {
+	if !ruleCommentExists(t, c, bootstrapState.filter, generatedPolicyChains[0].name, fmt.Sprintf("policy:test/test-multinetwork-policy-simple-1, name:%s, jump:%s", fmt.Sprintf("%s-test-multinetwork-policy-simple-1", egressChain), generatedPolicyChains[1].name)) {
 		t.Fatalf("expected generated policy rule to exist before shutdown cleanup")
 	}
-	if !ruleCommentExists(t, c, bootstrapState.filter, bootstrapState.ingressChain.Name, "policy:test/test-multinetwork-policy-simple-1, jump") {
+	if !ruleCommentExists(t, c, bootstrapState.filter, bootstrapState.egressChain.Name, fmt.Sprintf("policy:test/test-multinetwork-policy-simple-1, name:%s, net-attach-def:one, interface:eth0, cni:macvlan, jump:%s", bootstrapState.egressChain.Name, generatedPolicyChains[0].name)) {
 		t.Fatalf("expected generated policy jump to exist before shutdown cleanup")
 	}
 	if !chainExists(t, c, foreignTable.Name, foreignChain.Name) {
@@ -1732,11 +1751,10 @@ func TestShutdownCleanupRemovesBootstrapChains(t *testing.T) {
 			t.Errorf("expected shutdown cleanup to remove generated policy chain %s/%s", chain.table, chain.name)
 		}
 	}
-	if setExists(t, c, bootstrapState.filter, "multi_ingress_test_multinetwork_policy_simple_1_ports_0_tcp") {
-		t.Errorf("expected shutdown cleanup to remove generated ports set")
-	}
-	if setExists(t, c, bootstrapState.filter, "multi-ingress-test-multinetwork-policy-simple-1-peers-0_peer_ipblock_ipv4_saddrs_0") {
-		t.Errorf("expected shutdown cleanup to remove generated peers set")
+	for _, setName := range generatedPolicySets {
+		if setExists(t, c, bootstrapState.filter, setName) {
+			t.Errorf("expected shutdown cleanup to remove generated set %s", setName)
+		}
 	}
 	if !chainExists(t, c, foreignTable.Name, foreignChain.Name) {
 		t.Errorf("expected shutdown cleanup to preserve foreign empty chain")
