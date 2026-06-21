@@ -34,6 +34,7 @@ type NodeReconciler struct {
 	Client         client.Client
 	PolicyDeps     controllers.PolicyDeps
 	HostPrefix     string
+	PodIptables    string
 	NetworkPlugins []string
 	CommonCfg      controllers.CommonRuleConfig
 	CriClient      pb.RuntimeServiceClient
@@ -83,6 +84,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := r.Client.List(ctx, &podList, client.MatchingFields{PodHostnameIndex: r.NodeName}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list pods for node %s: %w", r.NodeName, err)
 	}
+	r.cleanupStalePodIptablesDirs(podList.Items)
 
 	deps := r.policyDeps()
 	retryNeeded := false

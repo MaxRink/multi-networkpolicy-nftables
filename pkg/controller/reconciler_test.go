@@ -374,6 +374,50 @@ func TestReconcile_PodDeletedBeforeReconcile(t *testing.T) {
 	}
 }
 
+func TestPreparePodIptablesDirRecreatesRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "pod-iptables")
+	stale := filepath.Join(root, "stale")
+	if err := os.MkdirAll(stale, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	if err := PreparePodIptablesDir(root); err != nil {
+		t.Fatalf("PreparePodIptablesDir() error = %v", err)
+	}
+
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("expected pod iptables root to exist: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("expected stale pod iptables content to be removed, got err=%v", err)
+	}
+}
+
+func TestCleanupStalePodIptablesDirs(t *testing.T) {
+	root := t.TempDir()
+	liveUID := "live-uid"
+	staleUID := "stale-uid"
+	if err := os.Mkdir(filepath.Join(root, liveUID), 0o700); err != nil {
+		t.Fatalf("Mkdir(live) error = %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, staleUID), 0o700); err != nil {
+		t.Fatalf("Mkdir(stale) error = %v", err)
+	}
+
+	r := &NodeReconciler{PodIptables: root}
+	r.cleanupStalePodIptablesDirs([]corev1.Pod{{
+		ObjectMeta: metav1.ObjectMeta{UID: types.UID(liveUID)},
+	}})
+
+	if _, err := os.Stat(filepath.Join(root, liveUID)); err != nil {
+		t.Fatalf("expected live pod iptables dir to be preserved: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, staleUID)); !os.IsNotExist(err) {
+		t.Fatalf("expected stale pod iptables dir to be removed, got err=%v", err)
+	}
+}
+
 func TestReconcile_NamespaceSelector(t *testing.T) {
 	namespace, nodeName := testScope(t)
 	namespaceLabels := map[string]string{"team": "frontend"}
