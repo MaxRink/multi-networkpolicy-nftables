@@ -62,6 +62,7 @@ type ReconcilerConfig struct {
 	Master                   string
 	NodeName                 string
 	HostPrefix               string
+	PodIptables              string
 	ContainerRuntime         controllers.RuntimeKind
 	ContainerRuntimeEndpoint string
 	NetworkPlugins           []string
@@ -134,6 +135,7 @@ func (o *Options) BuildReconcilerConfig() (*ReconcilerConfig, error) {
 		Master:                   o.master,
 		NodeName:                 hostname,
 		HostPrefix:               o.hostPrefix,
+		PodIptables:              o.podIptables,
 		ContainerRuntime:         o.containerRuntime,
 		ContainerRuntimeEndpoint: o.containerRuntimeEndpoint,
 		NetworkPlugins:           o.networkPlugins,

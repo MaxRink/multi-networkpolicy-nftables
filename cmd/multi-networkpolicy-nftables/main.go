@@ -95,6 +95,10 @@ func run(opts *server.Options) error {
 		return fmt.Errorf("setup indexes: %w", err)
 	}
 
+	if err := controller.PreparePodIptablesDir(cfg.PodIptables); err != nil {
+		return fmt.Errorf("prepare pod iptables directory: %w", err)
+	}
+
 	criClient, criConn, err := controllers.GetCriRuntimeClient(cfg.ContainerRuntimeEndpoint, cfg.HostPrefix)
 	if err != nil {
 		klog.Warningf("failed to create CRI client (will retry at runtime): %v", err)
@@ -106,6 +110,7 @@ func run(opts *server.Options) error {
 		NodeName:                 cfg.NodeName,
 		Client:                   mgr.GetClient(),
 		HostPrefix:               cfg.HostPrefix,
+		PodIptables:              cfg.PodIptables,
 		NetworkPlugins:           cfg.NetworkPlugins,
 		CommonCfg:                cfg.CommonRuleConfig,
 		CriClient:                criClient,
