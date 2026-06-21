@@ -1380,12 +1380,20 @@ func TestCleanupLegacyTables(t *testing.T) {
 
 	legacyFilter := &nftables.Table{Family: inetFamily, Name: legacyFilterTableName}
 	c.AddTable(legacyFilter)
+	legacyNat := &nftables.Table{Family: inetFamily, Name: legacyNatTableName}
+	c.AddTable(legacyNat)
 
 	daemonChain := c.AddChain(&nftables.Chain{
 		Name:  ingressChain,
 		Table: legacyFilter,
 	})
 	_ = daemonChain
+
+	unreferencedDaemonChain := c.AddChain(&nftables.Chain{
+		Name:  egressChain,
+		Table: legacyFilter,
+	})
+	_ = unreferencedDaemonChain
 
 	baseChain := c.AddChain(&nftables.Chain{
 		Name:  "input",
@@ -1418,6 +1426,36 @@ func TestCleanupLegacyTables(t *testing.T) {
 			&expr.Counter{},
 		},
 	})
+	c.AddRule(&nftables.Rule{
+		Table:    legacyFilter,
+		Chain:    baseChain,
+		UserData: userDataComment("foreign-jump"),
+		Exprs: []expr.Any{
+			&expr.Counter{},
+			&expr.Verdict{
+				Kind:  expr.VerdictJump,
+				Chain: ingressChain,
+			},
+		},
+	})
+	if err := c.AddSet(&nftables.Set{
+		Table:        legacyFilter,
+		Name:         podInterfacesName,
+		KeyType:      nftables.TypeIFName,
+		KeyByteOrder: binaryutil.NativeEndian,
+		Comment:      "foreign set",
+	}, nil); err != nil {
+		t.Fatalf("failed to add foreign pod_interfaces set: %v", err)
+	}
+	if err := c.AddSet(&nftables.Set{
+		Table:        legacyNat,
+		Name:         podInterfacesName,
+		KeyType:      nftables.TypeIFName,
+		KeyByteOrder: binaryutil.NativeEndian,
+		Comment:      "Pod interfaces NAT",
+	}, nil); err != nil {
+		t.Fatalf("failed to add daemon pod_interfaces set: %v", err)
+	}
 
 	if err := c.Flush(); err != nil {
 		t.Fatalf("setup flush failed: %v", err)
@@ -1432,10 +1470,21 @@ func TestCleanupLegacyTables(t *testing.T) {
 		t.Fatalf("ListChainsOfTableFamily failed: %v", err)
 	}
 
+	foundIngressChain := false
+	foundEgressChain := false
 	for _, ch := range chains {
 		if ch.Table.Name == legacyFilterTableName && ch.Name == ingressChain {
-			t.Errorf("daemon chain %q was not removed from legacy table", ingressChain)
+			foundIngressChain = true
 		}
+		if ch.Table.Name == legacyFilterTableName && ch.Name == egressChain {
+			foundEgressChain = true
+		}
+	}
+	if !foundIngressChain {
+		t.Errorf("referenced daemon chain %q was incorrectly removed from legacy table", ingressChain)
+	}
+	if foundEgressChain {
+		t.Errorf("unreferenced daemon chain %q was not removed from legacy table", egressChain)
 	}
 
 	found := false
@@ -1453,6 +1502,7 @@ func TestCleanupLegacyTables(t *testing.T) {
 		t.Fatalf("GetRules(%q, %q) failed: %v", legacyFilter.Name, "input", err)
 	}
 	foundForeignRule := false
+	foundForeignJump := false
 	for _, rule := range rules {
 		comment, _ := userdata.GetString(rule.UserData, userdata.TypeComment)
 		if comment == inputInterfaceFilterComment {
@@ -1461,9 +1511,39 @@ func TestCleanupLegacyTables(t *testing.T) {
 		if comment == "foreign-rule" {
 			foundForeignRule = true
 		}
+		if comment == "foreign-jump" {
+			foundForeignJump = true
+		}
 	}
 	if !foundForeignRule {
 		t.Errorf("foreign rule in legacy base chain was incorrectly removed")
+	}
+	if !foundForeignJump {
+		t.Errorf("foreign jump rule in legacy base chain was incorrectly removed")
+	}
+
+	sets, err := c.GetSets(legacyFilter)
+	if err != nil {
+		t.Fatalf("GetSets(%q) failed: %v", legacyFilter.Name, err)
+	}
+	foundForeignSet := false
+	for _, set := range sets {
+		if set.Name == podInterfacesName && set.Comment == "foreign set" {
+			foundForeignSet = true
+		}
+	}
+	if !foundForeignSet {
+		t.Errorf("foreign pod_interfaces set was incorrectly removed from legacy table")
+	}
+
+	sets, err = c.GetSets(legacyNat)
+	if err != nil {
+		t.Fatalf("GetSets(%q) failed: %v", legacyNat.Name, err)
+	}
+	for _, set := range sets {
+		if set.Name == podInterfacesName {
+			t.Errorf("daemon pod_interfaces set was not removed from legacy table")
+		}
 	}
 }
 
