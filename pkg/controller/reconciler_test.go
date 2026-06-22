@@ -196,6 +196,46 @@ func TestReconcile_PodWithNoPolicy(t *testing.T) {
 	}
 }
 
+func TestReconcile_RunningPodWithNoInterfacesDoesNotRequeue(t *testing.T) {
+	namespace, nodeName := testScope(t)
+	pod := newPod(namespace, "pod-no-interfaces", nodeName, map[string]string{"app": "demo"})
+	seedObjects(t,
+		newNamespace(namespace, nil),
+		newNode(nodeName),
+		pod,
+	)
+	pod.Status.Phase = corev1.PodRunning
+	if err := testClient.Status().Update(context.Background(), pod); err != nil {
+		t.Fatalf("Status().Update() error = %v", err)
+	}
+
+	applyCalled := false
+	r := &NodeReconciler{
+		NodeName: nodeName,
+		Client:   testClient,
+		PolicyDeps: &mockPolicyDeps{
+			getPodInfoFunc: func(*corev1.Pod) (*controllers.PodInfo, error) {
+				return &controllers.PodInfo{Name: pod.Name, Namespace: pod.Namespace, NodeName: nodeName}, nil
+			},
+		},
+		ApplyRulesForPodFunc: func(controllers.PolicyDeps, controllers.CommonRuleConfig, controllers.PolicyMap, *corev1.Pod, *controllers.PodInfo, string) error {
+			applyCalled = true
+			return nil
+		},
+	}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if result.RequeueAfter != 0 {
+		t.Fatalf("Reconcile() RequeueAfter = %s, want no requeue", result.RequeueAfter)
+	}
+	if applyCalled {
+		t.Fatalf("ApplyRulesForPodFunc was called for pod with no interfaces")
+	}
+}
+
 func TestReconcile_PodWithMatchingPolicy(t *testing.T) {
 	namespace, nodeName := testScope(t)
 	pod := newPod(namespace, "pod-with-policy", nodeName, map[string]string{"app": "selected"})

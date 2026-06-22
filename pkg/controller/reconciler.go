@@ -99,10 +99,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			continue
 		}
 		if podInfo == nil || len(podInfo.Interfaces) == 0 {
-			if pod.Status.Phase == corev1.PodRunning {
-				klog.V(4).Infof("pod %s/%s is running but has no interfaces yet, will retry", pod.Namespace, pod.Name)
-				retryNeeded = true
-			}
+			klog.V(4).Infof("pod %s/%s has no relevant interfaces, skipping", pod.Namespace, pod.Name)
 			continue
 		}
 
