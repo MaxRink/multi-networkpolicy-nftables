@@ -132,7 +132,7 @@ func nftNameWithSuffix(base, separator, suffix string) string {
 	return truncateNftName(base, nftNameMaxLen-suffixLen) + sanitizedSeparator + sanitizedSuffix
 }
 
-func bootstrapNetfilterChains(nftState *nftState) {
+func bootstrapNetfilterChains(nftState *nftState) error {
 	// the netfilter hook system
 	// ref: https://wiki.nftables.org/wiki-nftables/index.php/Netfilter_hooks
 	// Create our chains if they don't already exist
@@ -145,7 +145,7 @@ func bootstrapNetfilterChains(nftState *nftState) {
 		Priority: nftables.ChainPriorityFilter,
 		Type:     nftables.ChainTypeFilter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create input chain: %w", err)
 	}
 	// nft add chain inet filter output { type filter hook output priority 0 \; }
 	if nftState.output, err = nftState.addChain(&nftables.Chain{
@@ -155,7 +155,7 @@ func bootstrapNetfilterChains(nftState *nftState) {
 		Priority: nftables.ChainPriorityFilter,
 		Type:     nftables.ChainTypeFilter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create output chain: %w", err)
 	}
 	// nft add chain inet filter prerouting { type filter hook prerouting priority 0 \; }
 	if nftState.prerouting, err = nftState.addChain(&nftables.Chain{
@@ -165,36 +165,37 @@ func bootstrapNetfilterChains(nftState *nftState) {
 		Priority: nftables.ChainPriorityNATDest,
 		Type:     nftables.ChainTypeNAT,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create prerouting chain: %w", err)
 	}
 	// add chain inet filter MULTI-INGRESS
 	if nftState.ingressChain, err = nftState.addChain(&nftables.Chain{
 		Name:  ingressChain,
 		Table: nftState.filter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create %s chain: %w", ingressChain, err)
 	}
 	// add chain inet filter MULTI-EGRESS
 	if nftState.egressChain, err = nftState.addChain(&nftables.Chain{
 		Name:  egressChain,
 		Table: nftState.filter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create %s chain: %w", egressChain, err)
 	}
 	// nft add chain inet filter MULTI-INGRESS-COMMON
 	if nftState.commonIngressChain, err = nftState.addChain(&nftables.Chain{
 		Name:  fmt.Sprintf("%s-%s", ingressChain, common),
 		Table: nftState.filter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create %s-%s chain: %w", ingressChain, common, err)
 	}
 	// nft add chain inet filter MULTI-EGRESS-COMMON
 	if nftState.commonEgressChain, err = nftState.addChain(&nftables.Chain{
 		Name:  fmt.Sprintf("%s-%s", egressChain, common),
 		Table: nftState.filter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create %s-%s chain: %w", egressChain, common, err)
 	}
+	return nil
 }
 
 func addTable(nft *nftables.Conn, table *nftables.Table) (*nftables.Table, error) {
@@ -405,7 +406,9 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 		chains: make(map[string]*nftables.Chain),
 	}
 
-	bootstrapNetfilterChains(nftState)
+	if err := bootstrapNetfilterChains(nftState); err != nil {
+		return nil, err
+	}
 
 	slices.SortStableFunc(podInfo.Interfaces, func(a, b controllers.InterfaceInfo) int {
 		return strings.Compare(a.InterfaceName, b.InterfaceName)
@@ -839,7 +842,7 @@ func getPrefixesAsSetInterval(prefixes []string) ([]nftables.SetElement, []nftab
 	for index, addr := range prefixes {
 		net, err := netip.ParsePrefix(addr) // validate
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to parse CIDR %q prefix[%d]: %v", addr, index, err)
+			return nil, nil, fmt.Errorf("failed to parse CIDR %q prefix[%d]: %w", addr, index, err)
 		}
 		if net.Addr().Is4() {
 			// specific first element to inform nftables this is an interval set
@@ -999,45 +1002,45 @@ func (n *nftState) applyCommonChainRules(cfg controllers.CommonRuleConfig) error
 	klog.V(8).Info("applying common chain rules")
 	if cfg.AcceptICMPv6 {
 		if err := n.allowICMP(n.commonIngressChain, true); err != nil {
-			return fmt.Errorf("failed to allow ICMPv6 in common ingress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMPv6 in common ingress chain: %w", err)
 		}
 		if err := n.allowICMP(n.commonEgressChain, true); err != nil {
-			return fmt.Errorf("failed to allow ICMPv6 in common egress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMPv6 in common egress chain: %w", err)
 		}
 	} else {
 		if err := n.allowNeighborDiscovery(n.commonIngressChain); err != nil {
-			return fmt.Errorf("failed to allow ICMPv6 neighbor discovery in common ingress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMPv6 neighbor discovery in common ingress chain: %w", err)
 		}
 		if err := n.allowNeighborDiscovery(n.commonEgressChain); err != nil {
-			return fmt.Errorf("failed to allow ICMPv6 neighbor discovery in common egress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMPv6 neighbor discovery in common egress chain: %w", err)
 		}
 	}
 	if cfg.AcceptICMP {
 		if err := n.allowICMP(n.commonIngressChain, false); err != nil {
-			return fmt.Errorf("failed to allow ICMP in common ingress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMP in common ingress chain: %w", err)
 		}
 		if err := n.allowICMP(n.commonEgressChain, false); err != nil {
-			return fmt.Errorf("failed to allow ICMP in common egress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMP in common egress chain: %w", err)
 		}
 	}
 
 	if len(cfg.AllowSrcPrefix) != 0 {
 		if err := n.applyCommonPrefixRules(n.commonIngressChain, cfg.AllowSrcPrefix, common); err != nil {
-			return fmt.Errorf("failed to apply common ingress rules: %v", err)
+			return fmt.Errorf("failed to apply common ingress rules: %w", err)
 		}
 	}
 
 	if len(cfg.AllowDstPrefix) != 0 {
 		if err := n.applyCommonPrefixRules(n.commonEgressChain, cfg.AllowDstPrefix, common); err != nil {
-			return fmt.Errorf("failed to apply common egress rules: %v", err)
+			return fmt.Errorf("failed to apply common egress rules: %w", err)
 		}
 	}
 	// Always allow conntracked connections
 	if err := n.allowConntracked(n.commonIngressChain); err != nil {
-		return fmt.Errorf("failed to apply common ingress conntrack rules: %v", err)
+		return fmt.Errorf("failed to apply common ingress conntrack rules: %w", err)
 	}
 	if err := n.allowConntracked(n.commonEgressChain); err != nil {
-		return fmt.Errorf("failed to apply common egress conntrack rules: %v", err)
+		return fmt.Errorf("failed to apply common egress conntrack rules: %w", err)
 	}
 
 	return nil
@@ -1903,7 +1906,7 @@ func (n *nftState) applyPodRules(deps controllers.PolicyDeps, _ controllers.Comm
 		if podIntf.CheckPolicyNetwork(policyNetworks) {
 			newRule, err := n.applyPodInterfaceRules(chain, policyChain, policy, podIntf)
 			if err != nil {
-				return newRules, fmt.Errorf("failed to apply pod interface rules for policy %q: %v", policyNamespacedName(policy), err)
+				return newRules, fmt.Errorf("failed to apply pod interface rules for policy %q: %w", policyNamespacedName(policy), err)
 			}
 			if newRule {
 				newRules = true
