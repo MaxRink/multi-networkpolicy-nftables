@@ -60,7 +60,10 @@ jobs:
     - name: Load kernel modules
       run: sudo modprobe nft_ct
 
-    - name: Test
+    - name: Test unprivileged packages
+      run: make test-unprivileged
+
+    - name: Test all packages with nftables
       run: make test
 
     - name: Send coverage
