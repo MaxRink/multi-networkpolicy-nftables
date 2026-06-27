@@ -27,12 +27,4 @@ jobs:
           cache: true
 
       - name: Run govulncheck
-        # Known unfixed vulnerabilities in transitive dependencies (no upstream fix available):
-        #   GO-2025-3547: k8s.io/kubernetes@v1.35.1 - no fix released yet
-        #   GO-2025-3521: k8s.io/kubernetes@v1.35.1 - no fix released yet
-        # continue-on-error is set to true until upstream releases a fix for the above.
-        # Remove continue-on-error once k8s.io/kubernetes provides a patched version.
-        continue-on-error: true
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
-          govulncheck ./...
+        run: make govulncheck

@@ -7,6 +7,8 @@ HOST_OS ?= $(shell uname -s | tr '[:upper:]' '[:lower:]')
 GO_LDFLAGS ?= -s -w
 IMAGE_REPO ?= ghcr.io/telekom/multi-networkpolicy-nftables
 IMAGE_TAG ?= dev
+GOVULNCHECK_VERSION ?= v1.1.4
+GOVULNCHECK ?= $(shell go env GOPATH)/bin/govulncheck
 
 .PHONY: all build test lint vet fmt fmt-fix clean e2e image manifests verify-manifests help
 
@@ -49,6 +51,11 @@ lint:
 ## vet: Run go vet
 vet:
 	go vet ./...
+
+## govulncheck: Run Go vulnerability analysis
+govulncheck:
+	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+	$(GOVULNCHECK) ./...
 
 ## fmt: Check formatting
 fmt:
