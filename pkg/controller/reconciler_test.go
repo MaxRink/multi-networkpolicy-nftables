@@ -176,7 +176,9 @@ func TestReconcile_PodWithNoPolicy(t *testing.T) {
 		newNode(nodeName),
 		pod,
 	)
+	setPodRunning(t, pod)
 
+	applyCalled := false
 	r := &NodeReconciler{
 		NodeName: nodeName,
 		Client:   testClient,
@@ -185,14 +187,27 @@ func TestReconcile_PodWithNoPolicy(t *testing.T) {
 				return []*corev1.Pod{pod}, nil
 			},
 			getPodInfoFunc: func(*corev1.Pod) (*controllers.PodInfo, error) {
-				return &controllers.PodInfo{Name: pod.Name, Namespace: pod.Namespace, NodeName: nodeName}, nil
+				return &controllers.PodInfo{Name: pod.Name, Namespace: pod.Namespace, NodeName: nodeName, Interfaces: []controllers.InterfaceInfo{testInterface()}}, nil
 			},
+		},
+		ApplyRulesForPodFunc: func(_ controllers.PolicyDeps, _ controllers.CommonRuleConfig, policyMap controllers.PolicyMap, gotPod *corev1.Pod, _ *controllers.PodInfo, _ string) error {
+			applyCalled = true
+			if gotPod.Name != pod.Name || gotPod.Namespace != pod.Namespace {
+				t.Fatalf("ApplyRulesForPodFunc pod = %s/%s, want %s/%s", gotPod.Namespace, gotPod.Name, pod.Namespace, pod.Name)
+			}
+			if len(policyMap) != 0 {
+				t.Fatalf("ApplyRulesForPodFunc policyMap length = %d, want 0", len(policyMap))
+			}
+			return nil
 		},
 	}
 
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
 	if err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if !applyCalled {
+		t.Fatalf("expected ApplyRulesForPodFunc to be called")
 	}
 }
 
@@ -246,7 +261,9 @@ func TestReconcile_PodWithMatchingPolicy(t *testing.T) {
 		pod,
 		policy,
 	)
+	setPodRunning(t, pod)
 
+	applyCalled := false
 	r := &NodeReconciler{
 		NodeName: nodeName,
 		Client:   testClient,
@@ -258,8 +275,18 @@ func TestReconcile_PodWithMatchingPolicy(t *testing.T) {
 				return &controllers.NamespaceInfo{Name: namespace}, nil
 			},
 			getPodInfoFunc: func(*corev1.Pod) (*controllers.PodInfo, error) {
-				return &controllers.PodInfo{Name: pod.Name, Namespace: pod.Namespace, NodeName: nodeName}, nil
+				return &controllers.PodInfo{Name: pod.Name, Namespace: pod.Namespace, NodeName: nodeName, Interfaces: []controllers.InterfaceInfo{testInterface()}}, nil
 			},
+		},
+		ApplyRulesForPodFunc: func(_ controllers.PolicyDeps, _ controllers.CommonRuleConfig, policyMap controllers.PolicyMap, gotPod *corev1.Pod, _ *controllers.PodInfo, _ string) error {
+			applyCalled = true
+			if gotPod.Name != pod.Name || gotPod.Namespace != pod.Namespace {
+				t.Fatalf("ApplyRulesForPodFunc pod = %s/%s, want %s/%s", gotPod.Namespace, gotPod.Name, pod.Namespace, pod.Name)
+			}
+			if _, ok := policyMap[types.NamespacedName{Namespace: namespace, Name: policy.Name}]; !ok {
+				t.Fatalf("ApplyRulesForPodFunc policyMap missing %s/%s", namespace, policy.Name)
+			}
+			return nil
 		},
 	}
 
@@ -267,7 +294,9 @@ func TestReconcile_PodWithMatchingPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
-	// TODO: assert nftables called once NodeReconciler applies policy side-effects.
+	if !applyCalled {
+		t.Fatalf("expected ApplyRulesForPodFunc to be called")
+	}
 }
 
 func TestReconcile_RequeuesWhenApplyRulesFails(t *testing.T) {
@@ -316,8 +345,8 @@ func TestReconcile_RequeuesWhenApplyRulesFails(t *testing.T) {
 	if !called {
 		t.Fatalf("expected applyRulesForPod to be called")
 	}
-	if result.RequeueAfter == 0 {
-		t.Fatalf("expected apply failure to request a requeue")
+	if result.RequeueAfter != 0 {
+		t.Fatalf("Reconcile() RequeueAfter = %s, want controller-runtime error backoff", result.RequeueAfter)
 	}
 }
 
@@ -405,7 +434,9 @@ func TestReconcile_NamespaceSelector(t *testing.T) {
 		pod,
 		policy,
 	)
+	setPodRunning(t, pod)
 
+	applyCalled := false
 	r := &NodeReconciler{
 		NodeName: nodeName,
 		Client:   testClient,
@@ -417,14 +448,27 @@ func TestReconcile_NamespaceSelector(t *testing.T) {
 				return &controllers.NamespaceInfo{Name: namespace, Labels: namespaceLabels}, nil
 			},
 			getPodInfoFunc: func(*corev1.Pod) (*controllers.PodInfo, error) {
-				return &controllers.PodInfo{Name: pod.Name, Namespace: pod.Namespace, NodeName: nodeName}, nil
+				return &controllers.PodInfo{Name: pod.Name, Namespace: pod.Namespace, NodeName: nodeName, Interfaces: []controllers.InterfaceInfo{testInterface()}}, nil
 			},
+		},
+		ApplyRulesForPodFunc: func(_ controllers.PolicyDeps, _ controllers.CommonRuleConfig, policyMap controllers.PolicyMap, gotPod *corev1.Pod, _ *controllers.PodInfo, _ string) error {
+			applyCalled = true
+			if gotPod.Name != pod.Name || gotPod.Namespace != pod.Namespace {
+				t.Fatalf("ApplyRulesForPodFunc pod = %s/%s, want %s/%s", gotPod.Namespace, gotPod.Name, pod.Namespace, pod.Name)
+			}
+			if _, ok := policyMap[types.NamespacedName{Namespace: namespace, Name: policy.Name}]; !ok {
+				t.Fatalf("ApplyRulesForPodFunc policyMap missing %s/%s", namespace, policy.Name)
+			}
+			return nil
 		},
 	}
 
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
 	if err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if !applyCalled {
+		t.Fatalf("expected ApplyRulesForPodFunc to be called")
 	}
 }
 
@@ -445,6 +489,22 @@ func seedObjects(t *testing.T, objs ...client.Object) {
 		if err := testClient.Create(context.Background(), obj); err != nil {
 			t.Fatalf("Create(%T) error = %v", obj, err)
 		}
+	}
+}
+
+func setPodRunning(t *testing.T, pod *corev1.Pod) {
+	t.Helper()
+	pod.Status.Phase = corev1.PodRunning
+	if err := testClient.Status().Update(context.Background(), pod); err != nil {
+		t.Fatalf("Status().Update() error = %v", err)
+	}
+}
+
+func testInterface() controllers.InterfaceInfo {
+	return controllers.InterfaceInfo{
+		NetattachName: "net1",
+		InterfaceName: "net1",
+		IPs:           []string{"10.0.0.1"},
 	}
 }
 

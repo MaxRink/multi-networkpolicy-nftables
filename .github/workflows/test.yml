@@ -43,7 +43,7 @@ jobs:
       run: |
         go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.24.1
         mkdir -p testbin/k8s
-        echo "KUBEBUILDER_ASSETS=$(setup-envtest use 1.35.x --bin-dir testbin/k8s -p path)" >> "$GITHUB_ENV"
+        echo "KUBEBUILDER_ASSETS=$(setup-envtest use 1.35.0 --bin-dir testbin/k8s -p path)" >> "$GITHUB_ENV"
 
     - name: Load kernel modules
       run: sudo modprobe nft_ct
