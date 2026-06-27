@@ -29,6 +29,11 @@ test: test-nftables
 
 ## test-unprivileged: Run unit tests that do not need Linux nftables/root
 test-unprivileged:
+	@set -e; \
+	if [ -n "$${KUBEBUILDER_ASSETS:-}" ]; then \
+		KUBEBUILDER_ASSETS=$$(cd "$$KUBEBUILDER_ASSETS" && pwd); \
+		export KUBEBUILDER_ASSETS; \
+	fi; \
 	go test -v $(TEST_UNPRIVILEGED_PKGS)
 
 ## test-nftables: Run nftables-backed unit tests (requires Linux and root/passwordless sudo)
