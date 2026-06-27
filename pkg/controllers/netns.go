@@ -20,6 +20,11 @@ import (
 
 // GetPodNetNSPath resolves the pod network namespace path via CRI.
 func GetPodNetNSPath(criClient pb.RuntimeServiceClient, pod *corev1.Pod) (string, error) {
+	return GetPodNetNSPathWithContext(context.Background(), criClient, pod)
+}
+
+// GetPodNetNSPathWithContext resolves the pod network namespace path via CRI.
+func GetPodNetNSPathWithContext(ctx context.Context, criClient pb.RuntimeServiceClient, pod *corev1.Pod) (string, error) {
 	netnsPath := ""
 
 	if pod.Status.Phase != corev1.PodRunning {
@@ -49,18 +54,18 @@ func GetPodNetNSPath(criClient pb.RuntimeServiceClient, pod *corev1.Pod) (string
 				ContainerId: containerID,
 				Verbose:     true,
 			}
-			rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			rpcCtx, rpcCancel := context.WithTimeout(ctx, 10*time.Second)
 			defer rpcCancel()
 			r, err := criClient.ContainerStatus(rpcCtx, request)
 			if err != nil {
-				return "", fmt.Errorf("cannot get containerStatus: %v", err)
+				return "", fmt.Errorf("cannot get containerStatus: %w", err)
 			}
 
 			info := r.GetInfo()
 			var infop interface{}
 			err = json.Unmarshal([]byte(info["info"]), &infop)
 			if err != nil {
-				return "", fmt.Errorf("cannot unmarshal containerStatus info: %v", err)
+				return "", fmt.Errorf("cannot unmarshal containerStatus info: %w", err)
 			}
 			pid, ok := infop.(map[string]interface{})["pid"].(float64)
 			if !ok {

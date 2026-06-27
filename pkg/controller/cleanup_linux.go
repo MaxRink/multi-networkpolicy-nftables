@@ -33,18 +33,21 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.
 	targeted := 0
 	var cleanupErrs []error
 	for i := range podList.Items {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("cleanup canceled: %w", err)
+		}
 		pod := &podList.Items[i]
 		if !controllers.IsMultiNetworkpolicyTarget(pod) {
 			continue
 		}
 		targeted++
-		criClient, err := r.criRuntimeClient()
+		criClient, err := r.criRuntimeClient(ctx)
 		if err != nil {
 			debugLog(r.HostPrefix, "cleanup: pod %s/%s: cannot connect to CRI (err=%v), skipping", pod.Namespace, pod.Name, err)
 			cleanupErrs = append(cleanupErrs, fmt.Errorf("pod %s/%s: connect to CRI: %w", pod.Namespace, pod.Name, err))
 			continue
 		}
-		netnsPath, err := controllers.GetPodNetNSPath(criClient, pod)
+		netnsPath, err := controllers.GetPodNetNSPathWithContext(ctx, criClient, pod)
 		if err != nil || netnsPath == "" {
 			debugLog(r.HostPrefix, "cleanup: pod %s/%s: cannot resolve netns (err=%v), skipping", pod.Namespace, pod.Name, err)
 			if err == nil {

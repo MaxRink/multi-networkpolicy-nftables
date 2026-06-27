@@ -147,6 +147,11 @@ func (pm *PodMap) GetPodInfo(pod *v1.Pod) (*PodInfo, error) {
 
 // GetCriRuntimeClient retrieves cri grpc client
 func GetCriRuntimeClient(runtimeEndpoint, hostPrefix string) (pb.RuntimeServiceClient, *grpc.ClientConn, error) {
+	return GetCriRuntimeClientWithContext(context.Background(), runtimeEndpoint, hostPrefix)
+}
+
+// GetCriRuntimeClientWithContext retrieves a CRI gRPC client using the supplied context.
+func GetCriRuntimeClientWithContext(ctx context.Context, runtimeEndpoint, hostPrefix string) (pb.RuntimeServiceClient, *grpc.ClientConn, error) {
 	hostRuntimeEndpoint := fmt.Sprintf("unix://%s%s", hostPrefix, runtimeEndpoint)
 	addr, dialer, err := k8sutils.GetAddressAndDialer(hostRuntimeEndpoint)
 	if err != nil {
@@ -160,7 +165,7 @@ func GetCriRuntimeClient(runtimeEndpoint, hostPrefix string) (pb.RuntimeServiceC
 	}
 	conn.Connect()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	for {

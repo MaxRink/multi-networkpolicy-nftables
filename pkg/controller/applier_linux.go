@@ -76,8 +76,10 @@ func flushRulesForPod(podNamespace, podName, netnsPath, hostPrefix string) error
 		if nftErr != nil {
 			return fmt.Errorf("failed to open nftables for pod (%s/%s): %w", podNamespace, podName, nftErr)
 		}
+		var cleanupErrs []error
 		if err := server.CleanupLegacyTables(nft); err != nil {
-			return fmt.Errorf("failed to clean legacy daemon-owned tables for pod (%s/%s): %w", podNamespace, podName, err)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("failed to clean legacy daemon-owned tables for pod (%s/%s): %w", podNamespace, podName, err))
+			klog.Errorf("failed to clean legacy daemon-owned tables for pod (%s/%s): %v", podNamespace, podName, err)
 		}
 		managedTables := []nftables.Table{
 			{Family: nftables.TableFamilyINet, Name: server.FilterTableName},
@@ -99,13 +101,13 @@ func flushRulesForPod(podNamespace, podName, netnsPath, hostPrefix string) error
 		}
 		if deleted == 0 {
 			debugLog(hostPrefix, "flush-cleanup %s/%s: no managed tables found, nothing to clean", podNamespace, podName)
-			return nil
+			return errors.Join(cleanupErrs...)
 		}
 		if flushErr := nft.Flush(); flushErr != nil {
-			return fmt.Errorf("failed to flush table deletions for pod (%s/%s): %w", podNamespace, podName, flushErr)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("failed to flush table deletions for pod (%s/%s): %w", podNamespace, podName, flushErr))
 		}
 		tablesAfter, _ := nft.ListTables()
 		debugLog(hostPrefix, "flush-cleanup %s/%s: %d tables remaining after flush", podNamespace, podName, len(tablesAfter))
-		return nil
+		return errors.Join(cleanupErrs...)
 	})
 }
