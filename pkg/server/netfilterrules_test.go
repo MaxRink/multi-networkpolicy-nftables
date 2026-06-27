@@ -639,6 +639,18 @@ func TestApplyPodRules(t *testing.T) {
 			if err != nil {
 				t.Fatalf("c.GetRules(%q, %q) failed: %s", filterTable.Name, peerChainActualName, err.Error())
 			}
+			rulesToScan := append([]*nftables.Rule{}, peerChainRules...)
+			for _, r := range peerChainRules {
+				for _, e := range r.Exprs {
+					if v, ok := e.(*expr.Verdict); ok && v.Kind == expr.VerdictJump && v.Chain != "" {
+						jumpRules, err := c.GetRules(filterTable, &nftables.Chain{Name: v.Chain})
+						if err != nil {
+							t.Fatalf("c.GetRules(%q, %q) failed: %s", filterTable.Name, v.Chain, err.Error())
+						}
+						rulesToScan = append(rulesToScan, jumpRules...)
+					}
+				}
+			}
 			prefix, err := netip.ParsePrefix(cidrStr)
 			if err != nil {
 				t.Fatalf("failed to parse expected CIDR %q: %v", cidrStr, err)
@@ -660,7 +672,7 @@ func TestApplyPodRules(t *testing.T) {
 
 			foundStart := false
 			foundEnd := false
-			for _, r := range peerChainRules {
+			for _, r := range rulesToScan {
 				for _, e := range r.Exprs {
 					if el, ok := e.(*expr.Lookup); ok {
 						peerSet, err := c.GetSetByName(filterTable, el.SetName)
@@ -1422,10 +1434,6 @@ func TestExceptCIDRUsesVerdictReturn(t *testing.T) {
 		t.Fatalf("ListChainsOfTableFamily() failed: %v", err)
 	}
 
-	exceptSetName := fmt.Sprintf("%s-%s-0_%s_%s_%s_0",
-		peersChainName, ipBlockChainSuffix,
-		peerIPBlockExceptPrefix, protoIPv4, sourceAddressSuffix)
-
 	foundExceptRule := false
 	for _, ch := range chains {
 		if ch.Table.Name != filterTable.Name {
@@ -1436,20 +1444,25 @@ func TestExceptCIDRUsesVerdictReturn(t *testing.T) {
 			continue
 		}
 		for _, rule := range rules {
-			hasExceptLookup := false
+			comment, ok := userdata.GetString(rule.UserData, userdata.TypeComment)
+			if !ok || !strings.Contains(comment, "cidr:10.0.0.0/8, return") {
+				continue
+			}
+			hasLookup := false
 			var verdict *expr.Verdict
 			for _, e := range rule.Exprs {
-				if lk, ok := e.(*expr.Lookup); ok && lk.SetName == exceptSetName {
-					hasExceptLookup = true
+				if _, ok := e.(*expr.Lookup); ok {
+					hasLookup = true
 				}
 				if v, ok := e.(*expr.Verdict); ok {
 					verdict = v
 				}
 			}
-			if !hasExceptLookup {
+			foundExceptRule = true
+			if !hasLookup {
+				t.Error("except rule has no lookup expression")
 				continue
 			}
-			foundExceptRule = true
 			if verdict == nil {
 				t.Error("except rule has no verdict expression")
 				continue
@@ -1464,7 +1477,7 @@ func TestExceptCIDRUsesVerdictReturn(t *testing.T) {
 	}
 
 	if !foundExceptRule {
-		t.Errorf("no except CIDR rule found targeting set %q; expected one rule with VerdictReturn", exceptSetName)
+		t.Error("no except CIDR return rule found for 10.0.0.0/8; expected one rule with VerdictReturn")
 	}
 }
 
