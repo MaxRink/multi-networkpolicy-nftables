@@ -1854,7 +1854,15 @@ func TestCleanupLegacyTables(t *testing.T) {
 		Name:  egressChain,
 		Table: legacyFilter,
 	})
-	_ = unreferencedDaemonChain
+	c.AddRule(&nftables.Rule{
+		Table:    legacyFilter,
+		Chain:    unreferencedDaemonChain,
+		UserData: userDataComment("drop-remaining"),
+		Exprs: []expr.Any{
+			&expr.Counter{},
+			&expr.Verdict{Kind: expr.VerdictDrop},
+		},
+	})
 
 	baseChain := c.AddChain(&nftables.Chain{
 		Name:  "input",
@@ -2004,6 +2012,45 @@ func TestCleanupLegacyTables(t *testing.T) {
 		if set.Name == podInterfacesName {
 			t.Errorf("daemon pod_interfaces set was not removed from legacy table")
 		}
+	}
+}
+
+func TestRuleEqualHandlesShortAndUnknownRules(t *testing.T) {
+	chain := &nftables.Chain{Name: ingressChain}
+	table := &nftables.Table{Name: FilterTableName}
+	desired := &nftables.Rule{
+		Table:    table,
+		Chain:    chain,
+		UserData: userDataComment("desired"),
+		Exprs: []expr.Any{
+			&expr.Counter{},
+			&expr.Verdict{Kind: expr.VerdictAccept},
+		},
+	}
+	shortExisting := &nftables.Rule{
+		Table:    table,
+		Chain:    chain,
+		UserData: userDataComment("desired"),
+		Exprs:    []expr.Any{&expr.Counter{}},
+	}
+	if ruleEqual(desired, shortExisting) {
+		t.Fatal("ruleEqual returned true for an existing rule with fewer expressions")
+	}
+
+	unknownDesired := &nftables.Rule{
+		Table:    table,
+		Chain:    chain,
+		UserData: userDataComment("desired"),
+		Exprs:    []expr.Any{&expr.Immediate{}},
+	}
+	unknownExisting := &nftables.Rule{
+		Table:    table,
+		Chain:    chain,
+		UserData: userDataComment("desired"),
+		Exprs:    []expr.Any{&expr.Immediate{}},
+	}
+	if ruleEqual(unknownDesired, unknownExisting) {
+		t.Fatal("ruleEqual returned true for an unhandled expression type")
 	}
 }
 
