@@ -111,7 +111,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	if len(retryErrs) > 0 {
-		return ctrl.Result{RequeueAfter: 2 * time.Second}, errors.Join(retryErrs...)
+		return ctrl.Result{}, errors.Join(retryErrs...)
 	}
 	if retryNeeded {
 		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
