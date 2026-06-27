@@ -293,12 +293,20 @@ func CleanupLegacyTables(nft *nftables.Conn) error {
 			if chain.Table.Name != table.Name || !legacyDaemonChainNames[chain.Name] {
 				continue
 			}
+			hasRemainingRules, err := cleanupLegacyDaemonChainRules(nft, table, chain)
+			if err != nil {
+				return err
+			}
 			referenced, err := legacyChainReferenced(nft, table, chain.Name)
 			if err != nil {
 				return err
 			}
 			if referenced {
 				klog.V(2).Infof("preserving daemon-owned legacy chain %q in table %q because remaining rules still reference it", chain.Name, table.Name)
+				continue
+			}
+			if hasRemainingRules {
+				klog.V(2).Infof("preserving daemon-owned legacy chain %q in table %q because it still contains foreign rules", chain.Name, table.Name)
 				continue
 			}
 			klog.V(2).Infof("removing daemon-owned legacy chain %q from table %q", chain.Name, table.Name)
@@ -334,6 +342,57 @@ func legacyDaemonRule(rule *nftables.Rule) bool {
 
 func legacyDaemonSet(set *nftables.Set) bool {
 	return set.Name == podInterfacesName && legacyDaemonSetComments[set.Comment]
+}
+
+func cleanupLegacyDaemonChainRules(nft *nftables.Conn, table *nftables.Table, chain *nftables.Chain) (bool, error) {
+	rules, err := nft.GetRules(table, chain)
+	if err != nil {
+		return false, fmt.Errorf("cleanup legacy tables: list rules for daemon chain %q in table %q: %w", chain.Name, table.Name, err)
+	}
+
+	deleted := false
+	for _, rule := range rules {
+		if !legacyDaemonChainRule(rule) {
+			continue
+		}
+		comment, _ := userdata.GetString(rule.UserData, userdata.TypeComment)
+		klog.V(2).Infof("removing daemon-owned legacy rule %q from chain %q in table %q", comment, chain.Name, table.Name)
+		if err := nft.DelRule(rule); err != nil {
+			return false, fmt.Errorf("cleanup legacy tables: delete daemon-owned rule from chain %q in table %q: %w", chain.Name, table.Name, err)
+		}
+		deleted = true
+	}
+	if deleted {
+		if err := nft.Flush(); err != nil {
+			return false, fmt.Errorf("cleanup legacy tables: flush daemon-owned rule deletes for chain %q in table %q: %w", chain.Name, table.Name, err)
+		}
+		rules, err = nft.GetRules(table, chain)
+		if err != nil {
+			return false, fmt.Errorf("cleanup legacy tables: list remaining rules for daemon chain %q in table %q: %w", chain.Name, table.Name, err)
+		}
+	}
+
+	return len(rules) > 0, nil
+}
+
+func legacyDaemonChainRule(rule *nftables.Rule) bool {
+	comment, ok := userdata.GetString(rule.UserData, userdata.TypeComment)
+	if !ok {
+		return false
+	}
+	if legacyDaemonRuleComments[comment] {
+		return true
+	}
+	if comment == "common-ingress-chain" ||
+		comment == "common-egress-chain" ||
+		comment == "allow-ipv6-ndp-discovery" ||
+		comment == allowConntrackRuleName ||
+		comment == "drop-remaining" {
+		return true
+	}
+	return strings.HasPrefix(comment, "policy:") ||
+		strings.HasPrefix(comment, "common rule:") ||
+		strings.HasPrefix(comment, "allow_icmp_")
 }
 
 func legacyChainReferenced(nft *nftables.Conn, table *nftables.Table, chainName string) (bool, error) {
@@ -602,6 +661,9 @@ func ruleEqual(a, b *nftables.Rule) bool {
 	if a.Table.Name != b.Table.Name {
 		return false
 	}
+	if len(a.Exprs) != len(b.Exprs) {
+		return false
+	}
 
 	if !bytes.Equal(a.UserData, b.UserData) {
 		return false
@@ -637,6 +699,12 @@ func ruleEqual(a, b *nftables.Rule) bool {
 			if !exprEqual(&expr.Bitwise{}, a.Exprs[i], b.Exprs[i]) {
 				return false
 			}
+		case *expr.Counter:
+			if _, ok := b.Exprs[i].(*expr.Counter); !ok {
+				return false
+			}
+		default:
+			return false
 		}
 	}
 
@@ -1465,7 +1533,7 @@ func (n *nftState) applyPolicyPeersRulesSelector(deps controllers.PolicyDeps, ch
 	}
 
 	if err := n.addIPRules(chainName, podIntfIPs, chain, policyName, peer, peerIndex); err != nil {
-		klog.Errorf("failed to add IP rules %v", err)
+		return fmt.Errorf("add selector IP rules: %w", err)
 	}
 
 	return nil
@@ -1623,17 +1691,17 @@ func (n *nftState) applyPolicyPeersRules(deps controllers.PolicyDeps, chainName 
 	for index, peer := range peers {
 		if peer.IPBlock != nil {
 			if err := n.applyPolicyPeersRulesIPBlock(peersName, peersChain, policyName, peer, index); err != nil {
-				klog.Errorf("failed to apply IPBlock rules: %v", err)
+				return fmt.Errorf("apply IPBlock peer rules at index %d: %w", index, err)
 			}
 			continue
 		}
 		if peer.PodSelector != nil || peer.NamespaceSelector != nil {
 			if err := n.applyPolicyPeersRulesSelector(deps, peersName, peersChain, policyName, peer, podInfo, policyNetworks, index); err != nil {
-				klog.Errorf("failed to apply selector rules: %v", err)
+				return fmt.Errorf("apply selector peer rules at index %d: %w", index, err)
 			}
 			continue
 		}
-		klog.Errorf("unknown rule: %+v", peer)
+		return fmt.Errorf("unknown peer rule at index %d: %+v", index, peer)
 	}
 
 	if len(peers) == 0 {

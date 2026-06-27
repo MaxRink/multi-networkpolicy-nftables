@@ -154,7 +154,7 @@ func (r *NodeReconciler) GetNamespaceInfo(namespace string) (*controllers.Namesp
 }
 
 func (r *NodeReconciler) GetPodInfo(pod *corev1.Pod) (*controllers.PodInfo, error) {
-	criClient, err := r.criRuntimeClient()
+	criClient, err := r.criRuntimeClient(context.Background())
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +165,7 @@ func (r *NodeReconciler) GetPodInfo(pod *corev1.Pod) (*controllers.PodInfo, erro
 	return podInfo, nil
 }
 
-func (r *NodeReconciler) criRuntimeClient() (pb.RuntimeServiceClient, error) {
+func (r *NodeReconciler) criRuntimeClient(ctx context.Context) (pb.RuntimeServiceClient, error) {
 	r.criMu.Lock()
 	defer r.criMu.Unlock()
 
@@ -176,7 +176,7 @@ func (r *NodeReconciler) criRuntimeClient() (pb.RuntimeServiceClient, error) {
 		return nil, fmt.Errorf("CRI runtime endpoint is empty")
 	}
 
-	criClient, criConn, err := controllers.GetCriRuntimeClient(r.ContainerRuntimeEndpoint, r.HostPrefix)
+	criClient, criConn, err := controllers.GetCriRuntimeClientWithContext(ctx, r.ContainerRuntimeEndpoint, r.HostPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("connect to CRI runtime %q: %w", r.ContainerRuntimeEndpoint, err)
 	}
