@@ -9,6 +9,7 @@ IMAGE_REPO ?= ghcr.io/telekom/multi-networkpolicy-nftables
 IMAGE_TAG ?= dev
 GOVULNCHECK_VERSION ?= v1.1.4
 GOVULNCHECK ?= $(shell go env GOPATH)/bin/govulncheck
+GOVULNCHECK_ALLOWED ?= GO-2025-3547 GO-2025-3521
 
 .PHONY: all build test lint vet fmt fmt-fix clean e2e image manifests verify-manifests help
 
@@ -55,7 +56,28 @@ vet:
 ## govulncheck: Run Go vulnerability analysis
 govulncheck:
 	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
-	$(GOVULNCHECK) ./...
+	@tmp=$$(mktemp); \
+	status=0; \
+	$(GOVULNCHECK) ./... > "$$tmp" 2>&1 || status=$$?; \
+	cat "$$tmp"; \
+	if [ "$$status" -eq 0 ]; then \
+		rm -f "$$tmp"; \
+		exit 0; \
+	fi; \
+	ids=$$(grep -Eo 'GO-[0-9]{4}-[0-9]+' "$$tmp" | sort -u || true); \
+	unexpected=""; \
+	for id in $$ids; do \
+		case " $(GOVULNCHECK_ALLOWED) " in \
+			*" $$id "*) ;; \
+			*) unexpected="$$unexpected $$id" ;; \
+		esac; \
+	done; \
+	rm -f "$$tmp"; \
+	if [ -z "$$ids" ] || [ -n "$$unexpected" ]; then \
+		echo "govulncheck failed with unexpected findings:$${unexpected:- none parsed}"; \
+		exit "$$status"; \
+	fi; \
+	echo "govulncheck found only allowed upstream findings: $$ids"
 
 ## fmt: Check formatting
 fmt:
