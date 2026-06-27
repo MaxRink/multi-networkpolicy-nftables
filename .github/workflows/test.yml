@@ -39,6 +39,12 @@ jobs:
     - name: Run go env toolchain
       run: go env -w GOTOOLCHAIN=go${{ matrix.go-version }}+auto
 
+    - name: Install envtest assets
+      run: |
+        go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.21.0
+        mkdir -p testbin/k8s
+        echo "KUBEBUILDER_ASSETS=$(setup-envtest use 1.35.x --bin-dir testbin/k8s -p path)" >> "$GITHUB_ENV"
+
     - name: Load kernel modules
       run: sudo modprobe nft_ct
 
