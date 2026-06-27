@@ -12,7 +12,7 @@ GOVULNCHECK ?= $(shell go env GOPATH)/bin/govulncheck
 GOVULNCHECK_ALLOWED ?= GO-2025-3547 GO-2025-3521 GO-2026-5856
 TEST_PROFILE ?= profile.cov
 TEST_ALL_PKGS ?= ./...
-TEST_UNPRIVILEGED_PKGS ?= ./pkg/controllers ./pkg/utils
+TEST_UNPRIVILEGED_PKGS ?= ./pkg/controller ./pkg/controllers ./pkg/utils
 TEST_NFTABLES_PKGS ?= ./pkg/server
 
 .PHONY: all build test lint vet fmt fmt-fix clean e2e image manifests verify-manifests help
