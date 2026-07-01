@@ -128,7 +128,7 @@ spec:
         - --container-runtime-endpoint=/run/crio/crio.sock
         command:
         - /usr/bin/multi-networkpolicy-nftables
-        image: ghcr.io/telekom/multi-networkpolicy-nftables:nftables
+        image: ghcr.io/maxrink/multi-networkpolicy-nftables:pr-76
         imagePullPolicy: Always
         name: multi-networkpolicy
         resources:

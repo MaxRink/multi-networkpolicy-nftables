@@ -7,6 +7,7 @@ on:
       - master
       - nftables
       - test-ci
+      - feat/controller-runtime-rearchitect
 jobs:
   build-images:
     name: Docker build
@@ -48,6 +49,11 @@ jobs:
           images: ${{ env.IMAGE_REPOSITORY }}
           flavor:
             latest=false
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=raw,value=pr-76,enable=${{ github.ref == 'refs/heads/feat/controller-runtime-rearchitect' }}
+            type=sha,prefix=pr-76-,format=short,enable=${{ github.ref == 'refs/heads/feat/controller-runtime-rearchitect' }}
 
       - name: Build and Push Docker Image
         id: build
@@ -105,6 +111,13 @@ jobs:
         uses: docker/metadata-action@v5.5.1
         with:
           images: ${{ env.IMAGE_REPOSITORY }}
+          flavor:
+            latest=false
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=raw,value=pr-76,enable=${{ github.ref == 'refs/heads/feat/controller-runtime-rearchitect' }}
+            type=sha,prefix=pr-76-,format=short,enable=${{ github.ref == 'refs/heads/feat/controller-runtime-rearchitect' }}
 
       - name: Create manifest list and push
         working-directory: ${{ runner.temp }}/digests

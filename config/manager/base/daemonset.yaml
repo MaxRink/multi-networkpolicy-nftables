@@ -30,7 +30,7 @@ spec:
       serviceAccountName: multi-networkpolicy
       containers:
         - name: multi-networkpolicy
-          image: ghcr.io/telekom/multi-networkpolicy-nftables:nftables
+          image: ghcr.io/maxrink/multi-networkpolicy-nftables:pr-76
           imagePullPolicy: Always
           command:
             - /usr/bin/multi-networkpolicy-nftables

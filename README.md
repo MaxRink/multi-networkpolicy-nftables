@@ -92,6 +92,12 @@ containerd socket, sync period, network plugin list, verbosity, and privileged
 mode. RBAC, ConfigMaps, mounts, and the pod iptables state path stay shared
 with the normal deploy manifest.
 
+While PR 76 is reviewed from `MaxRink:feat/controller-runtime-rearchitect`,
+`deploy.yml` uses `ghcr.io/maxrink/multi-networkpolicy-nftables:pr-76`. The
+`docker-image` workflow publishes that tag, plus a `pr-76-<sha>` tag, whenever
+the PR branch is pushed. Switch the image repository back to the upstream
+repository/tag before merging this branch as the long-lived default.
+
 ## Development
 
 ### Prerequisites
