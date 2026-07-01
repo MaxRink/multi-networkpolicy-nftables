@@ -133,11 +133,12 @@ spec:
       serviceAccountName: multi-networkpolicy
       containers:
       - name: multi-networkpolicy
-        image: ghcr.io/k8snetworkplumbingwg/multi-networkpolicy-nftables:snapshot
+        image: ghcr.io/telekom/multi-networkpolicy-nftables:snapshot
         imagePullPolicy: Always
         command: ["/usr/bin/multi-networkpolicy-nftables"]
         args:
         - "--host-prefix=/host"
+        - "--pod-iptables=/var/lib/multi-networkpolicy"
         # change this if runtime is different that crio default
         - "--container-runtime-endpoint=/run/crio/crio.sock"
         # uncomment this if you need to accept link-local address traffic
