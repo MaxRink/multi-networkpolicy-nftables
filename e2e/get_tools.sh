@@ -6,9 +6,9 @@ KIND_VERSION="v0.30.0"
 KUBECTL_VERSION="v1.32.3"
 JQ_VERSION="1.7.1"
 
-# NOTE: The e2e YAML assets (e2e/multi-network-policy-nftables-e2e.yml, e2e/cni-install.yml)
-# currently contain amd64-only manifests. Until those are updated for multi-arch,
-# this script downloads amd64 binaries only on Linux regardless of host architecture.
+# NOTE: The e2e YAML assets are amd64-only. Until those are updated for
+# multi-arch, this script downloads amd64 binaries only on Linux regardless of
+# host architecture.
 
 # Pinned SHA256 checksums — update when bumping versions above
 KIND_SHA256_AMD64="517ab7fc89ddeed5fa65abf71530d90648d9638ef0c4cde22c2c11f8097b8889"

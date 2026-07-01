@@ -55,9 +55,11 @@ Deploy multi-networkpolicy-nftables into Kubernetes.
 $ git clone https://github.com/telekom/multi-networkpolicy-nftables
 $ cd multi-networkpolicy-nftables
 $ kubectl create -f deploy.yml
+serviceaccount/multi-networkpolicy created
 clusterrole.rbac.authorization.k8s.io/multi-networkpolicy created
 clusterrolebinding.rbac.authorization.k8s.io/multi-networkpolicy created
-serviceaccount/multi-networkpolicy created
+configmap/multi-networkpolicy-custom-v4-rules created
+configmap/multi-networkpolicy-custom-v6-rules created
 daemonset.apps/multi-networkpolicy-ds-amd64 created
 ```
 
@@ -73,6 +75,22 @@ This project leverages `nftables` hence the netfilter module needs to be loaded 
 ## Configurations
 
 See [Configurations](docs/configurations.md).
+
+### Generated Manifests
+
+`deploy.yml` and `e2e/multi-network-policy-nftables-e2e.yml` are generated
+from the shared kustomize base under `config/manager`. Edit the base or e2e
+overlay, then run:
+
+```bash
+make manifests
+make verify-manifests
+```
+
+The e2e overlay only changes test-specific settings such as the local image,
+containerd socket, sync period, network plugin list, verbosity, and privileged
+mode. RBAC, ConfigMaps, mounts, and the pod iptables state path stay shared
+with the normal deploy manifest.
 
 ## Development
 
