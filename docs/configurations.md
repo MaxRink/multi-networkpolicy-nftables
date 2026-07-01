@@ -11,6 +11,20 @@ $ ./multi-networkpolicy-nftables --help
 
 ### Advanced Options
 
+#### Host paths used by the DaemonSet
+
+The sample DaemonSet mounts the host filesystem at `/host` and persists
+per-pod troubleshooting state under `/var/lib/multi-networkpolicy`. Keep the
+controller flags aligned with those mounts:
+
+```
+--host-prefix=/host
+--pod-iptables=/var/lib/multi-networkpolicy
+```
+
+If a cluster uses a CRI socket other than the default shown in `deploy.yml`,
+set `--container-runtime-endpoint` to the host socket path.
+
 #### Add exceptional IP prefix address to accept
 
 Some networks may require accepting traffic from/to specific address prefixes for the network, such as multicast address (all routers multicast address, link-local address and so on). You can configure `--allow-src-prefix` and `--allow-dst-prefix` to specify which prefix should be accepted (even though network policy does not have it). Both options accept a comma-separated CIDR list.
