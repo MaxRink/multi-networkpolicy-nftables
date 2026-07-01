@@ -14,9 +14,9 @@ func PreparePodIptablesDir(path string) error {
 		return nil
 	}
 
-	if _, err := os.Stat(path); err == nil {
-		if err := os.RemoveAll(path); err != nil {
-			return fmt.Errorf("delete pod iptables directory %q: %w", path, err)
+	if info, err := os.Stat(path); err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("pod iptables path %q is not a directory", path)
 		}
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat pod iptables directory %q: %w", path, err)
@@ -24,6 +24,17 @@ func PreparePodIptablesDir(path string) error {
 
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return fmt.Errorf("create pod iptables directory %q: %w", path, err)
+	}
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return fmt.Errorf("list pod iptables directory %q: %w", path, err)
+	}
+	for _, entry := range entries {
+		entryPath := filepath.Join(path, entry.Name())
+		if err := os.RemoveAll(entryPath); err != nil {
+			return fmt.Errorf("delete stale pod iptables entry %q: %w", entryPath, err)
+		}
 	}
 	return nil
 }

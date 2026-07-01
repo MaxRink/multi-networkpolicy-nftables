@@ -379,7 +379,7 @@ func TestReconcile_PodDeletedDuringReconcile(t *testing.T) {
 	}
 }
 
-func TestPreparePodIptablesDirRecreatesRoot(t *testing.T) {
+func TestPreparePodIptablesDirCleansRootContents(t *testing.T) {
 	parent := t.TempDir()
 	root := filepath.Join(parent, "pod-iptables")
 	stale := filepath.Join(root, "stale")
@@ -396,6 +396,17 @@ func TestPreparePodIptablesDirRecreatesRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatalf("expected stale pod iptables content to be removed, got err=%v", err)
+	}
+}
+
+func TestPreparePodIptablesDirRejectsFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pod-iptables")
+	if err := os.WriteFile(path, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if err := PreparePodIptablesDir(path); err == nil {
+		t.Fatal("PreparePodIptablesDir() error = nil, want non-directory error")
 	}
 }
 

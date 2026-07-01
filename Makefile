@@ -8,7 +8,7 @@ GO_LDFLAGS ?= -s -w
 IMAGE_REPO ?= ghcr.io/telekom/multi-networkpolicy-nftables
 IMAGE_TAG ?= dev
 
-.PHONY: all build test lint vet fmt fmt-fix clean e2e image help
+.PHONY: all build test lint vet fmt fmt-fix clean e2e image manifests verify-manifests help
 
 all: build
 
@@ -73,6 +73,14 @@ image:
 ## e2e: Run e2e tests (requires kind cluster)
 e2e:
 	cd e2e && ./run_all_tests.sh
+
+## manifests: Regenerate deploy.yml and e2e install manifests
+manifests:
+	./hack/update-deploy-manifests.sh
+
+## verify-manifests: Verify generated manifests are up to date
+verify-manifests:
+	./hack/verify-deploy-manifests.sh
 
 ## help: Show this help
 help:

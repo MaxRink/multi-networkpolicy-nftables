@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: multi-networkpolicy-ds-amd64
+  namespace: kube-system
+  labels:
+    tier: node
+    app: multi-networkpolicy
+    name: multi-networkpolicy
+spec:
+  selector:
+    matchLabels:
+      name: multi-networkpolicy
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        tier: node
+        app: multi-networkpolicy
+        name: multi-networkpolicy
+    spec:
+      hostNetwork: true
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      tolerations:
+        - operator: Exists
+          effect: NoSchedule
+      serviceAccountName: multi-networkpolicy
+      containers:
+        - name: multi-networkpolicy
+          image: ghcr.io/telekom/multi-networkpolicy-nftables:nftables
+          imagePullPolicy: Always
+          command:
+            - /usr/bin/multi-networkpolicy-nftables
+          args:
+            - --host-prefix=/host
+            - --pod-iptables=/var/lib/multi-networkpolicy
+            - --container-runtime-endpoint=/run/crio/crio.sock
+          resources:
+            requests:
+              cpu: 100m
+              memory: 80Mi
+            limits:
+              cpu: 100m
+              memory: 150Mi
+          securityContext:
+            capabilities:
+              add:
+                - SYS_ADMIN
+                - NET_ADMIN
+          volumeMounts:
+            - name: host
+              mountPath: /host
+              readOnly: true
+            - name: var-lib-multinetworkpolicy
+              mountPath: /var/lib/multi-networkpolicy
+            - name: multi-networkpolicy-custom-rules
+              mountPath: /etc/multi-networkpolicy/rules
+              readOnly: true
+      volumes:
+        - name: host
+          hostPath:
+            path: /
+        - name: var-lib-multinetworkpolicy
+          hostPath:
+            path: /var/lib/multi-networkpolicy
+        - name: multi-networkpolicy-custom-rules
+          projected:
+            sources:
+              - configMap:
+                  name: multi-networkpolicy-custom-v4-rules
+              - configMap:
+                  name: multi-networkpolicy-custom-v6-rules
