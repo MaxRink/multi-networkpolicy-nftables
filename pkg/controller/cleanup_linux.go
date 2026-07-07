@@ -11,6 +11,7 @@ import (
 
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
 	corev1 "k8s.io/api/core/v1"
+	pb "k8s.io/cri-api/pkg/apis/runtime/v1"
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -31,6 +32,7 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.
 	}
 	debugLog(r.HostPrefix, "cleanup: found %d pods on node %s", len(podList.Items), r.NodeName)
 	targeted := 0
+	var criClient pb.RuntimeServiceClient
 	var cleanupErrs []error
 	for i := range podList.Items {
 		if err := ctx.Err(); err != nil {
@@ -41,11 +43,13 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.
 			continue
 		}
 		targeted++
-		criClient, err := r.criRuntimeClient(ctx)
-		if err != nil {
-			debugLog(r.HostPrefix, "cleanup: pod %s/%s: cannot connect to CRI (err=%v), skipping", pod.Namespace, pod.Name, err)
-			cleanupErrs = append(cleanupErrs, fmt.Errorf("pod %s/%s: connect to CRI: %w", pod.Namespace, pod.Name, err))
-			continue
+		if criClient == nil {
+			var err error
+			criClient, err = r.criRuntimeClient(ctx)
+			if err != nil {
+				debugLog(r.HostPrefix, "cleanup: failed to connect to CRI: %v", err)
+				return fmt.Errorf("cleanup: connect to CRI: %w", err)
+			}
 		}
 		netnsPath, err := controllers.GetPodNetNSPathWithContext(ctx, criClient, pod)
 		if err != nil || netnsPath == "" {
@@ -56,7 +60,7 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.
 			cleanupErrs = append(cleanupErrs, fmt.Errorf("pod %s/%s: resolve netns: %w", pod.Namespace, pod.Name, err))
 			continue
 		}
-		debugLog(r.HostPrefix, "cleanup: removing rules for %s/%s (netns=%s)", pod.Namespace, pod.Name, netnsPath)
+		debugLog(r.HostPrefix, "cleanup: removing rules for %s/%s", pod.Namespace, pod.Name)
 		if err := flushRulesForPod(pod.Namespace, pod.Name, netnsPath, r.HostPrefix); err != nil {
 			debugLog(r.HostPrefix, "cleanup: FAILED to remove rules for %s/%s: %v", pod.Namespace, pod.Name, err)
 			cleanupErrs = append(cleanupErrs, fmt.Errorf("pod %s/%s: flush rules: %w", pod.Namespace, pod.Name, err))

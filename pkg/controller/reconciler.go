@@ -13,6 +13,7 @@ import (
 	netdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	netdefutils "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/utils"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
+	multiutils "github.com/telekom/multi-networkpolicy-nftables/pkg/utils"
 	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -26,14 +27,13 @@ import (
 )
 
 var _ controllers.PolicyDeps = (*NodeReconciler)(nil)
-var _ controllers.NetDefResolver = (*NodeReconciler)(nil)
 
+// NodeReconciler reconciles the local node's pods into nftables rules.
 type NodeReconciler struct {
 	NodeName       string
 	Client         client.Client
 	PolicyDeps     controllers.PolicyDeps
 	HostPrefix     string
-	PodIptables    string
 	NetworkPlugins []string
 	CommonCfg      controllers.CommonRuleConfig
 	CriClient      pb.RuntimeServiceClient
@@ -42,13 +42,15 @@ type NodeReconciler struct {
 	ContainerRuntimeEndpoint string
 	criMu                    sync.Mutex
 
-	ApplyRulesForPodFunc func(controllers.PolicyDeps, controllers.CommonRuleConfig, controllers.PolicyMap, *corev1.Pod, *controllers.PodInfo, string) error
+	ApplyRulesForPodFunc func(context.Context, controllers.PolicyDeps, controllers.CommonRuleConfig, controllers.PolicyMap, *corev1.Pod, *controllers.PodInfo, string) error
 }
 
+// CleanupOnShutdown removes policy rules for pods on the local node.
 func CleanupOnShutdown(ctx context.Context, r *NodeReconciler, cl client.Client) error {
 	return cleanupAllPods(ctx, r, cl)
 }
 
+// SetupWithManager wires node, pod, policy, namespace, and NAD watches.
 func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}, builder.WithPredicates(NodePredicate(r.NodeName))).
@@ -65,6 +67,7 @@ func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// Reconcile applies current policy state to all relevant pods on the local node.
 func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	if req.Name != r.NodeName {
 		return ctrl.Result{}, nil
@@ -80,7 +83,6 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := r.Client.List(ctx, &podList, client.MatchingFields{PodHostnameIndex: r.NodeName}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list pods for node %s: %w", r.NodeName, err)
 	}
-	r.cleanupStalePodIptablesDirs(podList.Items)
 
 	deps := r.policyDeps()
 	retryNeeded := false
@@ -91,7 +93,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			continue
 		}
 
-		podInfo, err := deps.GetPodInfo(pod)
+		podInfo, err := deps.GetPodInfo(ctx, pod)
 		if err != nil {
 			klog.Errorf("failed to get pod info for %s/%s: %v", pod.Namespace, pod.Name, err)
 			retryNeeded = true
@@ -103,7 +105,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			continue
 		}
 
-		if err := r.applyRulesForPod(deps, r.CommonCfg, policyMap, pod, podInfo, r.HostPrefix); err != nil {
+		if err := r.applyRulesForPod(ctx, deps, r.CommonCfg, policyMap, pod, podInfo, r.HostPrefix); err != nil {
 			klog.Errorf("failed to apply rules for %s/%s: %v", pod.Namespace, pod.Name, err)
 			retryNeeded = true
 			retryErrs = append(retryErrs, fmt.Errorf("apply rules for %s/%s: %w", pod.Namespace, pod.Name, err))
@@ -126,16 +128,17 @@ func (r *NodeReconciler) policyDeps() controllers.PolicyDeps {
 	return r
 }
 
-func (r *NodeReconciler) applyRulesForPod(deps controllers.PolicyDeps, cfg controllers.CommonRuleConfig, policyMap controllers.PolicyMap, pod *corev1.Pod, podInfo *controllers.PodInfo, hostPrefix string) error {
+func (r *NodeReconciler) applyRulesForPod(ctx context.Context, deps controllers.PolicyDeps, cfg controllers.CommonRuleConfig, policyMap controllers.PolicyMap, pod *corev1.Pod, podInfo *controllers.PodInfo, hostPrefix string) error {
 	if r.ApplyRulesForPodFunc != nil {
-		return r.ApplyRulesForPodFunc(deps, cfg, policyMap, pod, podInfo, hostPrefix)
+		return r.ApplyRulesForPodFunc(ctx, deps, cfg, policyMap, pod, podInfo, hostPrefix)
 	}
-	return applyRulesForPod(deps, cfg, policyMap, pod, podInfo, hostPrefix)
+	return applyRulesForPod(ctx, deps, cfg, policyMap, pod, podInfo, hostPrefix)
 }
 
-func (r *NodeReconciler) ListPods(selector labels.Selector) ([]*corev1.Pod, error) {
+// ListPods returns pods matching the provided label selector.
+func (r *NodeReconciler) ListPods(ctx context.Context, selector labels.Selector) ([]*corev1.Pod, error) {
 	var podList corev1.PodList
-	if err := r.Client.List(context.Background(), &podList, client.MatchingLabelsSelector{Selector: selector}); err != nil {
+	if err := r.Client.List(ctx, &podList, client.MatchingLabelsSelector{Selector: selector}); err != nil {
 		return nil, err
 	}
 	result := make([]*corev1.Pod, len(podList.Items))
@@ -145,23 +148,37 @@ func (r *NodeReconciler) ListPods(selector labels.Selector) ([]*corev1.Pod, erro
 	return result, nil
 }
 
-func (r *NodeReconciler) GetNamespaceInfo(namespace string) (*controllers.NamespaceInfo, error) {
+// GetNamespaceInfo returns the labels needed for namespace selector evaluation.
+func (r *NodeReconciler) GetNamespaceInfo(ctx context.Context, namespace string) (*controllers.NamespaceInfo, error) {
 	var ns corev1.Namespace
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: namespace}, &ns); err != nil {
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: namespace}, &ns); err != nil {
 		return nil, err
 	}
 	return &controllers.NamespaceInfo{Name: ns.Name, Labels: ns.Labels}, nil
 }
 
-func (r *NodeReconciler) GetPodInfo(pod *corev1.Pod) (*controllers.PodInfo, error) {
-	criClient, err := r.criRuntimeClient(context.Background())
+// GetPodInfo extracts pod interface metadata and resolves its network namespace when needed.
+func (r *NodeReconciler) GetPodInfo(ctx context.Context, pod *corev1.Pod) (*controllers.PodInfo, error) {
+	podInfo, err := controllers.NewPodInfoFromPod(ctx, pod, nil, r.NodeName, r.NetworkPlugins, r)
+	if err != nil {
+		return nil, fmt.Errorf("build pod info for %s/%s: %w", pod.Namespace, pod.Name, err)
+	}
+	if podInfo == nil || len(podInfo.Interfaces) == 0 || !multiutils.CheckNodeNameIdentical(r.NodeName, pod.Spec.NodeName) {
+		return podInfo, nil
+	}
+
+	criClient, err := r.criRuntimeClient(ctx)
 	if err != nil {
 		return nil, err
 	}
-	podInfo := controllers.NewPodInfoFromPod(pod, criClient, r.NodeName, r.NetworkPlugins, r)
-	if podInfo == nil {
-		return nil, fmt.Errorf("NewPodInfoFromPod returned nil for pod %s/%s", pod.Namespace, pod.Name)
+	netnsPath, err := controllers.GetPodNetNSPathWithContext(ctx, criClient, pod)
+	if err != nil {
+		return nil, fmt.Errorf("resolve pod network namespace for %s/%s: %w", pod.Namespace, pod.Name, err)
 	}
+	if netnsPath == "" {
+		return nil, fmt.Errorf("resolve pod network namespace for %s/%s: empty netns path", pod.Namespace, pod.Name)
+	}
+	podInfo.NetNSPath = netnsPath
 	return podInfo, nil
 }
 
@@ -185,49 +202,59 @@ func (r *NodeReconciler) criRuntimeClient(ctx context.Context) (pb.RuntimeServic
 	return r.CriClient, nil
 }
 
+// CloseCRI closes any cached CRI connection.
 func (r *NodeReconciler) CloseCRI() error {
 	r.criMu.Lock()
 	defer r.criMu.Unlock()
 
-	err := controllers.CloseCriConnection(r.CriConn)
+	var err error
+	if r.CriConn != nil {
+		err = r.CriConn.Close()
+	}
 	r.CriConn = nil
 	r.CriClient = nil
 	return err
 }
 
-func (r *NodeReconciler) GetPluginType(namespacedName types.NamespacedName) string {
-	return resolvePluginType(r.Client, namespacedName)
+// GetPluginType resolves the CNI plugin type for a NetworkAttachmentDefinition.
+func (r *NodeReconciler) GetPluginType(ctx context.Context, namespacedName types.NamespacedName) (string, error) {
+	return resolvePluginType(ctx, r.Client, namespacedName)
 }
 
-func resolvePluginType(cl client.Client, namespacedName types.NamespacedName) string {
+func resolvePluginType(ctx context.Context, cl client.Client, namespacedName types.NamespacedName) (string, error) {
 	var nad netdefv1.NetworkAttachmentDefinition
-	if err := cl.Get(context.Background(), namespacedName, &nad); err != nil {
-		return ""
+	if err := cl.Get(ctx, namespacedName, &nad); err != nil {
+		return "", fmt.Errorf("get network attachment definition: %w", err)
 	}
 
 	confBytes, err := netdefutils.GetCNIConfig(&nad, "/etc/cni/multus/net.d")
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("get CNI config: %w", err)
 	}
 
 	netconfList := &cnitypes.NetConfList{}
-	if err := json.Unmarshal(confBytes, netconfList); err == nil && len(netconfList.Plugins) > 0 {
-		return netconfList.Plugins[0].Type
+	listErr := json.Unmarshal(confBytes, netconfList)
+	if listErr == nil && len(netconfList.Plugins) > 0 {
+		return netconfList.Plugins[0].Type, nil
 	}
 
 	netconf := &cnitypes.NetConf{}
-	if err := json.Unmarshal(confBytes, netconf); err == nil {
-		return netconf.Type
+	confErr := json.Unmarshal(confBytes, netconf)
+	if confErr == nil && netconf.Type != "" {
+		return netconf.Type, nil
+	}
+	if listErr != nil || confErr != nil {
+		return "", fmt.Errorf("parse CNI config for network attachment %s: %w", namespacedName, errors.Join(listErr, confErr))
 	}
 
-	return ""
+	return "", fmt.Errorf("parse CNI config for network attachment %s: plugin type is empty", namespacedName)
 }
 
 func buildPolicyMap(policies []multiv1beta1.MultiNetworkPolicy) controllers.PolicyMap {
 	pm := make(controllers.PolicyMap, len(policies))
 	for i := range policies {
 		p := &policies[i]
-		pm[types.NamespacedName{Namespace: p.Namespace, Name: p.Name}] = controllers.PolicyInfo{Policy: p}
+		pm[types.NamespacedName{Namespace: p.Namespace, Name: p.Name}] = p
 	}
 	return pm
 }

@@ -65,42 +65,6 @@ subjects:
   name: multi-networkpolicy
   namespace: kube-system
 ---
-apiVersion: v1
-data:
-  custom-v4-rules.txt: |
-    # accept redirect
-    -p icmp --icmp-type redirect -j ACCEPT
-    # accept fragmentation-needed (for MTU discovery)
-    -p icmp --icmp-type fragmentation-needed -j ACCEPT
-kind: ConfigMap
-metadata:
-  labels:
-    app: multi-networkpolicy
-    tier: node
-  name: multi-networkpolicy-custom-v4-rules
-  namespace: kube-system
----
-apiVersion: v1
-data:
-  custom-v6-rules.txt: |
-    # accept NDP
-    -p icmpv6 --icmpv6-type neighbor-solicitation -j ACCEPT
-    -p icmpv6 --icmpv6-type neighbor-advertisement -j ACCEPT
-    # accept RA/RS
-    -p icmpv6 --icmpv6-type router-solicitation -j ACCEPT
-    -p icmpv6 --icmpv6-type router-advertisement -j ACCEPT
-    # accept redirect
-    -p icmpv6 --icmpv6-type redirect -j ACCEPT
-    # accept packet-too-big (for MTU discovery)
-    -p icmpv6 --icmpv6-type packet-too-big -j ACCEPT
-kind: ConfigMap
-metadata:
-  labels:
-    app: multi-networkpolicy
-    tier: node
-  name: multi-networkpolicy-custom-v6-rules
-  namespace: kube-system
----
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -124,11 +88,10 @@ spec:
       containers:
       - args:
         - --host-prefix=/host
-        - --pod-iptables=/var/lib/multi-networkpolicy
         - --container-runtime-endpoint=/run/crio/crio.sock
         command:
         - /usr/bin/multi-networkpolicy-nftables
-        image: ghcr.io/maxrink/multi-networkpolicy-nftables:pr-76
+        image: ghcr.io/telekom/multi-networkpolicy-nftables
         imagePullPolicy: Always
         name: multi-networkpolicy
         resources:
@@ -147,11 +110,6 @@ spec:
         - mountPath: /host
           name: host
           readOnly: true
-        - mountPath: /var/lib/multi-networkpolicy
-          name: var-lib-multinetworkpolicy
-        - mountPath: /etc/multi-networkpolicy/rules
-          name: multi-networkpolicy-custom-rules
-          readOnly: true
       hostNetwork: true
       nodeSelector:
         kubernetes.io/arch: amd64
@@ -164,15 +122,5 @@ spec:
       - hostPath:
           path: /
         name: host
-      - hostPath:
-          path: /var/lib/multi-networkpolicy
-        name: var-lib-multinetworkpolicy
-      - name: multi-networkpolicy-custom-rules
-        projected:
-          sources:
-          - configMap:
-              name: multi-networkpolicy-custom-v4-rules
-          - configMap:
-              name: multi-networkpolicy-custom-v6-rules
   updateStrategy:
     type: RollingUpdate

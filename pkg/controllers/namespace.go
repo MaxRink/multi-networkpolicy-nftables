@@ -16,26 +16,8 @@ limitations under the License.
 
 package controllers
 
-import "fmt"
-
 // NamespaceInfo contains information that defines a namespace.
 type NamespaceInfo struct {
 	Name   string
 	Labels map[string]string
-}
-
-// NamespaceMap ...
-type NamespaceMap map[string]NamespaceInfo
-
-// GetNamespaceInfo ...
-func (nm *NamespaceMap) GetNamespaceInfo(nsName string) (*NamespaceInfo, error) {
-	if nm == nil {
-		return nil, fmt.Errorf("not found")
-	}
-	nsInfo, ok := (*nm)[nsName]
-	if ok {
-		return &nsInfo, nil
-	}
-
-	return nil, fmt.Errorf("not found")
 }

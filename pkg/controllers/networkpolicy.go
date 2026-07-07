@@ -21,16 +21,5 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// PolicyInfo contains information that defines a policy.
-type PolicyInfo struct {
-	Policy *multiv1beta1.MultiNetworkPolicy
-}
-
-// Name ...
-func (info *PolicyInfo) Name() string { return info.Policy.Name }
-
-// Namespace ...
-func (info *PolicyInfo) Namespace() string { return info.Policy.Namespace }
-
 // PolicyMap ...
-type PolicyMap map[types.NamespacedName]PolicyInfo
+type PolicyMap map[types.NamespacedName]*multiv1beta1.MultiNetworkPolicy

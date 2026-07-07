@@ -20,7 +20,7 @@ kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multi-ne
 
 Deploy the multi-networkpolicy implementation with nftables:
 ```
-kubectl apply -f https://raw.githubusercontent.com/telekom/multi-networkpolicy-nftables/master/demo/deploy.yml 
+kubectl apply -f https://raw.githubusercontent.com/telekom/multi-networkpolicy-nftables/master/deploy.yml
 ```
 
 Copy macvlan cni to the control plane node:

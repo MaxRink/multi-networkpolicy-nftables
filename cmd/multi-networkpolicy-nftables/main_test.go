@@ -25,11 +25,15 @@ import (
 
 type fakeManagerStarter struct {
 	startErr error
+	start    func()
 	started  bool
 }
 
 func (f *fakeManagerStarter) Start(context.Context) error {
 	f.started = true
+	if f.start != nil {
+		f.start()
+	}
 	return f.startErr
 }
 
@@ -53,7 +57,7 @@ func TestStartManagerAndCleanupRunsCleanupAfterNormalStop(t *testing.T) {
 	}
 }
 
-func TestStartManagerAndCleanupRunsCleanupAfterStartError(t *testing.T) {
+func TestStartManagerAndCleanupSkipsCleanupAfterStartError(t *testing.T) {
 	startErr := errors.New("start failed")
 	mgr := &fakeManagerStarter{startErr: startErr}
 	cleanupCalled := false
@@ -66,23 +70,47 @@ func TestStartManagerAndCleanupRunsCleanupAfterStartError(t *testing.T) {
 	if !errors.Is(err, startErr) {
 		t.Fatalf("startManagerAndCleanup() error = %v, want start error", err)
 	}
-	if !cleanupCalled {
-		t.Fatal("cleanup was not called after start error")
+	if cleanupCalled {
+		t.Fatal("cleanup was called after start error")
 	}
 }
 
-func TestStartManagerAndCleanupJoinsStartAndCleanupErrors(t *testing.T) {
-	startErr := errors.New("start failed")
+func TestStartManagerAndCleanupRunsCleanupAfterShutdownError(t *testing.T) {
+	startErr := errors.New("graceful shutdown timed out")
 	cleanupErr := errors.New("cleanup failed")
-	mgr := &fakeManagerStarter{startErr: startErr}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	err := startManagerAndCleanup(context.Background(), mgr, time.Second, func(context.Context) error {
+	mgr := &fakeManagerStarter{
+		startErr: startErr,
+		start:    cancel,
+	}
+	cleanupCalled := false
+
+	err := startManagerAndCleanup(ctx, mgr, time.Second, func(context.Context) error {
+		cleanupCalled = true
 		return cleanupErr
 	})
 
 	if !errors.Is(err, startErr) {
 		t.Fatalf("startManagerAndCleanup() error = %v, want start error", err)
 	}
+	if !errors.Is(err, cleanupErr) {
+		t.Fatalf("startManagerAndCleanup() error = %v, want cleanup error", err)
+	}
+	if !cleanupCalled {
+		t.Fatal("cleanup was not called after shutdown error")
+	}
+}
+
+func TestStartManagerAndCleanupReturnsCleanupErrorAfterNormalStop(t *testing.T) {
+	cleanupErr := errors.New("cleanup failed")
+	mgr := &fakeManagerStarter{}
+
+	err := startManagerAndCleanup(context.Background(), mgr, time.Second, func(context.Context) error {
+		return cleanupErr
+	})
+
 	if !errors.Is(err, cleanupErr) {
 		t.Fatalf("startManagerAndCleanup() error = %v, want cleanup error", err)
 	}

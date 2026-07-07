@@ -24,5 +24,8 @@ else
   exit 1
 fi
 
-build_manifest "${ROOT}/config/manager/overlays/default" > "${ROOT}/deploy.yml"
-build_manifest "${ROOT}/config/manager/overlays/e2e" > "${ROOT}/e2e/multi-network-policy-nftables-e2e.yml"
+DEPLOY_MANIFEST="${DEPLOY_MANIFEST:-${ROOT}/deploy.yml}"
+E2E_MANIFEST="${E2E_MANIFEST:-${ROOT}/e2e/multi-network-policy-nftables-e2e.yml}"
+
+build_manifest "${ROOT}/config/manager/overlays/default" > "${DEPLOY_MANIFEST}"
+build_manifest "${ROOT}/config/manager/overlays/e2e" > "${E2E_MANIFEST}"

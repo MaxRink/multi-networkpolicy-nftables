@@ -5,16 +5,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR}"' EXIT
 
-cp "${ROOT}/deploy.yml" "${TMPDIR}/deploy.yml"
-cp "${ROOT}/e2e/multi-network-policy-nftables-e2e.yml" "${TMPDIR}/multi-network-policy-nftables-e2e.yml"
-
-"${ROOT}/hack/update-deploy-manifests.sh"
+DEPLOY_RENDER="${TMPDIR}/deploy.yml"
+E2E_RENDER="${TMPDIR}/multi-network-policy-nftables-e2e.yml"
+DEPLOY_MANIFEST="${DEPLOY_RENDER}" E2E_MANIFEST="${E2E_RENDER}" "${ROOT}/hack/update-deploy-manifests.sh"
 
 status=0
-if ! diff -u "${TMPDIR}/deploy.yml" "${ROOT}/deploy.yml"; then
+if ! diff -u "${ROOT}/deploy.yml" "${DEPLOY_RENDER}"; then
   status=1
 fi
-if ! diff -u "${TMPDIR}/multi-network-policy-nftables-e2e.yml" "${ROOT}/e2e/multi-network-policy-nftables-e2e.yml"; then
+if ! diff -u "${ROOT}/e2e/multi-network-policy-nftables-e2e.yml" "${E2E_RENDER}"; then
   status=1
 fi
 

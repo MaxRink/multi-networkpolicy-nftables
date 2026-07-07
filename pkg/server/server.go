@@ -17,6 +17,7 @@ limitations under the License.
 package server
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -36,12 +37,13 @@ type internalPolicy struct {
 	policyNetworks []string
 }
 
+// CompareInternalPolicy orders internal policies by namespace and name.
 func CompareInternalPolicy(a, b internalPolicy) int {
 	return strings.Compare(fmt.Sprintf("%s/%s", a.policy.GetNamespace(), a.policy.GetName()), fmt.Sprintf("%s/%s", b.policy.GetNamespace(), b.policy.GetName()))
 }
 
 // ApplyPolicyRulesForPodAndFamily applies nftables rules for the given pod using the provided deps and config.
-func ApplyPolicyRulesForPodAndFamily(deps controllers.PolicyDeps, cfg controllers.CommonRuleConfig, policyMap controllers.PolicyMap, pod *v1.Pod, podInfo *controllers.PodInfo, nft *nftables.Conn) error {
+func ApplyPolicyRulesForPodAndFamily(ctx context.Context, deps controllers.PolicyDeps, cfg controllers.CommonRuleConfig, policyMap controllers.PolicyMap, pod *v1.Pod, podInfo *controllers.PodInfo, nft *nftables.Conn) error {
 	klog.V(4).Infof("Generate rules for Pod: [%s]\n", podNamespacedName(pod))
 
 	nftState, err := bootstrapNetfilterRules(nft, podInfo)
@@ -55,8 +57,7 @@ func ApplyPolicyRulesForPodAndFamily(deps controllers.PolicyDeps, cfg controller
 	var ingressPolicies []internalPolicy
 	var egressPolicies []internalPolicy
 
-	for _, p := range policyMap {
-		policy := p.Policy
+	for _, policy := range policyMap {
 		if policy.GetNamespace() != pod.Namespace {
 			continue
 		}
@@ -108,7 +109,7 @@ func ApplyPolicyRulesForPodAndFamily(deps controllers.PolicyDeps, cfg controller
 	if len(ingressPolicies) > 0 {
 		forceUpdate := false
 		for _, policy := range ingressPolicies {
-			newRules, err := nftState.applyPodRules(deps, cfg, nftState.ingressChain, podInfo, policy.policy, policy.policyNetworks)
+			newRules, err := nftState.applyPodRules(ctx, deps, cfg, nftState.ingressChain, podInfo, policy.policy, policy.policyNetworks)
 			if err != nil {
 				return fmt.Errorf("failed to apply pod ingress rules for policy %q: %w", policyNamespacedName(policy.policy), err)
 			}
@@ -127,7 +128,7 @@ func ApplyPolicyRulesForPodAndFamily(deps controllers.PolicyDeps, cfg controller
 	if len(egressPolicies) > 0 {
 		forceUpdate := false
 		for _, policy := range egressPolicies {
-			newRules, err := nftState.applyPodRules(deps, cfg, nftState.egressChain, podInfo, policy.policy, policy.policyNetworks)
+			newRules, err := nftState.applyPodRules(ctx, deps, cfg, nftState.egressChain, podInfo, policy.policy, policy.policyNetworks)
 			if err != nil {
 				return fmt.Errorf("failed to apply pod egress rules for policy %q: %w", policyNamespacedName(policy.policy), err)
 			}

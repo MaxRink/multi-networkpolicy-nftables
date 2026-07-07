@@ -3,6 +3,7 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -16,7 +17,7 @@ import (
 	klog "k8s.io/klog/v2"
 )
 
-func applyRulesForPod(deps controllers.PolicyDeps, cfg controllers.CommonRuleConfig, policyMap controllers.PolicyMap, pod *v1.Pod, podInfo *controllers.PodInfo, hostPrefix string) error {
+func applyRulesForPod(ctx context.Context, deps controllers.PolicyDeps, cfg controllers.CommonRuleConfig, policyMap controllers.PolicyMap, pod *v1.Pod, podInfo *controllers.PodInfo, hostPrefix string) error {
 	netnsPath := podInfo.NetNSPath
 	if hostPrefix != "" {
 		netnsPath = fmt.Sprintf("%s/%s", hostPrefix, netnsPath)
@@ -31,7 +32,7 @@ func applyRulesForPod(deps controllers.PolicyDeps, cfg controllers.CommonRuleCon
 		}
 	}()
 	fd := netNs.Fd()
-	if fd > uintptr(math.MaxInt) {
+	if fd > math.MaxInt {
 		return fmt.Errorf("netns fd %d overflows int", fd)
 	}
 	nft, err := nftables.New(nftables.WithNetNSFd(int(fd)), nftables.AsLasting())
@@ -44,7 +45,7 @@ func applyRulesForPod(deps controllers.PolicyDeps, cfg controllers.CommonRuleCon
 		}
 	}()
 
-	return server.ApplyPolicyRulesForPodAndFamily(deps, cfg, policyMap, pod, podInfo, nft)
+	return server.ApplyPolicyRulesForPodAndFamily(ctx, deps, cfg, policyMap, pod, podInfo, nft)
 }
 
 // flushRulesForPod removes nftables tables managed by this daemon from the pod's network namespace.

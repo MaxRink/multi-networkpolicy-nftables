@@ -17,6 +17,7 @@ limitations under the License.
 package server
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"net"
@@ -41,16 +42,18 @@ import (
 
 const DEBUG = false
 
-// testServer is a test-local mock replacing the removed Server struct.
-type testServer struct {
-	podMap       controllers.PodMap
-	namespaceMap controllers.NamespaceMap
-	netdefMap    controllers.NetDefMap
+type testPolicyDeps struct {
+	podMap       map[types.NamespacedName]controllers.PodInfo
+	namespaceMap map[string]controllers.NamespaceInfo
+	netdefMap    map[types.NamespacedName]string
 	cfg          controllers.CommonRuleConfig
 	pods         map[types.NamespacedName]*corev1.Pod
 }
 
-func (s *testServer) ListPods(selector labels.Selector) ([]*corev1.Pod, error) {
+var _ controllers.PolicyDeps = (*testPolicyDeps)(nil)
+var _ controllers.NetDefResolver = (*testPolicyDeps)(nil)
+
+func (s *testPolicyDeps) ListPods(_ context.Context, selector labels.Selector) ([]*corev1.Pod, error) {
 	if selector == nil {
 		selector = labels.Everything()
 	}
@@ -65,7 +68,7 @@ func (s *testServer) ListPods(selector labels.Selector) ([]*corev1.Pod, error) {
 	return pods, nil
 }
 
-func (s *testServer) GetNamespaceInfo(namespace string) (*controllers.NamespaceInfo, error) {
+func (s *testPolicyDeps) GetNamespaceInfo(_ context.Context, namespace string) (*controllers.NamespaceInfo, error) {
 	if s == nil || s.namespaceMap == nil {
 		return nil, fmt.Errorf("not found")
 	}
@@ -78,7 +81,7 @@ func (s *testServer) GetNamespaceInfo(namespace string) (*controllers.NamespaceI
 	return &nsInfo, nil
 }
 
-func (s *testServer) GetPodInfo(pod *corev1.Pod) (*controllers.PodInfo, error) {
+func (s *testPolicyDeps) GetPodInfo(_ context.Context, pod *corev1.Pod) (*controllers.PodInfo, error) {
 	if s == nil || s.podMap == nil || pod == nil {
 		return nil, fmt.Errorf("not found")
 	}
@@ -91,19 +94,17 @@ func (s *testServer) GetPodInfo(pod *corev1.Pod) (*controllers.PodInfo, error) {
 	return &podInfo, nil
 }
 
-func (s *testServer) commonRuleConfig() controllers.CommonRuleConfig { return s.cfg }
-
-func (s *testServer) GetPluginType(namespacedName types.NamespacedName) string {
+func (s *testPolicyDeps) GetPluginType(_ context.Context, namespacedName types.NamespacedName) (string, error) {
 	if s == nil || s.netdefMap == nil {
-		return ""
+		return "", nil
 	}
 
-	netDefInfo, ok := s.netdefMap[namespacedName]
+	pluginType, ok := s.netdefMap[namespacedName]
 	if !ok {
-		return ""
+		return "", nil
 	}
 
-	return netDefInfo.PluginType
+	return pluginType, nil
 }
 
 func TestBootstrap(t *testing.T) {
@@ -252,10 +253,11 @@ func TestApplyPolicyRulesForPodAndFamilyReturnsPolicyRuleError(t *testing.T) {
 	}
 
 	err := ApplyPolicyRulesForPodAndFamily(
-		NewFakeServer("server"),
+		context.Background(),
+		newTestPolicyDeps(),
 		controllers.CommonRuleConfig{},
 		controllers.PolicyMap{
-			types.NamespacedName{Namespace: namespace, Name: policy.Name}: {Policy: policy},
+			types.NamespacedName{Namespace: namespace, Name: policy.Name}: policy,
 		},
 		pod,
 		podInfo,
@@ -507,7 +509,7 @@ func TestApplyPodRules(t *testing.T) {
 			},
 		},
 	}
-	_, err = nftState.applyPodRules(mockServer, mockServer.commonRuleConfig(), nftState.ingressChain, podMockInfo, mockPolicy, policyNetworks)
+	_, err = nftState.applyPodRules(context.Background(), mockServer, mockServer.cfg, nftState.ingressChain, podMockInfo, mockPolicy, policyNetworks)
 	if err != nil {
 		t.Fatalf("applyPodRules() for ingress failed: %v", err)
 	}
@@ -515,7 +517,7 @@ func TestApplyPodRules(t *testing.T) {
 		t.Fatalf("nft flush failed after applying ingress rules: %v", err)
 	}
 
-	_, err = nftState.applyPodRules(mockServer, mockServer.commonRuleConfig(), nftState.egressChain, podMockInfo, mockPolicy, policyNetworks)
+	_, err = nftState.applyPodRules(context.Background(), mockServer, mockServer.cfg, nftState.egressChain, podMockInfo, mockPolicy, policyNetworks)
 	if err != nil {
 		t.Fatalf("applyPodRules() for egress failed: %v", err)
 	}
@@ -862,7 +864,7 @@ func TestApplyPodRulesNoPorts(t *testing.T) {
 			},
 		},
 	}
-	_, err = nftState.applyPodRules(mockServer, mockServer.commonRuleConfig(), nftState.ingressChain, podMockInfo, mockPolicy, []string{"net1", "net2"})
+	_, err = nftState.applyPodRules(context.Background(), mockServer, mockServer.cfg, nftState.ingressChain, podMockInfo, mockPolicy, []string{"net1", "net2"})
 	if err != nil {
 		t.Fatalf("applyPodRules() for ingress failed: %v", err)
 	}
@@ -870,7 +872,7 @@ func TestApplyPodRulesNoPorts(t *testing.T) {
 		t.Fatalf("nft flush failed after applying ingress rules: %v", err)
 	}
 
-	_, err = nftState.applyPodRules(mockServer, mockServer.commonRuleConfig(), nftState.egressChain, podMockInfo, mockPolicy, []string{"net1", "net2"})
+	_, err = nftState.applyPodRules(context.Background(), mockServer, mockServer.cfg, nftState.egressChain, podMockInfo, mockPolicy, []string{"net1", "net2"})
 	if err != nil {
 		t.Fatalf("applyPodRules() for egress failed: %v", err)
 	}
@@ -1244,14 +1246,11 @@ func checkVerdictPresence(rules []*nftables.Rule, name string) bool {
 	return false
 }
 
-// NewFakeServer creates fake server object for unit-test
-func NewFakeServer(hostname string) *testServer {
-	_ = hostname
-
-	return &testServer{
-		podMap:       make(controllers.PodMap),
-		namespaceMap: make(controllers.NamespaceMap),
-		netdefMap:    make(controllers.NetDefMap),
+func newTestPolicyDeps() *testPolicyDeps {
+	return &testPolicyDeps{
+		podMap:       make(map[types.NamespacedName]controllers.PodInfo),
+		namespaceMap: make(map[string]controllers.NamespaceInfo),
+		netdefMap:    make(map[types.NamespacedName]string),
 		pods:         make(map[types.NamespacedName]*corev1.Pod),
 	}
 }
@@ -1279,7 +1278,7 @@ func NewFakePodWithNetAnnotation(namespace, name, annot, status string, labels m
 	}
 }
 
-func AddNamespace(s *testServer, name string) {
+func addNamespace(s *testPolicyDeps, name string) {
 	s.namespaceMap[name] = controllers.NamespaceInfo{
 		Name: name,
 		Labels: map[string]string{
@@ -1288,9 +1287,13 @@ func AddNamespace(s *testServer, name string) {
 	}
 }
 
-func AddPod(s *testServer, pod *corev1.Pod) {
+func addPod(s *testPolicyDeps, pod *corev1.Pod) {
 	namespacedName := types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}
-	s.podMap[namespacedName] = *controllers.NewPodInfoFromPod(pod, nil, "test-host", []string{"multi"}, s)
+	podInfo, err := controllers.NewPodInfoFromPod(context.Background(), pod, nil, "test-host", []string{"multi"}, s)
+	if err != nil {
+		panic(err)
+	}
+	s.podMap[namespacedName] = *podInfo
 	s.pods[namespacedName] = pod.DeepCopy()
 }
 
@@ -1327,28 +1330,7 @@ func NewFakeNetworkStatus(netns, netname, eth0, net1 string) string {
 	return fmt.Sprintf(baseStr, eth0, netns, netname, net1)
 }
 
-func NewNetDef(namespace, name, cniConfig string) *netdefv1.NetworkAttachmentDefinition {
-	return &netdefv1.NetworkAttachmentDefinition{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: namespace,
-			Name:      name,
-		},
-		Spec: netdefv1.NetworkAttachmentDefinitionSpec{
-			Config: cniConfig,
-		},
-	}
-}
-
-func NewCNIConfig(cniName, cniType string) string {
-	cniConfigTemp := `
-	{
-		"name": "%s",
-		"type": "%s"
-	}`
-	return fmt.Sprintf(cniConfigTemp, cniName, cniType)
-}
-
-func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *testServer, *controllers.PodInfo, error) {
+func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *testPolicyDeps, *controllers.PodInfo, error) {
 	podMockInfo := &controllers.PodInfo{
 		Name:      "mock-pod",
 		Namespace: "default",
@@ -1365,20 +1347,14 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *testSe
 	if nftState == nil {
 		return nil, "", nil, podMockInfo, fmt.Errorf("bootstrapNetfilterRules() returned nil state")
 	}
-	var mockServer *testServer
+	var deps *testPolicyDeps
 	testNs := "testns1"
 	if createServer {
-		mockServer = NewFakeServer("server")
-		AddNamespace(mockServer, testNs)
+		deps = newTestPolicyDeps()
+		addNamespace(deps, testNs)
 
-		mockServer.netdefMap[types.NamespacedName{Namespace: testNs, Name: "policy-net-1"}] = controllers.NetDefInfo{
-			Netdef:     NewNetDef(testNs, "policy-net-1", NewCNIConfig("testCNI", "multi")),
-			PluginType: "multi",
-		}
-		mockServer.netdefMap[types.NamespacedName{Namespace: testNs, Name: "policy-net-2"}] = controllers.NetDefInfo{
-			Netdef:     NewNetDef(testNs, "policy-net-2", NewCNIConfig("testCNI", "multi")),
-			PluginType: "multi",
-		}
+		deps.netdefMap[types.NamespacedName{Namespace: testNs, Name: "policy-net-1"}] = "multi"
+		deps.netdefMap[types.NamespacedName{Namespace: testNs, Name: "policy-net-2"}] = "multi"
 
 		pod1 := NewFakePodWithNetAnnotation(
 			testNs,
@@ -1386,7 +1362,7 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *testSe
 			"policy-net-1",
 			NewFakeNetworkStatus(testNs, "policy-net-1", "192.168.1.1", "10.1.1.1"),
 			map[string]string{"app": "test"})
-		AddPod(mockServer, pod1)
+		addPod(deps, pod1)
 
 		pod2 := NewFakePodWithNetAnnotation(
 			testNs,
@@ -1394,9 +1370,9 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *testSe
 			"policy-net-1",
 			NewFakeNetworkStatus(testNs, "policy-net-1", "192.168.1.2", "10.1.1.2"),
 			map[string]string{"app": "test2"})
-		AddPod(mockServer, pod2)
+		addPod(deps, pod2)
 	} else {
-		mockServer = &testServer{
+		deps = &testPolicyDeps{
 			cfg: controllers.CommonRuleConfig{
 				AcceptICMPv6:   true,
 				AcceptICMP:     true,
@@ -1405,15 +1381,15 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *testSe
 			},
 		}
 	}
-	err = nftState.applyCommonChainRules(mockServer.commonRuleConfig())
+	err = nftState.applyCommonChainRules(deps.cfg)
 	if err != nil {
-		return nftState, testNs, mockServer, podMockInfo, fmt.Errorf("applyCommonChainRules() failed: %w", err)
+		return nftState, testNs, deps, podMockInfo, fmt.Errorf("applyCommonChainRules() failed: %w", err)
 	}
 	err = nftState.nft.Flush()
 	if err != nil {
-		return nftState, testNs, mockServer, podMockInfo, fmt.Errorf("nftState.nft.Flush() failed: %w", err)
+		return nftState, testNs, deps, podMockInfo, fmt.Errorf("nftState.nft.Flush() failed: %w", err)
 	}
-	return nftState, testNs, mockServer, podMockInfo, nil
+	return nftState, testNs, deps, podMockInfo, nil
 }
 
 func TestCleanupLegacyTables(t *testing.T) {

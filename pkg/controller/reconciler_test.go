@@ -36,21 +36,21 @@ type mockPolicyDeps struct {
 
 var _ controllers.PolicyDeps = (*mockPolicyDeps)(nil)
 
-func (m *mockPolicyDeps) ListPods(selector labels.Selector) ([]*corev1.Pod, error) {
+func (m *mockPolicyDeps) ListPods(_ context.Context, selector labels.Selector) ([]*corev1.Pod, error) {
 	if m.listPodsFunc != nil {
 		return m.listPodsFunc(selector)
 	}
 	return nil, nil
 }
 
-func (m *mockPolicyDeps) GetNamespaceInfo(namespace string) (*controllers.NamespaceInfo, error) {
+func (m *mockPolicyDeps) GetNamespaceInfo(_ context.Context, namespace string) (*controllers.NamespaceInfo, error) {
 	if m.getNamespaceInfoFunc != nil {
 		return m.getNamespaceInfoFunc(namespace)
 	}
 	return nil, nil
 }
 
-func (m *mockPolicyDeps) GetPodInfo(pod *corev1.Pod) (*controllers.PodInfo, error) {
+func (m *mockPolicyDeps) GetPodInfo(_ context.Context, pod *corev1.Pod) (*controllers.PodInfo, error) {
 	if m.getPodInfoFunc != nil {
 		return m.getPodInfoFunc(pod)
 	}
@@ -190,7 +190,7 @@ func TestReconcile_PodWithNoPolicy(t *testing.T) {
 				return &controllers.PodInfo{Name: pod.Name, Namespace: pod.Namespace, NodeName: nodeName, Interfaces: []controllers.InterfaceInfo{testInterface()}}, nil
 			},
 		},
-		ApplyRulesForPodFunc: func(_ controllers.PolicyDeps, _ controllers.CommonRuleConfig, policyMap controllers.PolicyMap, gotPod *corev1.Pod, _ *controllers.PodInfo, _ string) error {
+		ApplyRulesForPodFunc: func(_ context.Context, _ controllers.PolicyDeps, _ controllers.CommonRuleConfig, policyMap controllers.PolicyMap, gotPod *corev1.Pod, _ *controllers.PodInfo, _ string) error {
 			applyCalled = true
 			if gotPod.Name != pod.Name || gotPod.Namespace != pod.Namespace {
 				t.Fatalf("ApplyRulesForPodFunc pod = %s/%s, want %s/%s", gotPod.Namespace, gotPod.Name, pod.Namespace, pod.Name)
@@ -233,7 +233,7 @@ func TestReconcile_RunningPodWithNoInterfacesDoesNotRequeue(t *testing.T) {
 				return &controllers.PodInfo{Name: pod.Name, Namespace: pod.Namespace, NodeName: nodeName}, nil
 			},
 		},
-		ApplyRulesForPodFunc: func(controllers.PolicyDeps, controllers.CommonRuleConfig, controllers.PolicyMap, *corev1.Pod, *controllers.PodInfo, string) error {
+		ApplyRulesForPodFunc: func(context.Context, controllers.PolicyDeps, controllers.CommonRuleConfig, controllers.PolicyMap, *corev1.Pod, *controllers.PodInfo, string) error {
 			applyCalled = true
 			return nil
 		},
@@ -278,7 +278,7 @@ func TestReconcile_PodWithMatchingPolicy(t *testing.T) {
 				return &controllers.PodInfo{Name: pod.Name, Namespace: pod.Namespace, NodeName: nodeName, Interfaces: []controllers.InterfaceInfo{testInterface()}}, nil
 			},
 		},
-		ApplyRulesForPodFunc: func(_ controllers.PolicyDeps, _ controllers.CommonRuleConfig, policyMap controllers.PolicyMap, gotPod *corev1.Pod, _ *controllers.PodInfo, _ string) error {
+		ApplyRulesForPodFunc: func(_ context.Context, _ controllers.PolicyDeps, _ controllers.CommonRuleConfig, policyMap controllers.PolicyMap, gotPod *corev1.Pod, _ *controllers.PodInfo, _ string) error {
 			applyCalled = true
 			if gotPod.Name != pod.Name || gotPod.Namespace != pod.Namespace {
 				t.Fatalf("ApplyRulesForPodFunc pod = %s/%s, want %s/%s", gotPod.Namespace, gotPod.Name, pod.Namespace, pod.Name)
@@ -329,7 +329,7 @@ func TestReconcile_RequeuesWhenApplyRulesFails(t *testing.T) {
 				}, nil
 			},
 		},
-		ApplyRulesForPodFunc: func(controllers.PolicyDeps, controllers.CommonRuleConfig, controllers.PolicyMap, *corev1.Pod, *controllers.PodInfo, string) error {
+		ApplyRulesForPodFunc: func(context.Context, controllers.PolicyDeps, controllers.CommonRuleConfig, controllers.PolicyMap, *corev1.Pod, *controllers.PodInfo, string) error {
 			called = true
 			return fmt.Errorf("apply failed")
 		},
@@ -350,7 +350,7 @@ func TestReconcile_RequeuesWhenApplyRulesFails(t *testing.T) {
 	}
 }
 
-func TestReconcile_PodDeletedDuringReconcile(t *testing.T) {
+func TestReconcile_PodDeletedBeforeReconcile(t *testing.T) {
 	namespace, nodeName := testScope(t)
 	pod := newPod(namespace, "deleted-pod", nodeName, map[string]string{"app": "gone"})
 	seedObjects(t,
@@ -366,71 +366,11 @@ func TestReconcile_PodDeletedDuringReconcile(t *testing.T) {
 	r := &NodeReconciler{
 		NodeName: nodeName,
 		Client:   testClient,
-		PolicyDeps: &mockPolicyDeps{
-			listPodsFunc: func(labels.Selector) ([]*corev1.Pod, error) {
-				return []*corev1.Pod{pod}, nil
-			},
-		},
 	}
 
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
 	if err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
-	}
-}
-
-func TestPreparePodIptablesDirCleansRootContents(t *testing.T) {
-	parent := t.TempDir()
-	root := filepath.Join(parent, "pod-iptables")
-	stale := filepath.Join(root, "stale")
-	if err := os.MkdirAll(stale, 0o700); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-
-	if err := PreparePodIptablesDir(root); err != nil {
-		t.Fatalf("PreparePodIptablesDir() error = %v", err)
-	}
-
-	if _, err := os.Stat(root); err != nil {
-		t.Fatalf("expected pod iptables root to exist: %v", err)
-	}
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Fatalf("expected stale pod iptables content to be removed, got err=%v", err)
-	}
-}
-
-func TestPreparePodIptablesDirRejectsFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pod-iptables")
-	if err := os.WriteFile(path, []byte("not a directory"), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	if err := PreparePodIptablesDir(path); err == nil {
-		t.Fatal("PreparePodIptablesDir() error = nil, want non-directory error")
-	}
-}
-
-func TestCleanupStalePodIptablesDirs(t *testing.T) {
-	root := t.TempDir()
-	liveUID := "live-uid"
-	staleUID := "stale-uid"
-	if err := os.Mkdir(filepath.Join(root, liveUID), 0o700); err != nil {
-		t.Fatalf("Mkdir(live) error = %v", err)
-	}
-	if err := os.Mkdir(filepath.Join(root, staleUID), 0o700); err != nil {
-		t.Fatalf("Mkdir(stale) error = %v", err)
-	}
-
-	r := &NodeReconciler{PodIptables: root}
-	r.cleanupStalePodIptablesDirs([]corev1.Pod{{
-		ObjectMeta: metav1.ObjectMeta{UID: types.UID(liveUID)},
-	}})
-
-	if _, err := os.Stat(filepath.Join(root, liveUID)); err != nil {
-		t.Fatalf("expected live pod iptables dir to be preserved: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, staleUID)); !os.IsNotExist(err) {
-		t.Fatalf("expected stale pod iptables dir to be removed, got err=%v", err)
 	}
 }
 
@@ -462,7 +402,7 @@ func TestReconcile_NamespaceSelector(t *testing.T) {
 				return &controllers.PodInfo{Name: pod.Name, Namespace: pod.Namespace, NodeName: nodeName, Interfaces: []controllers.InterfaceInfo{testInterface()}}, nil
 			},
 		},
-		ApplyRulesForPodFunc: func(_ controllers.PolicyDeps, _ controllers.CommonRuleConfig, policyMap controllers.PolicyMap, gotPod *corev1.Pod, _ *controllers.PodInfo, _ string) error {
+		ApplyRulesForPodFunc: func(_ context.Context, _ controllers.PolicyDeps, _ controllers.CommonRuleConfig, policyMap controllers.PolicyMap, gotPod *corev1.Pod, _ *controllers.PodInfo, _ string) error {
 			applyCalled = true
 			if gotPod.Name != pod.Name || gotPod.Namespace != pod.Namespace {
 				t.Fatalf("ApplyRulesForPodFunc pod = %s/%s, want %s/%s", gotPod.Namespace, gotPod.Name, pod.Namespace, pod.Name)

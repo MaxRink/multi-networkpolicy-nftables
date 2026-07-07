@@ -28,7 +28,6 @@ import (
 
 	netdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
 	pb "k8s.io/cri-api/pkg/apis/runtime/v1"
 	k8sutils "k8s.io/cri-client/pkg/util"
 )
@@ -55,7 +54,7 @@ func (rk *RuntimeKind) Set(s string) error {
 // String returns current runtime kind
 func (rk RuntimeKind) String() string { return string(rk) }
 
-// Type returns its type, "RuntimeKind"
+// Type implements pflag.Value.
 func (rk RuntimeKind) Type() string { return "RuntimeKind" }
 
 // InterfaceInfo ...
@@ -100,21 +99,6 @@ func (info *PodInfo) CheckPolicyNetwork(policyNetworks []string) bool {
 	return false
 }
 
-// GetMultusNetIFs ...
-func (info *PodInfo) GetMultusNetIFs() []string {
-	results := []string{}
-
-	if info != nil && len(info.NetworkStatus) > 0 {
-		for _, status := range info.NetworkStatus[1:] {
-			results = append(results, status.Interface)
-		}
-	}
-	return results
-}
-
-// String ...
-func (info *PodInfo) String() string { return fmt.Sprintf("pod:%s", info.Name) }
-
 // IsMultiNetworkpolicyTarget ...
 func IsMultiNetworkpolicyTarget(pod *v1.Pod) bool {
 	if pod.Status.Phase != v1.PodRunning {
@@ -125,29 +109,6 @@ func IsMultiNetworkpolicyTarget(pod *v1.Pod) bool {
 		return false
 	}
 	return true
-}
-
-// PodMap ...
-type PodMap map[types.NamespacedName]PodInfo
-
-// GetPodInfo ...
-func (pm *PodMap) GetPodInfo(pod *v1.Pod) (*PodInfo, error) {
-	if pm == nil || pod == nil {
-		return nil, fmt.Errorf("not found")
-	}
-	namespacedName := types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}
-
-	podInfo, ok := (*pm)[namespacedName]
-	if ok {
-		return &podInfo, nil
-	}
-
-	return nil, fmt.Errorf("not found")
-}
-
-// GetCriRuntimeClient retrieves cri grpc client
-func GetCriRuntimeClient(runtimeEndpoint, hostPrefix string) (pb.RuntimeServiceClient, *grpc.ClientConn, error) {
-	return GetCriRuntimeClientWithContext(context.Background(), runtimeEndpoint, hostPrefix)
 }
 
 // GetCriRuntimeClientWithContext retrieves a CRI gRPC client using the supplied context.
@@ -175,17 +136,12 @@ func GetCriRuntimeClientWithContext(ctx context.Context, runtimeEndpoint, hostPr
 		}
 		if !conn.WaitForStateChange(ctx, state) {
 			_ = conn.Close()
+			if err := ctx.Err(); err != nil {
+				return nil, nil, fmt.Errorf("timed out waiting for gRPC connection to %s to become ready (last state: %s): %w", hostRuntimeEndpoint, state, err)
+			}
 			return nil, nil, fmt.Errorf("timed out waiting for gRPC connection to %s to become ready (last state: %s)", hostRuntimeEndpoint, state)
 		}
 	}
 
 	return pb.NewRuntimeServiceClient(conn), conn, nil
-}
-
-// CloseCriConnection closes grpc connection in client
-func CloseCriConnection(conn *grpc.ClientConn) error {
-	if conn == nil {
-		return nil
-	}
-	return conn.Close()
 }

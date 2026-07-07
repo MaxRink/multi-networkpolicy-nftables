@@ -30,13 +30,12 @@ spec:
       serviceAccountName: multi-networkpolicy
       containers:
         - name: multi-networkpolicy
-          image: ghcr.io/maxrink/multi-networkpolicy-nftables:pr-76
+          image: ghcr.io/telekom/multi-networkpolicy-nftables
           imagePullPolicy: Always
           command:
             - /usr/bin/multi-networkpolicy-nftables
           args:
             - --host-prefix=/host
-            - --pod-iptables=/var/lib/multi-networkpolicy
             - --container-runtime-endpoint=/run/crio/crio.sock
           resources:
             requests:
@@ -54,22 +53,7 @@ spec:
             - name: host
               mountPath: /host
               readOnly: true
-            - name: var-lib-multinetworkpolicy
-              mountPath: /var/lib/multi-networkpolicy
-            - name: multi-networkpolicy-custom-rules
-              mountPath: /etc/multi-networkpolicy/rules
-              readOnly: true
       volumes:
         - name: host
           hostPath:
             path: /
-        - name: var-lib-multinetworkpolicy
-          hostPath:
-            path: /var/lib/multi-networkpolicy
-        - name: multi-networkpolicy-custom-rules
-          projected:
-            sources:
-              - configMap:
-                  name: multi-networkpolicy-custom-v4-rules
-              - configMap:
-                  name: multi-networkpolicy-custom-v6-rules

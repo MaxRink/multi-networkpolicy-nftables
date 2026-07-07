@@ -20,6 +20,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/pflag"
@@ -42,7 +43,6 @@ type Options struct {
 	containerRuntime         controllers.RuntimeKind
 	containerRuntimeEndpoint string
 	networkPlugins           []string
-	podIptables              string
 	syncPeriod               int
 	acceptICMPv6             bool
 	acceptICMP               bool
@@ -52,8 +52,6 @@ type Options struct {
 	// updated by command line parsing
 	allowSrcPrefix []string
 	allowDstPrefix []string
-	// stopCh is used to stop the command
-	stopCh chan struct{}
 }
 
 // ReconcilerConfig holds all configuration values needed to construct a NodeReconciler.
@@ -62,8 +60,6 @@ type ReconcilerConfig struct {
 	Master                   string
 	NodeName                 string
 	HostPrefix               string
-	PodIptables              string
-	ContainerRuntime         controllers.RuntimeKind
 	ContainerRuntimeEndpoint string
 	NetworkPlugins           []string
 	SyncPeriodSeconds        int
@@ -81,7 +77,10 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.hostnameOverride, "hostname-override", o.hostnameOverride, "If non-empty, will use this string as identification instead of the actual hostname.")
 	fs.StringVar(&o.hostPrefix, "host-prefix", o.hostPrefix, "If non-empty, will use this string as prefix for host filesystem.")
 	fs.StringSliceVar(&o.networkPlugins, "network-plugins", []string{"macvlan"}, "List of network plugins to be be considered for network policies.")
-	fs.StringVar(&o.podIptables, "pod-iptables", o.podIptables, "If non-empty, will use this path to store pod's iptables for troubleshooting helper.")
+	deprecatedIptablesStatePath := ""
+	fs.StringVar(&deprecatedIptablesStatePath, "pod-iptables", "", "Deprecated: pod iptables state is no longer persisted.")
+	_ = fs.MarkDeprecated("pod-iptables", "no longer used; pod iptables state is no longer persisted")
+	_ = fs.MarkHidden("pod-iptables")
 	fs.IntVar(&o.syncPeriod, "sync-period", defaultSyncPeriod, "sync period in seconds for reconciliation")
 	fs.BoolVar(&o.acceptICMP, "accept-icmp", false, "accept all ICMP traffic")
 	fs.BoolVar(&o.acceptICMPv6, "accept-icmpv6", false, "accept all ICMPv6 traffic")
@@ -115,6 +114,16 @@ func (o *Options) Validate() error {
 	if err := parseIPPrefixText(o.allowDstPrefixText, &o.allowDstPrefix); err != nil {
 		return err
 	}
+	o.containerRuntimeEndpoint = strings.TrimSpace(o.containerRuntimeEndpoint)
+	if o.containerRuntimeEndpoint == "" {
+		return fmt.Errorf("container-runtime-endpoint must not be empty")
+	}
+	if strings.Contains(o.containerRuntimeEndpoint, "://") {
+		return fmt.Errorf("container-runtime-endpoint must be an absolute filesystem path, not a URL")
+	}
+	if !filepath.IsAbs(o.containerRuntimeEndpoint) {
+		return fmt.Errorf("container-runtime-endpoint must be an absolute filesystem path")
+	}
 	return nil
 }
 
@@ -135,8 +144,6 @@ func (o *Options) BuildReconcilerConfig() (*ReconcilerConfig, error) {
 		Master:                   o.master,
 		NodeName:                 hostname,
 		HostPrefix:               o.hostPrefix,
-		PodIptables:              o.podIptables,
-		ContainerRuntime:         o.containerRuntime,
 		ContainerRuntimeEndpoint: o.containerRuntimeEndpoint,
 		NetworkPlugins:           o.networkPlugins,
 		SyncPeriodSeconds:        o.syncPeriod,
@@ -153,6 +160,5 @@ func (o *Options) BuildReconcilerConfig() (*ReconcilerConfig, error) {
 func NewOptions() *Options {
 	return &Options{
 		containerRuntime: controllers.Cri,
-		stopCh:           make(chan struct{}),
 	}
 }

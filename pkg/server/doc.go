@@ -50,7 +50,8 @@ const (
 	destinationAddressSuffix = "daddrs"
 	sourceAddressSuffix      = "saddrs"
 	podInterfacesName        = "pod_interfaces"
-	PolicyNetworkAnnotation  = "k8s.v1.cni.cncf.io/policy-for"
+	// PolicyNetworkAnnotation declares which secondary networks a policy targets.
+	PolicyNetworkAnnotation = "k8s.v1.cni.cncf.io/policy-for"
 
 	// Marks for rules
 	peerRuleMark  = uint32(0x20000)

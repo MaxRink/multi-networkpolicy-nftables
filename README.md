@@ -58,8 +58,6 @@ $ kubectl create -f deploy.yml
 serviceaccount/multi-networkpolicy created
 clusterrole.rbac.authorization.k8s.io/multi-networkpolicy created
 clusterrolebinding.rbac.authorization.k8s.io/multi-networkpolicy created
-configmap/multi-networkpolicy-custom-v4-rules created
-configmap/multi-networkpolicy-custom-v6-rules created
 daemonset.apps/multi-networkpolicy-ds-amd64 created
 ```
 
@@ -89,14 +87,7 @@ make verify-manifests
 
 The e2e overlay only changes test-specific settings such as the local image,
 containerd socket, sync period, network plugin list, verbosity, and privileged
-mode. RBAC, ConfigMaps, mounts, and the pod iptables state path stay shared
-with the normal deploy manifest.
-
-While PR 76 is reviewed from `MaxRink:feat/controller-runtime-rearchitect`,
-`deploy.yml` uses `ghcr.io/maxrink/multi-networkpolicy-nftables:pr-76`. The
-`docker-image` workflow publishes that tag, plus a `pr-76-<sha>` tag, whenever
-the PR branch is pushed. Switch the image repository back to the upstream
-repository/tag before merging this branch as the long-lived default.
+mode. RBAC and shared mounts stay aligned with the normal deploy manifest.
 
 ## Development
 
@@ -116,11 +107,20 @@ go build ./cmd/multi-networkpolicy-nftables/
 
 ### Test
 
-Unit tests require root privileges for nftables operations:
+Controller tests require envtest assets. CI installs them with
+`setup-envtest`; locally, install the helper and export the asset path before
+running tests:
+
+```bash
+go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.24.1
+export KUBEBUILDER_ASSETS="$(setup-envtest use 1.35.0 --bin-dir testbin/k8s -p path)"
+```
+
+Unit tests also require root privileges for nftables operations:
 
 ```bash
 sudo modprobe nft_ct
-sudo go test -v ./...
+sudo --preserve-env=KUBEBUILDER_ASSETS go test -v ./...
 ```
 
 ### Lint

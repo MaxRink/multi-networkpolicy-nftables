@@ -29,7 +29,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controller"
-	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/server"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -54,7 +53,6 @@ func run(opts *server.Options) error {
 	}
 
 	klog.Infof("hostname: %v", cfg.NodeName)
-	klog.Infof("container-runtime: %v", cfg.ContainerRuntime)
 
 	var restCfg *rest.Config
 	if cfg.Kubeconfig == "" {
@@ -95,26 +93,12 @@ func run(opts *server.Options) error {
 		return fmt.Errorf("setup indexes: %w", err)
 	}
 
-	if err := controller.PreparePodIptablesDir(cfg.PodIptables); err != nil {
-		return fmt.Errorf("prepare pod iptables directory: %w", err)
-	}
-
-	criClient, criConn, err := controllers.GetCriRuntimeClient(cfg.ContainerRuntimeEndpoint, cfg.HostPrefix)
-	if err != nil {
-		klog.Warningf("failed to create CRI client (will retry at runtime): %v", err)
-		criClient = nil
-		criConn = nil
-	}
-
 	reconciler := &controller.NodeReconciler{
 		NodeName:                 cfg.NodeName,
 		Client:                   mgr.GetClient(),
 		HostPrefix:               cfg.HostPrefix,
-		PodIptables:              cfg.PodIptables,
 		NetworkPlugins:           cfg.NetworkPlugins,
 		CommonCfg:                cfg.CommonRuleConfig,
-		CriClient:                criClient,
-		CriConn:                  criConn,
 		ContainerRuntimeEndpoint: cfg.ContainerRuntimeEndpoint,
 	}
 	defer func() {
@@ -144,8 +128,12 @@ func startManagerAndCleanup(
 	cleanup func(context.Context) error,
 ) error {
 	startErr := mgr.Start(ctx)
+	if startErr != nil && ctx.Err() == nil {
+		klog.Errorf("manager stopped with error, skipping post-shutdown cleanup: %v", startErr)
+		return startErr
+	}
 	if startErr != nil {
-		klog.Errorf("manager stopped with error, running post-shutdown cleanup: %v", startErr)
+		klog.Errorf("manager stopped during shutdown with error, running post-shutdown cleanup: %v", startErr)
 	} else {
 		klog.Info("Manager stopped, running post-shutdown cleanup")
 	}
@@ -153,8 +141,10 @@ func startManagerAndCleanup(
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
 	cleanupErr := cleanup(cleanupCtx)
-
-	return errors.Join(startErr, cleanupErr)
+	if startErr != nil || cleanupErr != nil {
+		return errors.Join(startErr, cleanupErr)
+	}
+	return nil
 }
 
 func main() {
@@ -164,7 +154,7 @@ func main() {
 	cmd := &cobra.Command{
 		Use:  "multi-networkpolicy-node",
 		Long: `Run the multi-networkpolicy nftables controller on a node.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			return run(opts)
 		},
 	}

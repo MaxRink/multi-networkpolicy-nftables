@@ -8,6 +8,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// PodHostnameIndex is the field index used to list pods scheduled onto a node.
 const PodHostnameIndex = "spec.nodeName"
 
 func podHostnameExtractor(obj client.Object) []string {
@@ -18,6 +19,7 @@ func podHostnameExtractor(obj client.Object) []string {
 	return []string{pod.Spec.NodeName}
 }
 
+// SetupIndexes registers controller-runtime field indexes used by the reconciler.
 func SetupIndexes(ctx context.Context, mgr ctrl.Manager) error {
 	return mgr.GetFieldIndexer().IndexField(ctx, &corev1.Pod{}, PodHostnameIndex, podHostnameExtractor)
 }

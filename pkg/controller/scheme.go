@@ -7,6 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+// SetupScheme registers all Kubernetes and CNI API types used by the manager.
 func SetupScheme(scheme *runtime.Scheme) error {
 	if err := multiv1beta1.AddToScheme(scheme); err != nil {
 		return err

@@ -29,82 +29,70 @@ func TestTruncateNftName(t *testing.T) {
 		wantLen int // expected len of result, -1 = no constraint checked individually
 		// wantExact is set when we know the exact expected output
 		wantExact string
-		// deterministic: call twice, must get same result
-		deterministic bool
 	}{
 		{
-			name:          "short name unchanged",
-			input:         "simple",
-			maxLen:        255,
-			wantLen:       6,
-			wantExact:     "simple",
-			deterministic: true,
+			name:      "short name unchanged",
+			input:     "simple",
+			maxLen:    255,
+			wantLen:   6,
+			wantExact: "simple",
 		},
 		{
-			name:          "name exactly at limit unchanged",
-			input:         strings.Repeat("a", 255),
-			maxLen:        255,
-			wantLen:       255,
-			deterministic: true,
+			name:    "name exactly at limit unchanged",
+			input:   strings.Repeat("a", 255),
+			maxLen:  255,
+			wantLen: 255,
 		},
 		{
-			name:          "overlong name truncated with hash suffix",
-			input:         strings.Repeat("a", 300),
-			maxLen:        255,
-			wantLen:       255,
-			deterministic: true,
+			name:    "overlong name truncated with hash suffix",
+			input:   strings.Repeat("a", 300),
+			maxLen:  255,
+			wantLen: 255,
 		},
 		{
-			name:          "overlong name with invalid chars — sanitized and truncated",
-			input:         "very-long-namespace/very-long-name-with$invalid@chars!" + strings.Repeat("x", 300),
-			maxLen:        255,
-			wantLen:       255,
-			deterministic: true,
+			name:    "overlong name with invalid chars - sanitized and truncated",
+			input:   "very-long-namespace/very-long-name-with$invalid@chars!" + strings.Repeat("x", 300),
+			maxLen:  255,
+			wantLen: 255,
 		},
 		{
-			name:          "invalid chars replaced with underscore in short name",
-			input:         "hello/world",
-			maxLen:        255,
-			wantLen:       11,
-			wantExact:     "hello_world",
-			deterministic: true,
+			name:      "invalid chars replaced with underscore in short name",
+			input:     "hello/world",
+			maxLen:    255,
+			wantLen:   11,
+			wantExact: "hello_world",
 		},
 		{
-			name:          "maxLen zero returns empty string",
-			input:         "anyname",
-			maxLen:        0,
-			wantLen:       0,
-			wantExact:     "",
-			deterministic: true,
+			name:      "maxLen zero returns empty string",
+			input:     "anyname",
+			maxLen:    0,
+			wantLen:   0,
+			wantExact: "",
 		},
 		{
-			name:          "maxLen negative returns empty string",
-			input:         "anyname",
-			maxLen:        -1,
-			wantLen:       0,
-			wantExact:     "",
-			deterministic: true,
+			name:      "maxLen negative returns empty string",
+			input:     "anyname",
+			maxLen:    -1,
+			wantLen:   0,
+			wantExact: "",
 		},
 		{
-			name:          "maxLen smaller than hash suffix returns hash truncated",
-			input:         strings.Repeat("z", 300),
-			maxLen:        5,
-			wantLen:       5,
-			deterministic: true,
+			name:    "maxLen smaller than hash suffix returns hash truncated",
+			input:   strings.Repeat("z", 300),
+			maxLen:  5,
+			wantLen: 5,
 		},
 		{
-			name:          "maxLen equal to suffix length returns hash without dash (8 chars)",
-			input:         strings.Repeat("z", 300),
-			maxLen:        9, // suffix is "-XXXXXXXX" = 9 chars; maxLen<=len(suffix) so returns hash (8 chars)
-			wantLen:       8,
-			deterministic: true,
+			name:    "maxLen equal to suffix length returns hash without dash (8 chars)",
+			input:   strings.Repeat("z", 300),
+			maxLen:  9, // suffix is "-XXXXXXXX" = 9 chars; maxLen<=len(suffix) so returns hash (8 chars)
+			wantLen: 8,
 		},
 		{
-			name:          "suffix is exactly 9 chars with zero-padded %08x",
-			input:         strings.Repeat("b", 300),
-			maxLen:        255,
-			wantLen:       255,
-			deterministic: true,
+			name:    "suffix is exactly 9 chars with zero-padded %08x",
+			input:   strings.Repeat("b", 300),
+			maxLen:  255,
+			wantLen: 255,
 		},
 	}
 
@@ -124,12 +112,9 @@ func TestTruncateNftName(t *testing.T) {
 					tt.input, tt.maxLen, result, tt.wantExact)
 			}
 
-			// Determinism check
-			if tt.deterministic {
-				result2 := truncateNftName(tt.input, tt.maxLen)
-				if result != result2 {
-					t.Errorf("truncateNftName is not deterministic: got %q then %q", result, result2)
-				}
+			result2 := truncateNftName(tt.input, tt.maxLen)
+			if result != result2 {
+				t.Errorf("truncateNftName is not deterministic: got %q then %q", result, result2)
 			}
 
 			// Result must not exceed maxLen

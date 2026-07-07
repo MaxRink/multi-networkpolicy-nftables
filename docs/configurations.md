@@ -13,22 +13,30 @@ $ ./multi-networkpolicy-nftables --help
 
 #### Host paths used by the DaemonSet
 
-The sample DaemonSet mounts the host filesystem at `/host` and persists
-per-pod troubleshooting state under `/var/lib/multi-networkpolicy`. Keep the
-controller flags aligned with those mounts:
+The sample DaemonSet mounts the host filesystem at `/host`. Keep the
+controller flag aligned with that mount:
 
 ```
 --host-prefix=/host
---pod-iptables=/var/lib/multi-networkpolicy
 ```
 
 If a cluster uses a CRI socket other than the default shown in `deploy.yml`,
-set `--container-runtime-endpoint` to the host socket path.
+set `--container-runtime-endpoint` to the absolute host socket path. Do not use
+a `unix://` URL here; the controller adds the CRI transport internally.
 
 `deploy.yml` is generated from `config/manager/overlays/default`. The e2e
 install manifest is generated from the same base plus
-`config/manager/overlays/e2e`, so host paths, RBAC, custom rule ConfigMaps, and
-the pod iptables flag remain aligned between normal deployments and tests.
+`config/manager/overlays/e2e`, so host paths, RBAC, and shared mounts remain
+aligned between normal deployments and tests.
+
+#### Compatibility notes
+
+Pod iptables state is no longer persisted. The old `--pod-iptables` flag is
+still accepted as a hidden, deprecated no-op so older manifests do not fail at
+startup while they are being migrated.
+
+File-mounted custom rule ConfigMaps are not used by the nftables controller.
+Use the command line options below for supported exceptional traffic handling.
 
 #### Add exceptional IP prefix address to accept
 

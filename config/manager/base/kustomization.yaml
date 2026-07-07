@@ -3,5 +3,4 @@ kind: Kustomization
 resources:
   - rbac.yaml
   - serviceaccount.yaml
-  - custom-rules.yaml
   - daemonset.yaml
