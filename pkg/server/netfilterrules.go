@@ -18,8 +18,10 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"net"
 	"net/netip"
@@ -42,12 +44,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 const (
+	// IPv4OffSet is the byte offset where IPv4 addresses start in a network header.
 	IPv4OffSet = uint32(12) // IPs start at byte 12 in the NetworkBaseHeader
-	IPv6OffSet = uint32(8)  // IPv6 IPs start at byte 8 in the NetworkBaseHeader
+	// IPv6OffSet is the byte offset where IPv6 addresses start in a network header.
+	IPv6OffSet = uint32(8) // IPv6 IPs start at byte 8 in the NetworkBaseHeader
 )
 
 type nftState struct {
@@ -84,7 +88,54 @@ func policyRuleNamespacedName(o *multiv1beta1.MultiNetworkPolicy) string {
 	return o.GetNamespace() + "-" + o.GetName()
 }
 
-func bootstrapNetfilterChains(nftState *nftState) {
+const nftNameMaxLen = 255
+
+func sanitizeNftChar(r rune) rune {
+	if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' {
+		return r
+	}
+	return '_'
+}
+
+func truncateNftName(name string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	sanitized := strings.Map(sanitizeNftChar, name)
+	if len(sanitized) <= maxLen {
+		return sanitized
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(name))
+	// Use %08x for a deterministic 8-digit zero-padded suffix (9 chars with leading dash).
+	suffix := fmt.Sprintf("-%08x", h.Sum32())
+	if maxLen <= len(suffix) {
+		// maxLen is too small for the prefix+suffix; return the hash truncated to maxLen.
+		hash := suffix[1:] // drop the leading dash
+		if maxLen < len(hash) {
+			return hash[:maxLen]
+		}
+		return hash
+	}
+	prefix := sanitized[:maxLen-len(suffix)]
+	return prefix + suffix
+}
+
+func nftNameWithSuffix(base, separator, suffix string) string {
+	sanitizedSeparator := strings.Map(sanitizeNftChar, separator)
+	sanitizedSuffix := strings.Map(sanitizeNftChar, suffix)
+	suffixLen := len(sanitizedSeparator) + len(sanitizedSuffix)
+	if suffixLen == 0 {
+		return truncateNftName(base, nftNameMaxLen)
+	}
+	if suffixLen >= nftNameMaxLen {
+		return truncateNftName(base+sanitizedSeparator+sanitizedSuffix, nftNameMaxLen)
+	}
+	return truncateNftName(base, nftNameMaxLen-suffixLen) + sanitizedSeparator + sanitizedSuffix
+}
+
+func bootstrapNetfilterChains(nftState *nftState) error {
 	// the netfilter hook system
 	// ref: https://wiki.nftables.org/wiki-nftables/index.php/Netfilter_hooks
 	// Create our chains if they don't already exist
@@ -97,7 +148,7 @@ func bootstrapNetfilterChains(nftState *nftState) {
 		Priority: nftables.ChainPriorityFilter,
 		Type:     nftables.ChainTypeFilter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create input chain: %w", err)
 	}
 	// nft add chain inet filter output { type filter hook output priority 0 \; }
 	if nftState.output, err = nftState.addChain(&nftables.Chain{
@@ -107,7 +158,7 @@ func bootstrapNetfilterChains(nftState *nftState) {
 		Priority: nftables.ChainPriorityFilter,
 		Type:     nftables.ChainTypeFilter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create output chain: %w", err)
 	}
 	// nft add chain inet filter prerouting { type filter hook prerouting priority 0 \; }
 	if nftState.prerouting, err = nftState.addChain(&nftables.Chain{
@@ -117,36 +168,37 @@ func bootstrapNetfilterChains(nftState *nftState) {
 		Priority: nftables.ChainPriorityNATDest,
 		Type:     nftables.ChainTypeNAT,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create prerouting chain: %w", err)
 	}
 	// add chain inet filter MULTI-INGRESS
 	if nftState.ingressChain, err = nftState.addChain(&nftables.Chain{
 		Name:  ingressChain,
 		Table: nftState.filter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create %s chain: %w", ingressChain, err)
 	}
 	// add chain inet filter MULTI-EGRESS
 	if nftState.egressChain, err = nftState.addChain(&nftables.Chain{
 		Name:  egressChain,
 		Table: nftState.filter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create %s chain: %w", egressChain, err)
 	}
 	// nft add chain inet filter MULTI-INGRESS-COMMON
 	if nftState.commonIngressChain, err = nftState.addChain(&nftables.Chain{
 		Name:  fmt.Sprintf("%s-%s", ingressChain, common),
 		Table: nftState.filter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create %s-%s chain: %w", ingressChain, common, err)
 	}
 	// nft add chain inet filter MULTI-EGRESS-COMMON
 	if nftState.commonEgressChain, err = nftState.addChain(&nftables.Chain{
 		Name:  fmt.Sprintf("%s-%s", egressChain, common),
 		Table: nftState.filter,
 	}); err != nil {
-		klog.Errorf("failed to create chain: %v", err)
+		return fmt.Errorf("failed to create %s-%s chain: %w", egressChain, common, err)
 	}
+	return nil
 }
 
 func addTable(nft *nftables.Conn, table *nftables.Table) (*nftables.Table, error) {
@@ -161,14 +213,242 @@ func addTable(nft *nftables.Conn, table *nftables.Table) (*nftables.Table, error
 	return t, nil
 }
 
+const (
+	inputInterfaceFilterComment  = "input-interface-filter"
+	outputInterfaceFilterComment = "output-interface-filter"
+	natFilterRuleComment         = "nat-filter-rule"
+)
+
+var legacyDaemonChainNames = map[string]bool{
+	ingressChain: true,
+	egressChain:  true,
+	fmt.Sprintf("%s-%s", ingressChain, common): true,
+	fmt.Sprintf("%s-%s", egressChain, common):  true,
+}
+
+var legacyDaemonBaseChainNames = map[string]bool{
+	"input":      true,
+	"output":     true,
+	"prerouting": true,
+}
+
+var legacyDaemonRuleComments = map[string]bool{
+	inputInterfaceFilterComment:  true,
+	outputInterfaceFilterComment: true,
+	natFilterRuleComment:         true,
+}
+
+var legacyDaemonSetComments = map[string]bool{
+	"Pod interfaces":     true,
+	"Pod interfaces NAT": true,
+}
+
+// CleanupLegacyTables removes only daemon-owned objects that older daemon
+// versions created in generic "filter" and "nat" inet tables. It must not
+// delete the shared tables themselves.
+func CleanupLegacyTables(nft *nftables.Conn) error {
+	legacyNames := map[string]bool{
+		legacyFilterTableName: true,
+		legacyNatTableName:    true,
+	}
+
+	allTables, err := nft.ListTablesOfFamily(nftables.TableFamilyINet)
+	if err != nil {
+		return fmt.Errorf("cleanup legacy tables: list inet tables: %w", err)
+	}
+
+	for _, table := range allTables {
+		if !legacyNames[table.Name] {
+			continue
+		}
+
+		chains, err := nft.ListChainsOfTableFamily(nftables.TableFamilyINet)
+		if err != nil {
+			return fmt.Errorf("cleanup legacy tables: list chains for table %q: %w", table.Name, err)
+		}
+
+		for _, chain := range chains {
+			if chain.Table.Name != table.Name || !legacyDaemonBaseChainNames[chain.Name] {
+				continue
+			}
+			rules, err := nft.GetRules(table, chain)
+			if err != nil {
+				return fmt.Errorf("cleanup legacy tables: list rules for chain %q in table %q: %w", chain.Name, table.Name, err)
+			}
+			deletedBaseRules := false
+			for _, rule := range rules {
+				if !legacyDaemonRule(rule) {
+					continue
+				}
+				comment, _ := userdata.GetString(rule.UserData, userdata.TypeComment)
+				klog.V(2).Infof("removing daemon-owned legacy rule %q from chain %q in table %q", comment, chain.Name, table.Name)
+				if err := nft.DelRule(rule); err != nil {
+					klog.Errorf("failed to delete daemon-owned legacy rule %q from chain %q in table %q: %v", comment, chain.Name, table.Name, err)
+					continue
+				}
+				deletedBaseRules = true
+			}
+			if deletedBaseRules {
+				if err := nft.Flush(); err != nil {
+					return fmt.Errorf("cleanup legacy tables: flush daemon-owned rule deletes for chain %q in table %q: %w", chain.Name, table.Name, err)
+				}
+			}
+		}
+
+		flushed := false
+		for _, chain := range chains {
+			if chain.Table.Name != table.Name || !legacyDaemonChainNames[chain.Name] {
+				continue
+			}
+			hasRemainingRules, err := cleanupLegacyDaemonChainRules(nft, table, chain)
+			if err != nil {
+				return err
+			}
+			referenced, err := legacyChainReferenced(nft, table, chain.Name)
+			if err != nil {
+				return err
+			}
+			if referenced {
+				klog.V(2).Infof("preserving daemon-owned legacy chain %q in table %q because remaining rules still reference it", chain.Name, table.Name)
+				continue
+			}
+			if hasRemainingRules {
+				klog.V(2).Infof("preserving daemon-owned legacy chain %q in table %q because it still contains foreign rules", chain.Name, table.Name)
+				continue
+			}
+			klog.V(2).Infof("removing daemon-owned legacy chain %q from table %q", chain.Name, table.Name)
+			nft.DelChain(chain)
+			flushed = true
+		}
+
+		sets, err := nft.GetSets(table)
+		if err != nil {
+			return fmt.Errorf("cleanup legacy tables: list sets for table %q: %w", table.Name, err)
+		}
+		for _, set := range sets {
+			if !legacyDaemonSet(set) {
+				continue
+			}
+			klog.V(2).Infof("removing daemon-owned legacy set %q from table %q", set.Name, table.Name)
+			nft.DelSet(set)
+			flushed = true
+		}
+		if flushed {
+			if err := nft.Flush(); err != nil {
+				return fmt.Errorf("cleanup legacy tables: flush: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func legacyDaemonRule(rule *nftables.Rule) bool {
+	comment, ok := userdata.GetString(rule.UserData, userdata.TypeComment)
+	return ok && legacyDaemonRuleComments[comment]
+}
+
+func legacyDaemonSet(set *nftables.Set) bool {
+	return set.Name == podInterfacesName && legacyDaemonSetComments[set.Comment]
+}
+
+func cleanupLegacyDaemonChainRules(nft *nftables.Conn, table *nftables.Table, chain *nftables.Chain) (bool, error) {
+	rules, err := nft.GetRules(table, chain)
+	if err != nil {
+		return false, fmt.Errorf("cleanup legacy tables: list rules for daemon chain %q in table %q: %w", chain.Name, table.Name, err)
+	}
+
+	deleted := false
+	for _, rule := range rules {
+		if !legacyDaemonChainRule(rule) {
+			continue
+		}
+		comment, _ := userdata.GetString(rule.UserData, userdata.TypeComment)
+		klog.V(2).Infof("removing daemon-owned legacy rule %q from chain %q in table %q", comment, chain.Name, table.Name)
+		if err := nft.DelRule(rule); err != nil {
+			return false, fmt.Errorf("cleanup legacy tables: delete daemon-owned rule from chain %q in table %q: %w", chain.Name, table.Name, err)
+		}
+		deleted = true
+	}
+	if deleted {
+		if err := nft.Flush(); err != nil {
+			return false, fmt.Errorf("cleanup legacy tables: flush daemon-owned rule deletes for chain %q in table %q: %w", chain.Name, table.Name, err)
+		}
+		rules, err = nft.GetRules(table, chain)
+		if err != nil {
+			return false, fmt.Errorf("cleanup legacy tables: list remaining rules for daemon chain %q in table %q: %w", chain.Name, table.Name, err)
+		}
+	}
+
+	return len(rules) > 0, nil
+}
+
+func legacyDaemonChainRule(rule *nftables.Rule) bool {
+	comment, ok := userdata.GetString(rule.UserData, userdata.TypeComment)
+	if !ok {
+		return false
+	}
+	if legacyDaemonRuleComments[comment] {
+		return true
+	}
+	if comment == "common-ingress-chain" ||
+		comment == "common-egress-chain" ||
+		comment == "allow-ipv6-ndp-discovery" ||
+		comment == allowConntrackRuleName ||
+		comment == "drop-remaining" {
+		return true
+	}
+	return strings.HasPrefix(comment, "policy:") ||
+		strings.HasPrefix(comment, "common rule:") ||
+		strings.HasPrefix(comment, "allow_icmp_")
+}
+
+func legacyChainReferenced(nft *nftables.Conn, table *nftables.Table, chainName string) (bool, error) {
+	chains, err := nft.ListChainsOfTableFamily(table.Family)
+	if err != nil {
+		return false, fmt.Errorf("cleanup legacy tables: list chains for table %q: %w", table.Name, err)
+	}
+	for _, chain := range chains {
+		if chain.Table.Name != table.Name {
+			continue
+		}
+		rules, err := nft.GetRules(table, chain)
+		if err != nil {
+			return false, fmt.Errorf("cleanup legacy tables: list rules for chain %q in table %q: %w", chain.Name, table.Name, err)
+		}
+		for _, rule := range rules {
+			if ruleReferencesChain(rule, chainName) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func ruleReferencesChain(rule *nftables.Rule, chainName string) bool {
+	for i := len(rule.Exprs) - 1; i >= 0; i-- {
+		verdict, ok := rule.Exprs[i].(*expr.Verdict)
+		if !ok {
+			continue
+		}
+		if verdict.Chain == chainName && (verdict.Kind == expr.VerdictJump || verdict.Kind == expr.VerdictGoto) {
+			return true
+		}
+	}
+	return false
+}
+
 func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (*nftState, error) {
 	if podInfo == nil || len(podInfo.Interfaces) == 0 {
 		return nil, fmt.Errorf("podInfo or podInfo.Interfaces is nil/empty")
 	}
 
+	if err := CleanupLegacyTables(nft); err != nil {
+		return nil, err
+	}
+
 	filterTable, err := addTable(nft, &nftables.Table{
 		Family: nftables.TableFamilyINet,
-		Name:   "filter",
+		Name:   FilterTableName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to add table: %w", err)
@@ -176,7 +456,7 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 
 	natTable, err := addTable(nft, &nftables.Table{
 		Family: nftables.TableFamilyINet,
-		Name:   "nat",
+		Name:   NatTableName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to add table: %w", err)
@@ -192,7 +472,9 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 		chains: make(map[string]*nftables.Chain),
 	}
 
-	bootstrapNetfilterChains(nftState)
+	if err := bootstrapNetfilterChains(nftState); err != nil {
+		return nil, err
+	}
 
 	slices.SortStableFunc(podInfo.Interfaces, func(a, b controllers.InterfaceInfo) int {
 		return strings.Compare(a.InterfaceName, b.InterfaceName)
@@ -226,9 +508,6 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 	if err := nftState.updateSet(nftState.interfaceFilterSet, interfaceSetElements); err != nil {
 		return nftState, fmt.Errorf("failed to update set %q: %w", nftState.interfaceFilterSet.Name, err)
 	}
-
-	inputInterfaceFilterComment := "input-interface-filter"
-	outputInterfaceFilterComment := "output-interface-filter"
 
 	filterInputRule := &nftables.Rule{
 		Table:    nftState.filter,
@@ -283,7 +562,7 @@ func bootstrapNetfilterRules(nft *nftables.Conn, podInfo *controllers.PodInfo) (
 	if _, err := nftState.updateRule(&nftables.Rule{
 		Table:    nftState.nat,
 		Chain:    nftState.prerouting,
-		UserData: userDataComment("nat-filter-rule"),
+		UserData: userDataComment(natFilterRuleComment),
 		Exprs: []expr.Any{
 			&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 0x1},
 			&expr.Lookup{
@@ -389,6 +668,9 @@ func ruleEqual(a, b *nftables.Rule) bool {
 	if a.Table.Name != b.Table.Name {
 		return false
 	}
+	if len(a.Exprs) != len(b.Exprs) {
+		return false
+	}
 
 	if !bytes.Equal(a.UserData, b.UserData) {
 		return false
@@ -424,6 +706,12 @@ func ruleEqual(a, b *nftables.Rule) bool {
 			if !exprEqual(&expr.Bitwise{}, a.Exprs[i], b.Exprs[i]) {
 				return false
 			}
+		case *expr.Counter:
+			if _, ok := b.Exprs[i].(*expr.Counter); !ok {
+				return false
+			}
+		default:
+			return false
 		}
 	}
 
@@ -629,7 +917,7 @@ func getPrefixesAsSetInterval(prefixes []string) ([]nftables.SetElement, []nftab
 	for index, addr := range prefixes {
 		net, err := netip.ParsePrefix(addr) // validate
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to parse CIDR %q prefix[%d]: %v", addr, index, err)
+			return nil, nil, fmt.Errorf("failed to parse CIDR %q prefix[%d]: %w", addr, index, err)
 		}
 		if net.Addr().Is4() {
 			// specific first element to inform nftables this is an interval set
@@ -785,49 +1073,49 @@ func (n *nftState) allowConntracked(chain *nftables.Chain) error {
 	return err
 }
 
-func (n *nftState) applyCommonChainRules(s *Server) error {
+func (n *nftState) applyCommonChainRules(cfg controllers.CommonRuleConfig) error {
 	klog.V(8).Info("applying common chain rules")
-	if s.Options.acceptICMPv6 {
+	if cfg.AcceptICMPv6 {
 		if err := n.allowICMP(n.commonIngressChain, true); err != nil {
-			return fmt.Errorf("failed to allow ICMPv6 in common ingress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMPv6 in common ingress chain: %w", err)
 		}
 		if err := n.allowICMP(n.commonEgressChain, true); err != nil {
-			return fmt.Errorf("failed to allow ICMPv6 in common egress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMPv6 in common egress chain: %w", err)
 		}
 	} else {
 		if err := n.allowNeighborDiscovery(n.commonIngressChain); err != nil {
-			return fmt.Errorf("failed to allow ICMPv6 neighbor discovery in common ingress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMPv6 neighbor discovery in common ingress chain: %w", err)
 		}
 		if err := n.allowNeighborDiscovery(n.commonEgressChain); err != nil {
-			return fmt.Errorf("failed to allow ICMPv6 neighbor discovery in common egress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMPv6 neighbor discovery in common egress chain: %w", err)
 		}
 	}
-	if s.Options.acceptICMP {
+	if cfg.AcceptICMP {
 		if err := n.allowICMP(n.commonIngressChain, false); err != nil {
-			return fmt.Errorf("failed to allow ICMP in common ingress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMP in common ingress chain: %w", err)
 		}
 		if err := n.allowICMP(n.commonEgressChain, false); err != nil {
-			return fmt.Errorf("failed to allow ICMP in common egress chain: %v", err)
+			return fmt.Errorf("failed to allow ICMP in common egress chain: %w", err)
 		}
 	}
 
-	if len(s.Options.allowSrcPrefix) != 0 {
-		if err := n.applyCommonPrefixRules(n.commonIngressChain, s.Options.allowSrcPrefix, common); err != nil {
-			return fmt.Errorf("failed to apply common ingress rules: %v", err)
+	if len(cfg.AllowSrcPrefix) != 0 {
+		if err := n.applyCommonPrefixRules(n.commonIngressChain, cfg.AllowSrcPrefix, common); err != nil {
+			return fmt.Errorf("failed to apply common ingress rules: %w", err)
 		}
 	}
 
-	if len(s.Options.allowDstPrefix) != 0 {
-		if err := n.applyCommonPrefixRules(n.commonEgressChain, s.Options.allowDstPrefix, common); err != nil {
-			return fmt.Errorf("failed to apply common egress rules: %v", err)
+	if len(cfg.AllowDstPrefix) != 0 {
+		if err := n.applyCommonPrefixRules(n.commonEgressChain, cfg.AllowDstPrefix, common); err != nil {
+			return fmt.Errorf("failed to apply common egress rules: %w", err)
 		}
 	}
 	// Always allow conntracked connections
 	if err := n.allowConntracked(n.commonIngressChain); err != nil {
-		return fmt.Errorf("failed to apply common ingress conntrack rules: %v", err)
+		return fmt.Errorf("failed to apply common ingress conntrack rules: %w", err)
 	}
 	if err := n.allowConntracked(n.commonEgressChain); err != nil {
-		return fmt.Errorf("failed to apply common egress conntrack rules: %v", err)
+		return fmt.Errorf("failed to apply common egress conntrack rules: %w", err)
 	}
 
 	return nil
@@ -860,7 +1148,16 @@ func ifname(n string) []byte {
 	return b
 }
 
+// userDataCommentMaxLen is the maximum length of a comment string in userdata.
+// userdata.AppendString encodes the string length in a single byte (0-255),
+// and appends a null terminator, so the effective maximum for the comment
+// string itself is 254 bytes.
+const userDataCommentMaxLen = 254
+
 func userDataComment(comment string) []byte {
+	if len(comment) > userDataCommentMaxLen {
+		comment = comment[:userDataCommentMaxLen]
+	}
 	return userdata.AppendString([]byte{}, userdata.TypeComment, comment)
 }
 
@@ -1169,7 +1466,7 @@ func (n *nftState) applyPolicyPeersRulesIPBlock(chainName string, chain *nftable
 	return nil
 }
 
-func (n *nftState) applyPolicyPeersRulesSelector(s *Server, chainName string, chain *nftables.Chain, policyName string, peer multiv1beta1.MultiNetworkPolicyPeer,
+func (n *nftState) applyPolicyPeersRulesSelector(ctx context.Context, deps controllers.PolicyDeps, chainName string, chain *nftables.Chain, policyName string, peer multiv1beta1.MultiNetworkPolicyPeer,
 	podInfo *controllers.PodInfo, policyNetworks []string, peerIndex int) error {
 	if peer.PodSelector != nil {
 		klog.V(8).Infof("applying peers rules with pod selector: %s", peer.PodSelector.String())
@@ -1187,7 +1484,7 @@ func (n *nftState) applyPolicyPeersRulesSelector(s *Server, chainName string, ch
 		podSelector = labels.Everything()
 	}
 
-	pods, err := s.podLister.Pods(metav1.NamespaceAll).List(podSelector)
+	pods, err := deps.ListPods(ctx, podSelector)
 	if err != nil {
 		return fmt.Errorf("pod list failed: %w", err)
 	}
@@ -1201,12 +1498,10 @@ func (n *nftState) applyPolicyPeersRulesSelector(s *Server, chainName string, ch
 			return fmt.Errorf("namespace selector: %w", err)
 		}
 	}
-	s.namespaceMap.Update(s.nsChanges)
-
 	var podIntfIPs []string
 	podIntfsIPsMap := make(map[string]any)
 	for _, sPod := range pods {
-		nsLabels, err := s.namespaceMap.GetNamespaceInfo(sPod.Namespace)
+		nsLabels, err := deps.GetNamespaceInfo(ctx, sPod.Namespace)
 		if err != nil {
 			klog.Errorf("cannot get namespace info: %v %v", sPod.Name, err)
 			continue
@@ -1214,8 +1509,7 @@ func (n *nftState) applyPolicyPeersRulesSelector(s *Server, chainName string, ch
 		if nsSelector != nil && !nsSelector.Matches(labels.Set(nsLabels.Labels)) {
 			continue
 		}
-		s.podMap.Update(s.podChanges)
-		sPodinfo, err := s.podMap.GetPodInfo(sPod)
+		sPodinfo, err := deps.GetPodInfo(ctx, sPod)
 		if err != nil {
 			klog.Errorf("cannot get %s/%s podInfo: %v", sPod.Namespace, sPod.Name, err)
 			continue
@@ -1246,7 +1540,7 @@ func (n *nftState) applyPolicyPeersRulesSelector(s *Server, chainName string, ch
 	}
 
 	if err := n.addIPRules(chainName, podIntfIPs, chain, policyName, peer, peerIndex); err != nil {
-		klog.Errorf("failed to add IP rules %v", err)
+		return fmt.Errorf("add selector IP rules: %w", err)
 	}
 
 	return nil
@@ -1376,9 +1670,9 @@ func (n *nftState) addIPRules(chainName string, addrs []string, chain *nftables.
 	return nil
 }
 
-func (n *nftState) applyPolicyPeersRules(s *Server, chainName string, chain *nftables.Chain, policyName string, peers []multiv1beta1.MultiNetworkPolicyPeer,
+func (n *nftState) applyPolicyPeersRules(ctx context.Context, deps controllers.PolicyDeps, chainName string, chain *nftables.Chain, policyName string, peers []multiv1beta1.MultiNetworkPolicyPeer,
 	podInfo *controllers.PodInfo, policyNetworks []string, peerIndex int) error {
-	peersName := fmt.Sprintf("%s-%s-%d", chainName, peersChainSuffix, peerIndex)
+	peersName := nftNameWithSuffix(chainName, "-", fmt.Sprintf("%s-%d", peersChainSuffix, peerIndex))
 
 	peersChain, err := n.addChain(&nftables.Chain{
 		Name:  peersName,
@@ -1401,22 +1695,20 @@ func (n *nftState) applyPolicyPeersRules(s *Server, chainName string, chain *nft
 		}}, n.nft.AddRule, false); err != nil {
 		return err
 	}
-	// sync podmap before calculating rules
-	s.podMap.Update(s.podChanges)
 	for index, peer := range peers {
 		if peer.IPBlock != nil {
 			if err := n.applyPolicyPeersRulesIPBlock(peersName, peersChain, policyName, peer, index); err != nil {
-				klog.Errorf("failed to apply IPBlock rules: %v", err)
+				return fmt.Errorf("apply IPBlock peer rules at index %d: %w", index, err)
 			}
 			continue
 		}
 		if peer.PodSelector != nil || peer.NamespaceSelector != nil {
-			if err := n.applyPolicyPeersRulesSelector(s, peersName, peersChain, policyName, peer, podInfo, policyNetworks, index); err != nil {
-				klog.Errorf("failed to apply selector rules: %v", err)
+			if err := n.applyPolicyPeersRulesSelector(ctx, deps, peersName, peersChain, policyName, peer, podInfo, policyNetworks, index); err != nil {
+				return fmt.Errorf("apply selector peer rules at index %d: %w", index, err)
 			}
 			continue
 		}
-		klog.Errorf("unknown rule: %+v", peer)
+		return fmt.Errorf("unknown peer rule at index %d: %+v", index, peer)
 	}
 
 	if len(peers) == 0 {
@@ -1476,7 +1768,7 @@ func (n *nftState) findRule(rule *nftables.Rule) (*nftables.Rule, error) {
 }
 
 func (n *nftState) getInetSet(chain *nftables.Chain, portsName, suffix string) *nftables.Set {
-	setName := fmt.Sprintf("%s_%s", getSetName(portsName), suffix)
+	setName := nftNameWithSuffix(getSetName(portsName), "_", suffix)
 	return &nftables.Set{
 		Table:    chain.Table,
 		Name:     setName,
@@ -1533,7 +1825,7 @@ func (n *nftState) applyProtoPortsRules(chainName string, chain *nftables.Chain,
 }
 
 func (n *nftState) applyPolicyPortsRules(chainName string, chain *nftables.Chain, policyName string, ports []multiv1beta1.MultiNetworkPolicyPort, portIndex int) error {
-	portsName := fmt.Sprintf("%s-%s-%d", chainName, portsChainSuffix, portIndex)
+	portsName := nftNameWithSuffix(chainName, "-", fmt.Sprintf("%s-%d", portsChainSuffix, portIndex))
 	// create ports chain
 	portChain, err := n.addChain(&nftables.Chain{
 		Name:  portsName,
@@ -1671,11 +1963,11 @@ func (n *nftState) applyPolicyPortsRules(chainName string, chain *nftables.Chain
 	return nil
 }
 
-// s *Server, podInfo *controllers.PodInfo, pIndex, iIndex int, from []multiv1beta1.MultiNetworkPolicyPeer, policyNetworks []string
-func (n *nftState) applyPodRules(s *Server, chain *nftables.Chain, podInfo *controllers.PodInfo, policy *multiv1beta1.MultiNetworkPolicy, policyNetworks []string) (bool, error) {
+func (n *nftState) applyPodRules(ctx context.Context, deps controllers.PolicyDeps, _ controllers.CommonRuleConfig, chain *nftables.Chain, podInfo *controllers.PodInfo, policy *multiv1beta1.MultiNetworkPolicy, policyNetworks []string) (bool, error) {
 	// add chain inet filter <chainName>-<idx>
 	entryChainName := chain.Name
-	policyChainName := fmt.Sprintf("%s-%s", entryChainName, policyRuleNamespacedName(policy))
+	policyPart := truncateNftName(policyRuleNamespacedName(policy), nftNameMaxLen-len(entryChainName)-1)
+	policyChainName := fmt.Sprintf("%s-%s", entryChainName, policyPart)
 	policyChain, err := n.addChain(&nftables.Chain{
 		Name:  policyChainName,
 		Table: n.filter,
@@ -1689,7 +1981,7 @@ func (n *nftState) applyPodRules(s *Server, chain *nftables.Chain, podInfo *cont
 		if podIntf.CheckPolicyNetwork(policyNetworks) {
 			newRule, err := n.applyPodInterfaceRules(chain, policyChain, policy, podIntf)
 			if err != nil {
-				return newRules, fmt.Errorf("failed to apply pod interface rules for policy %q: %v", policyNamespacedName(policy), err)
+				return newRules, fmt.Errorf("failed to apply pod interface rules for policy %q: %w", policyNamespacedName(policy), err)
 			}
 			if newRule {
 				newRules = true
@@ -1705,7 +1997,7 @@ func (n *nftState) applyPodRules(s *Server, chain *nftables.Chain, podInfo *cont
 			if err := n.applyPolicyPortsRules(policyChainName, policyChain, policyNamespacedName(policy), ingress.Ports, index); err != nil {
 				return newRules, fmt.Errorf("failed to apply ingress ports for policy %q: %w", policyNamespacedName(policy), err)
 			}
-			if err := n.applyPolicyPeersRules(s, policyChainName, policyChain, policyNamespacedName(policy), ingress.From, podInfo, policyNetworks, index); err != nil {
+			if err := n.applyPolicyPeersRules(ctx, deps, policyChainName, policyChain, policyNamespacedName(policy), ingress.From, podInfo, policyNetworks, index); err != nil {
 				return newRules, fmt.Errorf("failed to apply ingress address rules for policy %q: %w", policyNamespacedName(policy), err)
 			}
 			if err := n.applyMarkCheck(policyChainName, policyChain, policyNamespacedName(policy), index); err != nil {
@@ -1720,7 +2012,7 @@ func (n *nftState) applyPodRules(s *Server, chain *nftables.Chain, podInfo *cont
 			if err := n.applyPolicyPortsRules(policyChainName, policyChain, policyNamespacedName(policy), egress.Ports, index); err != nil {
 				return newRules, fmt.Errorf("failed to apply egress ports for policy %q: %w", policyNamespacedName(policy), err)
 			}
-			if err := n.applyPolicyPeersRules(s, policyChainName, policyChain, policyNamespacedName(policy), egress.To, podInfo, policyNetworks, index); err != nil {
+			if err := n.applyPolicyPeersRules(ctx, deps, policyChainName, policyChain, policyNamespacedName(policy), egress.To, podInfo, policyNetworks, index); err != nil {
 				return newRules, fmt.Errorf("failed to apply egress address rules for policy %q: %w", policyNamespacedName(policy), err)
 			}
 			if err := n.applyMarkCheck(policyChainName, policyChain, policyNamespacedName(policy), index); err != nil {
@@ -1788,6 +2080,7 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 	}
 
 	performFlush := false
+	var cleanupErrs []error
 
 	for _, chain := range chains {
 		if chain.Table.Name == table.Name {
@@ -1802,6 +2095,7 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 					klog.Warningf("failed to get key for rule %q in chain %q: %v — deleting as stale", comment, rule.Chain.Name, err)
 					if delErr := n.nft.DelRule(rule); delErr != nil {
 						klog.Errorf("failed to delete unhashable rule %q in chain %q: %v", comment, rule.Chain.Name, delErr)
+						cleanupErrs = append(cleanupErrs, fmt.Errorf("delete unhashable rule %q in chain %q: %w", comment, rule.Chain.Name, delErr))
 					} else {
 						performFlush = true
 					}
@@ -1813,6 +2107,7 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 					err = n.nft.DelRule(rule)
 					if err != nil {
 						klog.Errorf("failed to delete rule %q in chain %q: %v", comment, rule.Chain.Name, err)
+						cleanupErrs = append(cleanupErrs, fmt.Errorf("delete rule %q in chain %q: %w", comment, rule.Chain.Name, err))
 						continue
 					}
 					performFlush = true
@@ -1821,7 +2116,10 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 		}
 	}
 
-	sets, _ := n.nft.GetSets(table)
+	sets, err := n.nft.GetSets(table)
+	if err != nil {
+		return fmt.Errorf("failed to list sets for table %q: %w", table.Name, err)
+	}
 	for _, set := range sets {
 		if _, exists := n.sets[fmt.Sprintf("%s-%s", set.Table.Name, set.Name)]; !exists && !set.Anonymous {
 			klog.V(8).Infof("deleting set %q in table %q", set.Name, set.Table.Name)
@@ -1835,6 +2133,9 @@ func (n *nftState) cleanupRules(table *nftables.Table) error {
 			return fmt.Errorf("failed to flush rules/sets cleanup: %w", err)
 		}
 	}
+	if len(cleanupErrs) > 0 {
+		return errors.Join(cleanupErrs...)
+	}
 
 	return nil
 }
@@ -1846,7 +2147,14 @@ func (n *nftState) cleanupChains() error {
 	}
 
 	performFlush := false
+	managedTableNames := map[string]bool{
+		n.filter.Name: true,
+		n.nat.Name:    true,
+	}
 	for _, chain := range chains {
+		if !managedTableNames[chain.Table.Name] {
+			continue
+		}
 		rules, err := n.nft.GetRules(chain.Table, chain)
 		if err != nil {
 			return fmt.Errorf("failed to get rules for table %q, chain %q: %w", chain.Table.Name, chain.Name, err)

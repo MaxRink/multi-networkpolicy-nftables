@@ -28,6 +28,9 @@ jobs:
         working-directory: ./e2e
         run: ./get_tools.sh
 
+      - name: Verify generated manifests
+        run: PATH=./e2e/bin:$PATH make verify-manifests
+
       - name: Setup cluster
         working-directory: ./e2e
         run: ./setup_cluster.sh

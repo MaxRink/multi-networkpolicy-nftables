@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: multi-networkpolicy-ds-amd64
+  namespace: kube-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: multi-networkpolicy
+          image: localhost:5000/multi-networkpolicy-nftables:e2e
+          imagePullPolicy: IfNotPresent
+          args:
+            - --host-prefix=/host
+            - --container-runtime-endpoint=/run/containerd/containerd.sock
+            - --sync-period=1
+            - --network-plugins=macvlan,bond,ipvlan
+            - -v=10
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - SYS_ADMIN
+                - NET_ADMIN

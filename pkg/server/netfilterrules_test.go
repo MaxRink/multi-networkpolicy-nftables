@@ -17,34 +17,95 @@ limitations under the License.
 package server
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"net"
 	"net/netip"
 	"strings"
 	"testing"
-	"time"
 
 	nftables "github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"github.com/google/nftables/userdata"
 	multiv1beta1 "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/apis/k8s.cni.cncf.io/v1beta1"
-	multifake "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/client/clientset/versioned/fake"
 	netdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
-	netfake "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/client/clientset/versioned/fake"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/nftest"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/informers"
-	k8sfake "k8s.io/client-go/kubernetes/fake"
 )
 
 const DEBUG = false
+
+type testPolicyDeps struct {
+	podMap       map[types.NamespacedName]controllers.PodInfo
+	namespaceMap map[string]controllers.NamespaceInfo
+	netdefMap    map[types.NamespacedName]string
+	cfg          controllers.CommonRuleConfig
+	pods         map[types.NamespacedName]*corev1.Pod
+}
+
+var _ controllers.PolicyDeps = (*testPolicyDeps)(nil)
+var _ controllers.NetDefResolver = (*testPolicyDeps)(nil)
+
+func (s *testPolicyDeps) ListPods(_ context.Context, selector labels.Selector) ([]*corev1.Pod, error) {
+	if selector == nil {
+		selector = labels.Everything()
+	}
+
+	pods := make([]*corev1.Pod, 0, len(s.pods))
+	for _, pod := range s.pods {
+		if selector.Matches(labels.Set(pod.Labels)) {
+			pods = append(pods, pod)
+		}
+	}
+
+	return pods, nil
+}
+
+func (s *testPolicyDeps) GetNamespaceInfo(_ context.Context, namespace string) (*controllers.NamespaceInfo, error) {
+	if s == nil || s.namespaceMap == nil {
+		return nil, fmt.Errorf("not found")
+	}
+
+	nsInfo, ok := s.namespaceMap[namespace]
+	if !ok {
+		return nil, fmt.Errorf("not found")
+	}
+
+	return &nsInfo, nil
+}
+
+func (s *testPolicyDeps) GetPodInfo(_ context.Context, pod *corev1.Pod) (*controllers.PodInfo, error) {
+	if s == nil || s.podMap == nil || pod == nil {
+		return nil, fmt.Errorf("not found")
+	}
+
+	podInfo, ok := s.podMap[types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}]
+	if !ok {
+		return nil, fmt.Errorf("not found")
+	}
+
+	return &podInfo, nil
+}
+
+func (s *testPolicyDeps) GetPluginType(_ context.Context, namespacedName types.NamespacedName) (string, error) {
+	if s == nil || s.netdefMap == nil {
+		return "", nil
+	}
+
+	pluginType, ok := s.netdefMap[namespacedName]
+	if !ok {
+		return "", nil
+	}
+
+	return pluginType, nil
+}
 
 func TestBootstrap(t *testing.T) {
 	// Open a system connection in a separate network namespace it requires root
@@ -73,13 +134,13 @@ func TestBootstrap(t *testing.T) {
 
 	checkForBootstrap := func() bool {
 
-		filterTable, err := c.ListTableOfFamily("filter", nftables.TableFamilyINet)
+		filterTable, err := c.ListTableOfFamily(FilterTableName, nftables.TableFamilyINet)
 		if err != nil {
-			t.Fatalf("c.ListTable(\"filter\") failed: %v", err)
+			t.Fatalf("c.ListTable(%q) failed: %v", FilterTableName, err)
 		}
-		natTable, err := c.ListTableOfFamily("nat", nftables.TableFamilyINet)
+		natTable, err := c.ListTableOfFamily(NatTableName, nftables.TableFamilyINet)
 		if err != nil {
-			t.Fatalf("c.ListTable(\"nat\") failed: %v", err)
+			t.Fatalf("c.ListTable(%q) failed: %v", NatTableName, err)
 		}
 		if filterTable == nil || natTable == nil {
 			t.Errorf("filterTable or natTable is nil %v, %v", filterTable, natTable)
@@ -91,7 +152,7 @@ func TestBootstrap(t *testing.T) {
 		}
 		var foundInput, foundOutput, foundIngress, foundEgress, foundCommonIngress, foundCommonEgress, foundPreRouting bool
 		for _, ch := range chains {
-			if ch.Table.Name == "filter" {
+			if ch.Table.Name == FilterTableName {
 				switch ch.Name {
 				case ingressChain:
 					foundIngress = true
@@ -107,7 +168,7 @@ func TestBootstrap(t *testing.T) {
 					foundOutput = true
 				}
 			}
-			if ch.Table.Name == "nat" {
+			if ch.Table.Name == NatTableName {
 				if ch.Name == "prerouting" {
 					foundPreRouting = true
 				}
@@ -147,6 +208,69 @@ func TestBootstrap(t *testing.T) {
 	}
 }
 
+func TestApplyPolicyRulesForPodAndFamilyReturnsPolicyRuleError(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.FlushRuleset()
+	defer c.CloseLasting()
+	c.FlushRuleset()
+
+	namespace := "testns1"
+	pod := NewFakePodWithNetAnnotation(
+		namespace,
+		"testpod1",
+		"policy-net-1",
+		NewFakeNetworkStatus(namespace, "policy-net-1", "192.168.1.1", "10.1.1.1"),
+		map[string]string{"app": "selected"},
+	)
+	podInfo := &controllers.PodInfo{
+		Name:      pod.Name,
+		Namespace: pod.Namespace,
+		Interfaces: []controllers.InterfaceInfo{{
+			NetattachName: fmt.Sprintf("%s/%s", namespace, "policy-net-1"),
+			InterfaceName: "net1",
+			IPs:           []string{"10.1.1.1"},
+		}},
+	}
+	badPort := intstr.IntOrString{Type: intstr.Int, IntVal: 70000}
+	policy := &multiv1beta1.MultiNetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      "bad-port",
+			Annotations: map[string]string{
+				PolicyNetworkAnnotation: "policy-net-1",
+			},
+		},
+		Spec: multiv1beta1.MultiNetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": "selected"}},
+			PolicyTypes: []multiv1beta1.MultiPolicyType{
+				multiv1beta1.PolicyTypeIngress,
+			},
+			Ingress: []multiv1beta1.MultiNetworkPolicyIngressRule{{
+				Ports: []multiv1beta1.MultiNetworkPolicyPort{{Port: &badPort}},
+			}},
+		},
+	}
+
+	err := ApplyPolicyRulesForPodAndFamily(
+		context.Background(),
+		newTestPolicyDeps(),
+		controllers.CommonRuleConfig{},
+		controllers.PolicyMap{
+			types.NamespacedName{Namespace: namespace, Name: policy.Name}: policy,
+		},
+		pod,
+		podInfo,
+		c,
+	)
+	if err == nil {
+		t.Fatal("ApplyPolicyRulesForPodAndFamily() error = nil, want invalid policy rule error")
+	}
+	if !strings.Contains(err.Error(), "failed to apply pod ingress rules") || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("ApplyPolicyRulesForPodAndFamily() error = %v, want invalid port context", err)
+	}
+}
+
 func TestApplyCommonChainRules(t *testing.T) {
 	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
 	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
@@ -168,15 +292,12 @@ func TestApplyCommonChainRules(t *testing.T) {
 		t.Fatalf("bootstrapNetfilterRules() returned nil state")
 	}
 
-	mockServer := &Server{
-		Options: &Options{
-			acceptICMPv6:   true,
-			acceptICMP:     true,
-			allowSrcPrefix: []string{"fc00::/8", "fd00::/8", "10.0.0.1/32", "10.0.1.0/24"},
-			allowDstPrefix: []string{"fe00::/8", "ff00::/8", "10.0.0.2/32", "10.0.2.0/24"},
-		},
-	}
-	err = nftState.applyCommonChainRules(mockServer)
+	err = nftState.applyCommonChainRules(controllers.CommonRuleConfig{
+		AcceptICMPv6:   true,
+		AcceptICMP:     true,
+		AllowSrcPrefix: []string{"fc00::/8", "fd00::/8", "10.0.0.1/32", "10.0.1.0/24"},
+		AllowDstPrefix: []string{"fe00::/8", "ff00::/8", "10.0.0.2/32", "10.0.2.0/24"},
+	})
 	if err != nil {
 		t.Fatalf("applyCommonChainRules() failed: %v", err)
 	}
@@ -187,9 +308,9 @@ func TestApplyCommonChainRules(t *testing.T) {
 	}
 
 	checkCommon := func() bool {
-		filterTable, err := c.ListTableOfFamily("filter", nftables.TableFamilyINet)
+		filterTable, err := c.ListTableOfFamily(FilterTableName, nftables.TableFamilyINet)
 		if err != nil {
-			t.Fatalf("c.ListTable(\"filter\") failed: %v", err)
+			t.Fatalf("c.ListTable(%q) failed: %v", FilterTableName, err)
 		}
 		if filterTable == nil {
 			t.Errorf("filterTable is nil")
@@ -388,7 +509,7 @@ func TestApplyPodRules(t *testing.T) {
 			},
 		},
 	}
-	_, err = nftState.applyPodRules(mockServer, nftState.ingressChain, podMockInfo, mockPolicy, policyNetworks)
+	_, err = nftState.applyPodRules(context.Background(), mockServer, mockServer.cfg, nftState.ingressChain, podMockInfo, mockPolicy, policyNetworks)
 	if err != nil {
 		t.Fatalf("applyPodRules() for ingress failed: %v", err)
 	}
@@ -396,7 +517,7 @@ func TestApplyPodRules(t *testing.T) {
 		t.Fatalf("nft flush failed after applying ingress rules: %v", err)
 	}
 
-	_, err = nftState.applyPodRules(mockServer, nftState.egressChain, podMockInfo, mockPolicy, policyNetworks)
+	_, err = nftState.applyPodRules(context.Background(), mockServer, mockServer.cfg, nftState.egressChain, podMockInfo, mockPolicy, policyNetworks)
 	if err != nil {
 		t.Fatalf("applyPodRules() for egress failed: %v", err)
 	}
@@ -743,7 +864,7 @@ func TestApplyPodRulesNoPorts(t *testing.T) {
 			},
 		},
 	}
-	_, err = nftState.applyPodRules(mockServer, nftState.ingressChain, podMockInfo, mockPolicy, []string{"net1", "net2"})
+	_, err = nftState.applyPodRules(context.Background(), mockServer, mockServer.cfg, nftState.ingressChain, podMockInfo, mockPolicy, []string{"net1", "net2"})
 	if err != nil {
 		t.Fatalf("applyPodRules() for ingress failed: %v", err)
 	}
@@ -751,7 +872,7 @@ func TestApplyPodRulesNoPorts(t *testing.T) {
 		t.Fatalf("nft flush failed after applying ingress rules: %v", err)
 	}
 
-	_, err = nftState.applyPodRules(mockServer, nftState.egressChain, podMockInfo, mockPolicy, []string{"net1", "net2"})
+	_, err = nftState.applyPodRules(context.Background(), mockServer, mockServer.cfg, nftState.egressChain, podMockInfo, mockPolicy, []string{"net1", "net2"})
 	if err != nil {
 		t.Fatalf("applyPodRules() for egress failed: %v", err)
 	}
@@ -1125,75 +1246,13 @@ func checkVerdictPresence(rules []*nftables.Rule, name string) bool {
 	return false
 }
 
-var informerFactory informers.SharedInformerFactory
-
-// NewFakeServer creates fake server object for unit-test
-func NewFakeServer(hostname string) *Server {
-	fakeClient := k8sfake.NewClientset()
-	netClient := netfake.NewSimpleClientset()
-	policyClient := multifake.NewSimpleClientset()
-
-	policyChanges := controllers.NewPolicyChangeTracker()
-	if policyChanges == nil {
-		return nil
+func newTestPolicyDeps() *testPolicyDeps {
+	return &testPolicyDeps{
+		podMap:       make(map[types.NamespacedName]controllers.PodInfo),
+		namespaceMap: make(map[string]controllers.NamespaceInfo),
+		netdefMap:    make(map[types.NamespacedName]string),
+		pods:         make(map[types.NamespacedName]*corev1.Pod),
 	}
-	netdefChanges := controllers.NewNetDefChangeTracker()
-	if netdefChanges == nil {
-		return nil
-	}
-	nsChanges := controllers.NewNamespaceChangeTracker()
-	if nsChanges == nil {
-		return nil
-	}
-	// expects that /var/run/containerd/containerd.sock, for docker/containerd
-	hostPrefix := "/"
-	networkPlugins := []string{"multi"}
-	containerRuntime := controllers.RuntimeKind(controllers.Cri)
-	podChanges := controllers.NewPodChangeTracker(containerRuntime, "/var/run/containerd/containerd.sock", hostname, hostPrefix, networkPlugins, netdefChanges)
-	if podChanges == nil {
-		return nil
-	}
-	informerFactory = informers.NewSharedInformerFactoryWithOptions(fakeClient, 15*time.Minute)
-	podConfig := controllers.NewPodConfig(informerFactory.Core().V1().Pods(), 15*time.Minute)
-
-	nodeRef := &corev1.ObjectReference{
-		Kind:      "Node",
-		Name:      hostname,
-		UID:       types.UID(hostname),
-		Namespace: "",
-	}
-
-	server := &Server{
-		Client:              fakeClient,
-		Hostname:            hostname,
-		NetworkPolicyClient: policyClient,
-		NetDefClient:        netClient,
-		ConfigSyncPeriod:    15 * time.Minute,
-		NodeRef:             nodeRef,
-		Options:             &Options{},
-
-		hostPrefix:    hostPrefix,
-		policyChanges: policyChanges,
-		podChanges:    podChanges,
-		netdefChanges: netdefChanges,
-		nsChanges:     nsChanges,
-		podMap:        make(controllers.PodMap),
-		policyMap:     make(controllers.PolicyMap),
-		namespaceMap:  make(controllers.NamespaceMap),
-		podLister:     informerFactory.Core().V1().Pods().Lister(),
-	}
-	podConfig.RegisterEventHandler(server)
-	informerFactory.Start(wait.NeverStop)
-
-	syncTimeout := make(chan struct{})
-	go func() {
-		time.Sleep(30 * time.Second)
-		close(syncTimeout)
-	}()
-	informerFactory.WaitForCacheSync(syncTimeout)
-
-	go podConfig.Run(wait.NeverStop)
-	return server
 }
 
 func NewFakePodWithNetAnnotation(namespace, name, annot, status string, labels map[string]string) *corev1.Pod {
@@ -1219,32 +1278,23 @@ func NewFakePodWithNetAnnotation(namespace, name, annot, status string, labels m
 	}
 }
 
-func AddNamespace(s *Server, name string) error {
-	namespace := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-			Labels: map[string]string{
-				"nsname": name,
-			},
+func addNamespace(s *testPolicyDeps, name string) {
+	s.namespaceMap[name] = controllers.NamespaceInfo{
+		Name: name,
+		Labels: map[string]string{
+			"nsname": name,
 		},
 	}
-	if updated := s.nsChanges.Update(nil, namespace); !updated {
-		return fmt.Errorf("failed to update nasespace %q", namespace)
-	}
-	s.namespaceMap.Update(s.nsChanges)
-	return nil
 }
 
-func AddPod(s *Server, pod *corev1.Pod) error {
-	if added := s.podChanges.Update(nil, pod); !added {
-		return fmt.Errorf("failed to add pod '%s/%s'", pod.Namespace, pod.Name)
+func addPod(s *testPolicyDeps, pod *corev1.Pod) {
+	namespacedName := types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}
+	podInfo, err := controllers.NewPodInfoFromPod(context.Background(), pod, nil, "test-host", []string{"multi"}, s)
+	if err != nil {
+		panic(err)
 	}
-	s.podMap.Update(s.podChanges)
-	if err := informerFactory.Core().V1().Pods().Informer().GetIndexer().Add(pod); err != nil {
-		return fmt.Errorf("failed to update indexer: %w", err)
-	}
-
-	return nil
+	s.podMap[namespacedName] = *podInfo
+	s.pods[namespacedName] = pod.DeepCopy()
 }
 
 func NewFakeNetworkStatus(netns, netname, eth0, net1 string) string {
@@ -1280,28 +1330,7 @@ func NewFakeNetworkStatus(netns, netname, eth0, net1 string) string {
 	return fmt.Sprintf(baseStr, eth0, netns, netname, net1)
 }
 
-func NewNetDef(namespace, name, cniConfig string) *netdefv1.NetworkAttachmentDefinition {
-	return &netdefv1.NetworkAttachmentDefinition{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: namespace,
-			Name:      name,
-		},
-		Spec: netdefv1.NetworkAttachmentDefinitionSpec{
-			Config: cniConfig,
-		},
-	}
-}
-
-func NewCNIConfig(cniName, cniType string) string {
-	cniConfigTemp := `
-	{
-		"name": "%s",
-		"type": "%s"
-	}`
-	return fmt.Sprintf(cniConfigTemp, cniName, cniType)
-}
-
-func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *Server, *controllers.PodInfo, error) {
+func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *testPolicyDeps, *controllers.PodInfo, error) {
 	podMockInfo := &controllers.PodInfo{
 		Name:      "mock-pod",
 		Namespace: "default",
@@ -1318,16 +1347,14 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *Server
 	if nftState == nil {
 		return nil, "", nil, podMockInfo, fmt.Errorf("bootstrapNetfilterRules() returned nil state")
 	}
-	var mockServer *Server
+	var deps *testPolicyDeps
 	testNs := "testns1"
 	if createServer {
-		mockServer = NewFakeServer("server")
-		if err := AddNamespace(mockServer, testNs); err != nil {
-			return nftState, testNs, mockServer, podMockInfo, fmt.Errorf("failed to add namespace %q: %w", testNs, err)
-		}
+		deps = newTestPolicyDeps()
+		addNamespace(deps, testNs)
 
-		mockServer.netdefChanges.Update(nil, NewNetDef(testNs, "policy-net-1", NewCNIConfig("testCNI", "multi")))
-		mockServer.netdefChanges.Update(nil, NewNetDef(testNs, "policy-net-2", NewCNIConfig("testCNI", "multi")))
+		deps.netdefMap[types.NamespacedName{Namespace: testNs, Name: "policy-net-1"}] = "multi"
+		deps.netdefMap[types.NamespacedName{Namespace: testNs, Name: "policy-net-2"}] = "multi"
 
 		pod1 := NewFakePodWithNetAnnotation(
 			testNs,
@@ -1335,9 +1362,7 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *Server
 			"policy-net-1",
 			NewFakeNetworkStatus(testNs, "policy-net-1", "192.168.1.1", "10.1.1.1"),
 			map[string]string{"app": "test"})
-		if err := AddPod(mockServer, pod1); err != nil {
-			return nftState, testNs, mockServer, podMockInfo, fmt.Errorf("failed to add pod: %w", err)
-		}
+		addPod(deps, pod1)
 
 		pod2 := NewFakePodWithNetAnnotation(
 			testNs,
@@ -1345,26 +1370,303 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *Server
 			"policy-net-1",
 			NewFakeNetworkStatus(testNs, "policy-net-1", "192.168.1.2", "10.1.1.2"),
 			map[string]string{"app": "test2"})
-		if err := AddPod(mockServer, pod2); err != nil {
-			return nftState, testNs, mockServer, podMockInfo, fmt.Errorf("failed to add pod: %w", err)
-		}
+		addPod(deps, pod2)
 	} else {
-		mockServer = &Server{
-			Options: &Options{
-				acceptICMPv6:   true,
-				acceptICMP:     true,
-				allowSrcPrefix: []string{"fc00::/8", "fd00::/8", "10.0.0.1/32", "10.0.1.0/24"},
-				allowDstPrefix: []string{"fe00::/8", "ff00::/8", "10.0.0.2/32", "10.0.2.0/24"},
+		deps = &testPolicyDeps{
+			cfg: controllers.CommonRuleConfig{
+				AcceptICMPv6:   true,
+				AcceptICMP:     true,
+				AllowSrcPrefix: []string{"fc00::/8", "fd00::/8", "10.0.0.1/32", "10.0.1.0/24"},
+				AllowDstPrefix: []string{"fe00::/8", "ff00::/8", "10.0.0.2/32", "10.0.2.0/24"},
 			},
 		}
 	}
-	err = nftState.applyCommonChainRules(mockServer)
+	err = nftState.applyCommonChainRules(deps.cfg)
 	if err != nil {
-		return nftState, testNs, mockServer, podMockInfo, fmt.Errorf("applyCommonChainRules() failed: %w", err)
+		return nftState, testNs, deps, podMockInfo, fmt.Errorf("applyCommonChainRules() failed: %w", err)
 	}
 	err = nftState.nft.Flush()
 	if err != nil {
-		return nftState, testNs, mockServer, podMockInfo, fmt.Errorf("nftState.nft.Flush() failed: %w", err)
+		return nftState, testNs, deps, podMockInfo, fmt.Errorf("nftState.nft.Flush() failed: %w", err)
 	}
-	return nftState, testNs, mockServer, podMockInfo, nil
+	return nftState, testNs, deps, podMockInfo, nil
+}
+
+func TestCleanupLegacyTables(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.FlushRuleset()
+	defer c.CloseLasting()
+	c.FlushRuleset()
+
+	inetFamily := nftables.TableFamilyINet
+	legacyFilter := &nftables.Table{Family: inetFamily, Name: legacyFilterTableName}
+	c.AddTable(legacyFilter)
+	legacyNat := &nftables.Table{Family: inetFamily, Name: legacyNatTableName}
+	c.AddTable(legacyNat)
+
+	c.AddChain(&nftables.Chain{
+		Name:  ingressChain,
+		Table: legacyFilter,
+	})
+
+	unreferencedDaemonChain := c.AddChain(&nftables.Chain{
+		Name:  egressChain,
+		Table: legacyFilter,
+	})
+	c.AddRule(&nftables.Rule{
+		Table:    legacyFilter,
+		Chain:    unreferencedDaemonChain,
+		UserData: userDataComment("drop-remaining"),
+		Exprs: []expr.Any{
+			&expr.Counter{},
+			&expr.Verdict{Kind: expr.VerdictDrop},
+		},
+	})
+
+	baseChain := c.AddChain(&nftables.Chain{
+		Name:  "input",
+		Table: legacyFilter,
+	})
+
+	c.AddChain(&nftables.Chain{
+		Name:  "foreign-chain",
+		Table: legacyFilter,
+	})
+
+	c.AddRule(&nftables.Rule{
+		Table:    legacyFilter,
+		Chain:    baseChain,
+		UserData: userDataComment(inputInterfaceFilterComment),
+		Exprs: []expr.Any{
+			&expr.Counter{},
+			&expr.Verdict{
+				Kind:  expr.VerdictJump,
+				Chain: ingressChain,
+			},
+		},
+	})
+	c.AddRule(&nftables.Rule{
+		Table:    legacyFilter,
+		Chain:    baseChain,
+		UserData: userDataComment("foreign-rule"),
+		Exprs: []expr.Any{
+			&expr.Counter{},
+		},
+	})
+	c.AddRule(&nftables.Rule{
+		Table:    legacyFilter,
+		Chain:    baseChain,
+		UserData: userDataComment("foreign-jump"),
+		Exprs: []expr.Any{
+			&expr.Counter{},
+			&expr.Verdict{
+				Kind:  expr.VerdictJump,
+				Chain: ingressChain,
+			},
+		},
+	})
+	if err := c.AddSet(&nftables.Set{
+		Table:        legacyFilter,
+		Name:         podInterfacesName,
+		KeyType:      nftables.TypeIFName,
+		KeyByteOrder: binaryutil.NativeEndian,
+		Comment:      "foreign set",
+	}, nil); err != nil {
+		t.Fatalf("failed to add foreign pod_interfaces set: %v", err)
+	}
+	if err := c.AddSet(&nftables.Set{
+		Table:        legacyNat,
+		Name:         podInterfacesName,
+		KeyType:      nftables.TypeIFName,
+		KeyByteOrder: binaryutil.NativeEndian,
+		Comment:      "Pod interfaces NAT",
+	}, nil); err != nil {
+		t.Fatalf("failed to add daemon pod_interfaces set: %v", err)
+	}
+
+	if err := c.Flush(); err != nil {
+		t.Fatalf("setup flush failed: %v", err)
+	}
+
+	if err := CleanupLegacyTables(c); err != nil {
+		t.Fatalf("CleanupLegacyTables() returned error: %v", err)
+	}
+
+	chains, err := c.ListChainsOfTableFamily(inetFamily)
+	if err != nil {
+		t.Fatalf("ListChainsOfTableFamily failed: %v", err)
+	}
+
+	foundIngressChain := false
+	foundEgressChain := false
+	for _, ch := range chains {
+		if ch.Table.Name == legacyFilterTableName && ch.Name == ingressChain {
+			foundIngressChain = true
+		}
+		if ch.Table.Name == legacyFilterTableName && ch.Name == egressChain {
+			foundEgressChain = true
+		}
+	}
+	if !foundIngressChain {
+		t.Errorf("referenced daemon chain %q was incorrectly removed from legacy table", ingressChain)
+	}
+	if foundEgressChain {
+		t.Errorf("unreferenced daemon chain %q was not removed from legacy table", egressChain)
+	}
+
+	foundForeignChain := false
+	for _, ch := range chains {
+		if ch.Table.Name == legacyFilterTableName && ch.Name == "foreign-chain" {
+			foundForeignChain = true
+		}
+	}
+	if !foundForeignChain {
+		t.Errorf("foreign chain %q was incorrectly removed from legacy table", "foreign-chain")
+	}
+
+	rules, err := c.GetRules(legacyFilter, &nftables.Chain{Name: "input"})
+	if err != nil {
+		t.Fatalf("GetRules(%q, %q) failed: %v", legacyFilter.Name, "input", err)
+	}
+	foundForeignRule := false
+	foundForeignJump := false
+	for _, rule := range rules {
+		comment, _ := userdata.GetString(rule.UserData, userdata.TypeComment)
+		if comment == inputInterfaceFilterComment {
+			t.Errorf("daemon rule %q was not removed from legacy base chain", inputInterfaceFilterComment)
+		}
+		if comment == "foreign-rule" {
+			foundForeignRule = true
+		}
+		if comment == "foreign-jump" {
+			foundForeignJump = true
+		}
+	}
+	if !foundForeignRule {
+		t.Errorf("foreign rule in legacy base chain was incorrectly removed")
+	}
+	if !foundForeignJump {
+		t.Errorf("foreign jump rule in legacy base chain was incorrectly removed")
+	}
+
+	sets, err := c.GetSets(legacyFilter)
+	if err != nil {
+		t.Fatalf("GetSets(%q) failed: %v", legacyFilter.Name, err)
+	}
+	foundForeignSet := false
+	for _, set := range sets {
+		if set.Name == podInterfacesName && set.Comment == "foreign set" {
+			foundForeignSet = true
+		}
+	}
+	if !foundForeignSet {
+		t.Errorf("foreign pod_interfaces set was incorrectly removed from legacy table")
+	}
+
+	sets, err = c.GetSets(legacyNat)
+	if err != nil {
+		t.Fatalf("GetSets(%q) failed: %v", legacyNat.Name, err)
+	}
+	for _, set := range sets {
+		if set.Name == podInterfacesName {
+			t.Errorf("daemon pod_interfaces set was not removed from legacy table")
+		}
+	}
+}
+
+func TestRuleEqualHandlesShortAndUnknownRules(t *testing.T) {
+	chain := &nftables.Chain{Name: ingressChain}
+	table := &nftables.Table{Name: FilterTableName}
+	desired := &nftables.Rule{
+		Table:    table,
+		Chain:    chain,
+		UserData: userDataComment("desired"),
+		Exprs: []expr.Any{
+			&expr.Counter{},
+			&expr.Verdict{Kind: expr.VerdictAccept},
+		},
+	}
+	shortExisting := &nftables.Rule{
+		Table:    table,
+		Chain:    chain,
+		UserData: userDataComment("desired"),
+		Exprs:    []expr.Any{&expr.Counter{}},
+	}
+	if ruleEqual(desired, shortExisting) {
+		t.Fatal("ruleEqual returned true for an existing rule with fewer expressions")
+	}
+
+	unknownDesired := &nftables.Rule{
+		Table:    table,
+		Chain:    chain,
+		UserData: userDataComment("desired"),
+		Exprs:    []expr.Any{&expr.Immediate{}},
+	}
+	unknownExisting := &nftables.Rule{
+		Table:    table,
+		Chain:    chain,
+		UserData: userDataComment("desired"),
+		Exprs:    []expr.Any{&expr.Immediate{}},
+	}
+	if ruleEqual(unknownDesired, unknownExisting) {
+		t.Fatal("ruleEqual returned true for an unhandled expression type")
+	}
+}
+
+func TestCleanupChainsKeepsForeignTableChains(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.FlushRuleset()
+	defer c.CloseLasting()
+	c.FlushRuleset()
+
+	inetFamily := nftables.TableFamilyINet
+	ownedTable := c.AddTable(&nftables.Table{Family: inetFamily, Name: FilterTableName})
+	foreignTable := c.AddTable(&nftables.Table{Family: inetFamily, Name: "foreign-filter"})
+
+	c.AddChain(&nftables.Chain{
+		Name:  "stale-owned-chain",
+		Table: ownedTable,
+	})
+	c.AddChain(&nftables.Chain{
+		Name:  "foreign-empty-chain",
+		Table: foreignTable,
+	})
+
+	if err := c.Flush(); err != nil {
+		t.Fatalf("setup flush failed: %v", err)
+	}
+
+	nftState := &nftState{
+		nft:    c,
+		filter: ownedTable,
+		nat:    &nftables.Table{Family: inetFamily, Name: NatTableName},
+		chains: make(map[string]*nftables.Chain),
+	}
+	if err := nftState.cleanupChains(); err != nil {
+		t.Fatalf("cleanupChains() returned error: %v", err)
+	}
+
+	chains, err := c.ListChainsOfTableFamily(inetFamily)
+	if err != nil {
+		t.Fatalf("ListChainsOfTableFamily failed: %v", err)
+	}
+
+	foundOwnedChain := false
+	foundForeignChain := false
+	for _, chain := range chains {
+		switch {
+		case chain.Table.Name == FilterTableName && chain.Name == "stale-owned-chain":
+			foundOwnedChain = true
+		case chain.Table.Name == foreignTable.Name && chain.Name == "foreign-empty-chain":
+			foundForeignChain = true
+		}
+	}
+	if foundOwnedChain {
+		t.Errorf("unused chain in daemon-owned table was not removed")
+	}
+	if !foundForeignChain {
+		t.Errorf("foreign empty chain was incorrectly removed")
+	}
 }

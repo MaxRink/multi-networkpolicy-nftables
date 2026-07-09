@@ -22,3 +22,7 @@ policies.yaml
 *.nft
 *.iptables
 *.ip6tables
+testbin/
+
+# Agent artifacts
+.sisyphus/

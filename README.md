@@ -55,9 +55,9 @@ Deploy multi-networkpolicy-nftables into Kubernetes.
 $ git clone https://github.com/telekom/multi-networkpolicy-nftables
 $ cd multi-networkpolicy-nftables
 $ kubectl create -f deploy.yml
+serviceaccount/multi-networkpolicy created
 clusterrole.rbac.authorization.k8s.io/multi-networkpolicy created
 clusterrolebinding.rbac.authorization.k8s.io/multi-networkpolicy created
-serviceaccount/multi-networkpolicy created
 daemonset.apps/multi-networkpolicy-ds-amd64 created
 ```
 
@@ -73,6 +73,21 @@ This project leverages `nftables` hence the netfilter module needs to be loaded 
 ## Configurations
 
 See [Configurations](docs/configurations.md).
+
+### Generated Manifests
+
+`deploy.yml` and `e2e/multi-network-policy-nftables-e2e.yml` are generated
+from the shared kustomize base under `config/manager`. Edit the base or e2e
+overlay, then run:
+
+```bash
+make manifests
+make verify-manifests
+```
+
+The e2e overlay only changes test-specific settings such as the local image,
+containerd socket, sync period, network plugin list, verbosity, and privileged
+mode. RBAC and shared mounts stay aligned with the normal deploy manifest.
 
 ## Development
 
@@ -92,11 +107,20 @@ go build ./cmd/multi-networkpolicy-nftables/
 
 ### Test
 
-Unit tests require root privileges for nftables operations:
+Controller tests require envtest assets. CI installs them with
+`setup-envtest`; locally, install the helper and export the asset path before
+running tests:
+
+```bash
+go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.24.1
+export KUBEBUILDER_ASSETS="$(setup-envtest use 1.35.0 --bin-dir testbin/k8s -p path)"
+```
+
+Unit tests also require root privileges for nftables operations:
 
 ```bash
 sudo modprobe nft_ct
-sudo go test -v ./...
+sudo --preserve-env=KUBEBUILDER_ASSETS go test -v ./...
 ```
 
 ### Lint

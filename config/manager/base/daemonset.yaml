@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: multi-networkpolicy-ds-amd64
+  namespace: kube-system
+  labels:
+    tier: node
+    app: multi-networkpolicy
+    name: multi-networkpolicy
+spec:
+  selector:
+    matchLabels:
+      name: multi-networkpolicy
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        tier: node
+        app: multi-networkpolicy
+        name: multi-networkpolicy
+    spec:
+      hostNetwork: true
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      tolerations:
+        - operator: Exists
+          effect: NoSchedule
+      serviceAccountName: multi-networkpolicy
+      containers:
+        - name: multi-networkpolicy
+          image: ghcr.io/telekom/multi-networkpolicy-nftables
+          imagePullPolicy: Always
+          command:
+            - /usr/bin/multi-networkpolicy-nftables
+          args:
+            - --host-prefix=/host
+            - --container-runtime-endpoint=/run/crio/crio.sock
+          resources:
+            requests:
+              cpu: 100m
+              memory: 80Mi
+            limits:
+              cpu: 100m
+              memory: 150Mi
+          securityContext:
+            capabilities:
+              add:
+                - SYS_ADMIN
+                - NET_ADMIN
+          volumeMounts:
+            - name: host
+              mountPath: /host
+              readOnly: true
+      volumes:
+        - name: host
+          hostPath:
+            path: /

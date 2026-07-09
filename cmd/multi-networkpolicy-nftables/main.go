@@ -21,71 +21,147 @@ limitations under the License.
 package main
 
 import (
-	//"flag"
-	"log"
+	"context"
+	"errors"
+	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
+	"github.com/telekom/multi-networkpolicy-nftables/pkg/controller"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/server"
 
-	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/klog"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+	"k8s.io/klog/v2"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
 
-const logFlushFreqFlagName = "log-flush-frequency"
-
-var logFlushFreq = pflag.Duration(logFlushFreqFlagName, 5*time.Second, "Maximum number of seconds between log flushes")
-
-// KlogWriter serves as a bridge between the standard log package and the glog package.
-type KlogWriter struct{}
-
-// Write implements the io.Writer interface.
-func (writer KlogWriter) Write(data []byte) (n int, err error) {
-	klog.InfoDepth(1, string(data))
-	return len(data), nil
+type managerStarter interface {
+	Start(context.Context) error
 }
 
-func initLogs() {
-	log.SetOutput(KlogWriter{})
-	log.SetFlags(0)
-	go wait.Forever(klog.Flush, *logFlushFreq)
+func run(opts *server.Options) error {
+	cfg, err := opts.BuildReconcilerConfig()
+	if err != nil {
+		return fmt.Errorf("build reconciler config: %w", err)
+	}
+
+	klog.Infof("hostname: %v", cfg.NodeName)
+
+	var restCfg *rest.Config
+	if cfg.Kubeconfig == "" {
+		klog.Info("No kubeconfig specified. Falling back to in-cluster config.")
+		restCfg, err = rest.InClusterConfig()
+	} else {
+		restCfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+			&clientcmd.ClientConfigLoadingRules{ExplicitPath: cfg.Kubeconfig},
+			&clientcmd.ConfigOverrides{ClusterInfo: clientcmdapi.Cluster{Server: cfg.Master}},
+		).ClientConfig()
+	}
+	if err != nil {
+		return fmt.Errorf("build kubeconfig: %w", err)
+	}
+
+	scheme := runtime.NewScheme()
+	if err := controller.SetupScheme(scheme); err != nil {
+		return fmt.Errorf("setup scheme: %w", err)
+	}
+
+	ctrl.SetLogger(klog.NewKlogr())
+
+	syncPeriod := time.Duration(cfg.SyncPeriodSeconds) * time.Second
+	gracefulTimeout := 10 * time.Second
+	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
+		Scheme:                  scheme,
+		LeaderElection:          false,
+		Metrics:                 metricsserver.Options{BindAddress: "0"},
+		Cache:                   cache.Options{SyncPeriod: &syncPeriod},
+		GracefulShutdownTimeout: &gracefulTimeout,
+	})
+	if err != nil {
+		return fmt.Errorf("create manager: %w", err)
+	}
+
+	ctx := ctrl.SetupSignalHandler()
+	if err := controller.SetupIndexes(ctx, mgr); err != nil {
+		return fmt.Errorf("setup indexes: %w", err)
+	}
+
+	reconciler := &controller.NodeReconciler{
+		NodeName:                 cfg.NodeName,
+		Client:                   mgr.GetClient(),
+		HostPrefix:               cfg.HostPrefix,
+		NetworkPlugins:           cfg.NetworkPlugins,
+		CommonCfg:                cfg.CommonRuleConfig,
+		ContainerRuntimeEndpoint: cfg.ContainerRuntimeEndpoint,
+	}
+	defer func() {
+		if cerr := reconciler.CloseCRI(); cerr != nil {
+			klog.Errorf("failed to close CRI connection: %v", cerr)
+		}
+	}()
+	if err := reconciler.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("setup reconciler: %w", err)
+	}
+
+	directClient, err := client.New(restCfg, client.Options{Scheme: scheme})
+	if err != nil {
+		return fmt.Errorf("create direct client for cleanup: %w", err)
+	}
+
+	klog.Infof("Starting manager for node %s", cfg.NodeName)
+	return startManagerAndCleanup(ctx, mgr, 45*time.Second, func(cleanupCtx context.Context) error {
+		return controller.CleanupOnShutdown(cleanupCtx, reconciler, directClient)
+	})
+}
+
+func startManagerAndCleanup(
+	ctx context.Context,
+	mgr managerStarter,
+	cleanupTimeout time.Duration,
+	cleanup func(context.Context) error,
+) error {
+	startErr := mgr.Start(ctx)
+	if startErr != nil && ctx.Err() == nil {
+		klog.Errorf("manager stopped with error, skipping post-shutdown cleanup: %v", startErr)
+		return startErr
+	}
+	if startErr != nil {
+		klog.Errorf("manager stopped during shutdown with error, running post-shutdown cleanup: %v", startErr)
+	} else {
+		klog.Info("Manager stopped, running post-shutdown cleanup")
+	}
+
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+	cleanupErr := cleanup(cleanupCtx)
+	if startErr != nil || cleanupErr != nil {
+		return errors.Join(startErr, cleanupErr)
+	}
+	return nil
 }
 
 func main() {
-	initLogs()
 	defer klog.Flush()
 	opts := server.NewOptions()
 
 	cmd := &cobra.Command{
 		Use:  "multi-networkpolicy-node",
-		Long: `TBD`,
-		Run: func(cmd *cobra.Command, args []string) {
-			if err := opts.Run(); err != nil {
-				klog.Exit(err)
-			}
+		Long: `Run the multi-networkpolicy nftables controller on a node.`,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return run(opts)
 		},
 	}
 	opts.AddFlags(cmd.Flags())
-
-	signalCh := make(chan os.Signal, 16)
-	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		for sig := range signalCh {
-			klog.V(1).Infof("Caught %v, stopping...", sig)
-			opts.Stop()
-		}
-	}()
-
-	klog.Infof("Executing ...")
 
 	if err := cmd.Execute(); err != nil {
 		klog.Infof("Execute failed: %v", err)
 		os.Exit(1)
 	}
-
-	klog.Infof("Exiting")
 }

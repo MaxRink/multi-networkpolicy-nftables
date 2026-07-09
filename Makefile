@@ -3,11 +3,12 @@ BINARY_NAME ?= multi-networkpolicy-nftables
 CMD_DIR ?= ./cmd/multi-networkpolicy-nftables/
 GOARCH ?= $(shell go env GOARCH)
 GOOS ?= $(shell go env GOOS)
+HOST_OS ?= $(shell uname -s | tr '[:upper:]' '[:lower:]')
 GO_LDFLAGS ?= -s -w
 IMAGE_REPO ?= ghcr.io/telekom/multi-networkpolicy-nftables
 IMAGE_TAG ?= dev
 
-.PHONY: all build test lint vet fmt fmt-fix clean e2e image help
+.PHONY: all build test lint vet fmt fmt-fix clean e2e image manifests verify-manifests help
 
 all: build
 
@@ -17,7 +18,7 @@ build:
 
 ## test: Run unit tests (requires root for nftables tests)
 test:
-	@if [ "$(GOOS)" != "linux" ]; then \
+	@if [ "$(HOST_OS)" != "linux" ]; then \
 		echo "make test requires Linux for nftables tests"; \
 		exit 1; \
 	elif [ "$$(id -u)" -eq 0 ]; then \
@@ -27,8 +28,15 @@ test:
 	elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then \
 		sudo -n modprobe nft_ct 2>/dev/null || true; \
 		uid=$$(id -u); gid=$$(id -g); \
-		sudo go test -v -coverprofile=profile.cov ./...; \
+		status=0; \
+		if [ -n "$${KUBEBUILDER_ASSETS:-}" ]; then \
+			KUBEBUILDER_ASSETS=$$(cd "$$KUBEBUILDER_ASSETS" && pwd); \
+			sudo env "KUBEBUILDER_ASSETS=$$KUBEBUILDER_ASSETS" go test -v -coverprofile=profile.cov ./... || status=$$?; \
+		else \
+			sudo go test -v -coverprofile=profile.cov ./... || status=$$?; \
+		fi; \
 		if [ -f profile.cov ]; then sudo chown "$$uid:$$gid" profile.cov; fi; \
+		exit $$status; \
 	else \
 		echo "make test requires root or passwordless sudo; refusing to prompt interactively"; \
 		exit 1; \
@@ -65,6 +73,14 @@ image:
 ## e2e: Run e2e tests (requires kind cluster)
 e2e:
 	cd e2e && ./run_all_tests.sh
+
+## manifests: Regenerate deploy.yml and e2e install manifests
+manifests:
+	./hack/update-deploy-manifests.sh
+
+## verify-manifests: Verify generated manifests are up to date
+verify-manifests:
+	./hack/verify-deploy-manifests.sh
 
 ## help: Show this help
 help:

@@ -18,15 +18,19 @@ package server
 
 import (
 	"flag"
+	"fmt"
 	"net"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/pflag"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
 
 	nodeutil "k8s.io/component-helpers/node/util"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
+
+const defaultSyncPeriod = 30
 
 // Options stores option for the command
 type Options struct {
@@ -39,7 +43,6 @@ type Options struct {
 	containerRuntime         controllers.RuntimeKind
 	containerRuntimeEndpoint string
 	networkPlugins           []string
-	podIptables              string
 	syncPeriod               int
 	acceptICMPv6             bool
 	acceptICMP               bool
@@ -49,8 +52,18 @@ type Options struct {
 	// updated by command line parsing
 	allowSrcPrefix []string
 	allowDstPrefix []string
-	// stopCh is used to stop the command
-	stopCh chan struct{}
+}
+
+// ReconcilerConfig holds all configuration values needed to construct a NodeReconciler.
+type ReconcilerConfig struct {
+	Kubeconfig               string
+	Master                   string
+	NodeName                 string
+	HostPrefix               string
+	ContainerRuntimeEndpoint string
+	NetworkPlugins           []string
+	SyncPeriodSeconds        int
+	CommonRuleConfig         controllers.CommonRuleConfig
 }
 
 // AddFlags adds command line flags into command
@@ -64,8 +77,11 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.hostnameOverride, "hostname-override", o.hostnameOverride, "If non-empty, will use this string as identification instead of the actual hostname.")
 	fs.StringVar(&o.hostPrefix, "host-prefix", o.hostPrefix, "If non-empty, will use this string as prefix for host filesystem.")
 	fs.StringSliceVar(&o.networkPlugins, "network-plugins", []string{"macvlan"}, "List of network plugins to be be considered for network policies.")
-	fs.StringVar(&o.podIptables, "pod-iptables", o.podIptables, "If non-empty, will use this path to store pod's iptables for troubleshooting helper.")
-	fs.IntVar(&o.syncPeriod, "sync-period", defaultSyncPeriod, "sync period for multi-networkpolicy syncRunner")
+	deprecatedIptablesStatePath := ""
+	fs.StringVar(&deprecatedIptablesStatePath, "pod-iptables", "", "Deprecated: pod iptables state is no longer persisted.")
+	_ = fs.MarkDeprecated("pod-iptables", "no longer used; pod iptables state is no longer persisted")
+	_ = fs.MarkHidden("pod-iptables")
+	fs.IntVar(&o.syncPeriod, "sync-period", defaultSyncPeriod, "sync period in seconds for reconciliation")
 	fs.BoolVar(&o.acceptICMP, "accept-icmp", false, "accept all ICMP traffic")
 	fs.BoolVar(&o.acceptICMPv6, "accept-icmpv6", false, "accept all ICMPv6 traffic")
 	fs.StringVar(&o.allowSrcPrefixText, "allow-src-prefix", "", "Accept source IP prefix list, comma separated CIDRs (e.g. \"fe80::/10\")")
@@ -98,42 +114,51 @@ func (o *Options) Validate() error {
 	if err := parseIPPrefixText(o.allowDstPrefixText, &o.allowDstPrefix); err != nil {
 		return err
 	}
+	o.containerRuntimeEndpoint = strings.TrimSpace(o.containerRuntimeEndpoint)
+	if o.containerRuntimeEndpoint == "" {
+		return fmt.Errorf("container-runtime-endpoint must not be empty")
+	}
+	if strings.Contains(o.containerRuntimeEndpoint, "://") {
+		return fmt.Errorf("container-runtime-endpoint must be an absolute filesystem path, not a URL")
+	}
+	if !filepath.IsAbs(o.containerRuntimeEndpoint) {
+		return fmt.Errorf("container-runtime-endpoint must be an absolute filesystem path")
+	}
 	return nil
 }
 
-// Run invokes server
-func (o *Options) Run() error {
-	server, err := NewServer(o)
-	if err != nil {
-		return err
+// BuildReconcilerConfig resolves all configuration needed to build a NodeReconciler.
+// It resolves hostname, parses prefix lists, and packages everything into a ReconcilerConfig.
+func (o *Options) BuildReconcilerConfig() (*ReconcilerConfig, error) {
+	if err := o.Validate(); err != nil {
+		return nil, fmt.Errorf("options validation: %w", err)
 	}
 
 	hostname, err := nodeutil.GetHostname(o.hostnameOverride)
 	if err != nil {
-		return err
-	}
-	klog.Infof("hostname: %v", hostname)
-	klog.Infof("container-runtime: %v", o.containerRuntime)
-
-	err = o.Validate()
-	if err != nil {
-		return err
+		return nil, fmt.Errorf("get hostname: %w", err)
 	}
 
-	server.Run(hostname, o.stopCh)
-
-	return nil
-}
-
-// Stop halts the command
-func (o *Options) Stop() {
-	o.stopCh <- struct{}{}
+	return &ReconcilerConfig{
+		Kubeconfig:               o.Kubeconfig,
+		Master:                   o.master,
+		NodeName:                 hostname,
+		HostPrefix:               o.hostPrefix,
+		ContainerRuntimeEndpoint: o.containerRuntimeEndpoint,
+		NetworkPlugins:           o.networkPlugins,
+		SyncPeriodSeconds:        o.syncPeriod,
+		CommonRuleConfig: controllers.CommonRuleConfig{
+			AcceptICMP:     o.acceptICMP,
+			AcceptICMPv6:   o.acceptICMPv6,
+			AllowSrcPrefix: o.allowSrcPrefix,
+			AllowDstPrefix: o.allowDstPrefix,
+		},
+	}, nil
 }
 
 // NewOptions initializes Options
 func NewOptions() *Options {
 	return &Options{
 		containerRuntime: controllers.Cri,
-		stopCh:           make(chan struct{}),
 	}
 }

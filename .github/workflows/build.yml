@@ -29,3 +29,25 @@ jobs:
 
     - name: Build
       run: make build GOARCH=${{ matrix.goarch }}
+
+  build-non-linux-controller:
+    name: build non-linux controller shims
+    strategy:
+      matrix:
+        go-version: ["1.25.5"]
+        goos: [darwin]
+    runs-on: ubuntu-latest
+    env:
+      GO111MODULE: on
+    steps:
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v4
+
+    - name: Install Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '${{ matrix.go-version }}'
+        cache: true
+
+    - name: Build non-Linux controller package
+      run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=amd64 go test -run '^$' -c -o /tmp/multi-networkpolicy-controller-${{ matrix.goos }}.test ./pkg/controller
