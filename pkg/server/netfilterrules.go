@@ -1839,18 +1839,19 @@ func validatePortSpec(port multiv1beta1.MultiNetworkPolicyPort) ([]nftables.SetE
 		}
 		port.Port = &intstr.IntOrString{Type: intstr.Int, IntVal: int32(portNum)} //nolint:gosec // G109: portNum validated in range [1, 65535] above
 	}
-	if port.Port.IntValue() < 1 || port.Port.IntValue() > math.MaxUint16 {
-		return nil, fmt.Errorf("port %d out of range, must be between 1 and %d", port.Port.IntValue(), math.MaxUint16)
+	portNum := port.Port.IntValue()
+	if portNum < 1 || portNum > math.MaxUint16 {
+		return nil, fmt.Errorf("port %d out of range, must be between 1 and %d", portNum, math.MaxUint16)
 	}
 
-	portVal := uint16(port.Port.IntValue()) //nolint:gosec // G115: value validated in range [1, 65535] above
+	portVal := uint16(portNum) //nolint:gosec // G115: value validated in range [1, 65535] above
 	elements := []nftables.SetElement{
 		{Key: binaryutil.BigEndian.PutUint16(portVal)},
 	}
 
-	if port.EndPort != nil && *port.EndPort > int32(port.Port.IntValue()) { //nolint:gosec // G115: value validated in range [1, 65535] above
+	if port.EndPort != nil && *port.EndPort > int32(portNum) { //nolint:gosec // G115: value validated in range [1, 65535] above
 		if *port.EndPort < 1 || *port.EndPort > math.MaxUint16 {
-			return nil, fmt.Errorf("port %d out of range, must be between 1 and %d", port.Port.IntValue(), math.MaxUint16)
+			return nil, fmt.Errorf("port %d out of range, must be between 1 and %d", portNum, math.MaxUint16)
 		}
 		// keep the half open interval semantics of nftables
 		// e.g. 1000-2000 becomes [1000, 2001)
