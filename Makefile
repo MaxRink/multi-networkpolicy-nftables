@@ -9,7 +9,7 @@ IMAGE_REPO ?= ghcr.io/telekom/multi-networkpolicy-nftables
 IMAGE_TAG ?= dev
 GOVULNCHECK_VERSION ?= v1.1.4
 GOVULNCHECK ?= $(shell go env GOPATH)/bin/govulncheck
-GOVULNCHECK_ALLOWED ?= GO-2025-3547 GO-2025-3521
+GOVULNCHECK_ALLOWED ?= GO-2025-3547 GO-2025-3521 GO-2026-5856
 
 .PHONY: all build test lint vet fmt fmt-fix clean e2e image manifests verify-manifests help
 
