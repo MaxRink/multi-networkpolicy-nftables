@@ -28,6 +28,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 
 	nftables "github.com/google/nftables"
@@ -1824,6 +1825,53 @@ func (n *nftState) applyProtoPortsRules(chainName string, chain *nftables.Chain,
 	return err
 }
 
+// validatePortSpec validates a single port specification and returns the nftables set elements
+// representing the port range. Named ports are rejected since nftables operates on numeric ports only.
+func validatePortSpec(port multiv1beta1.MultiNetworkPolicyPort) ([]nftables.SetElement, error) {
+	if port.Port == nil {
+		return nil, nil
+	}
+
+	if port.Port.Type == intstr.String {
+		portNum, err := strconv.Atoi(port.Port.StrVal)
+		if err != nil || portNum < 1 || portNum > math.MaxUint16 {
+			return nil, fmt.Errorf("named port %q is not supported; numeric ports are required", port.Port.StrVal)
+		}
+		port.Port = &intstr.IntOrString{Type: intstr.Int, IntVal: int32(portNum)} //nolint:gosec // G109: portNum validated in range [1, 65535] above
+	}
+	portNum := port.Port.IntValue()
+	if portNum < 1 || portNum > math.MaxUint16 {
+		return nil, fmt.Errorf("port %d out of range, must be between 1 and %d", portNum, math.MaxUint16)
+	}
+
+	portVal := uint16(portNum) //nolint:gosec // G115: value validated in range [1, 65535] above
+	elements := []nftables.SetElement{
+		{Key: binaryutil.BigEndian.PutUint16(portVal)},
+	}
+
+	if port.EndPort != nil && *port.EndPort > int32(portNum) { //nolint:gosec // G115: value validated in range [1, 65535] above
+		if *port.EndPort < 1 || *port.EndPort > math.MaxUint16 {
+			return nil, fmt.Errorf("port %d out of range, must be between 1 and %d", portNum, math.MaxUint16)
+		}
+		// keep the half open interval semantics of nftables
+		// e.g. 1000-2000 becomes [1000, 2001)
+		// so we need to add 1 to the end port
+		elements = append(elements, nftables.SetElement{
+			Key:         binaryutil.BigEndian.PutUint16(uint16(*port.EndPort) + 1), //nolint:gosec // G115: wrapping to 0 when EndPort==65535 is the correct nftables past-max sentinel for inet_service interval sets
+			IntervalEnd: true,
+		})
+	} else {
+		// keep the half open interval semantics of nftables
+		// e.g. 1000 becomes [1000, 1001)
+		// so we need to add 1 to the port
+		elements = append(elements, nftables.SetElement{
+			Key:         binaryutil.BigEndian.PutUint16(portVal + 1), //nolint:gosec // G115: portVal is validated in [1,65535] but +1 wrap at 65535 is the correct nftables past-max sentinel
+			IntervalEnd: true,
+		})
+	}
+	return elements, nil
+}
+
 func (n *nftState) applyPolicyPortsRules(chainName string, chain *nftables.Chain, policyName string, ports []multiv1beta1.MultiNetworkPolicyPort, portIndex int) error {
 	portsName := nftNameWithSuffix(chainName, "-", fmt.Sprintf("%s-%d", portsChainSuffix, portIndex))
 	// create ports chain
@@ -1853,45 +1901,16 @@ func (n *nftState) applyPolicyPortsRules(chainName string, chain *nftables.Chain
 	portsTCP := []nftables.SetElement{}
 	portsUDP := []nftables.SetElement{}
 	portsSCTP := []nftables.SetElement{}
-	// validate ports and protocols
 	for _, port := range ports {
-		var portElements []nftables.SetElement
-
 		if port.Port == nil && port.Protocol != nil {
 			port.Port = &intstr.IntOrString{Type: intstr.Int, IntVal: 1}
 			port.EndPort = new(int32)
 			*port.EndPort = math.MaxUint16
 		}
 
-		// validate port range
-		if port.Port != nil {
-			if port.Port.IntValue() < 1 || port.Port.IntValue() > math.MaxUint16 {
-				return fmt.Errorf("port %d out of range, must be between 1 and %d", port.Port.IntValue(), math.MaxUint16)
-			}
-			portVal := uint16(port.Port.IntValue()) //nolint:gosec // G115: value validated in range [1, 65535] above
-			portElements = append(portElements, nftables.SetElement{
-				Key: binaryutil.BigEndian.PutUint16(portVal),
-			})
-			if port.EndPort != nil && *port.EndPort > int32(port.Port.IntValue()) { //nolint:gosec // G115: value validated in range [1, 65535] above
-				if *port.EndPort < 1 || *port.EndPort > math.MaxUint16 {
-					return fmt.Errorf("port %d out of range, must be between 1 and %d", port.Port.IntValue(), math.MaxUint16)
-				}
-				// keep the half open interval semantics of nftables
-				// e.g. 1000-2000 becomes [1000, 2001)
-				// so we need to add 1 to the end port
-				portElements = append(portElements, nftables.SetElement{
-					Key:         binaryutil.BigEndian.PutUint16(uint16(*port.EndPort) + 1), //nolint:gosec // G115: wrapping to 0 when EndPort==65535 is the correct nftables past-max sentinel for inet_service interval sets
-					IntervalEnd: true,
-				})
-			} else {
-				// keep the half open interval semantics of nftables
-				// e.g. 1000 becomes [1000, 1001)
-				// so we need to add 1 to the port
-				portElements = append(portElements, nftables.SetElement{
-					Key:         binaryutil.BigEndian.PutUint16(portVal + 1), //nolint:gosec // G115: portVal is validated in [1,65535] but +1 wrap at 65535 is the correct nftables past-max sentinel
-					IntervalEnd: true,
-				})
-			}
+		portElements, err := validatePortSpec(port)
+		if err != nil {
+			return err
 		}
 
 		if port.Protocol != nil {
