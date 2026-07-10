@@ -1499,8 +1499,19 @@ func (n *nftState) applyPolicyPeersRulesSelector(ctx context.Context, deps contr
 			return fmt.Errorf("namespace selector: %w", err)
 		}
 	}
-	var podIntfIPs []string
-	podIntfsIPsMap := make(map[string]any)
+	// Build set of protected IPs from the protected pod
+	protectedIPs := make(map[string]struct{})
+	for _, podIntf := range podInfo.Interfaces {
+		if !podIntf.CheckPolicyNetwork(policyNetworks) {
+			continue
+		}
+		for _, ip := range podIntf.IPs {
+			protectedIPs[ip] = struct{}{}
+		}
+	}
+
+	// Collect peer IPs, excluding protected IPs
+	globalPeerIPs := make(map[string]struct{})
 	for _, sPod := range pods {
 		nsLabels, err := deps.GetNamespaceInfo(ctx, sPod.Namespace)
 		if err != nil {
@@ -1516,28 +1527,13 @@ func (n *nftState) applyPolicyPeersRulesSelector(ctx context.Context, deps contr
 			continue
 		}
 
-		for _, podIntf := range podInfo.Interfaces {
-			if !podIntf.CheckPolicyNetwork(policyNetworks) {
+		for _, sPodIntf := range sPodinfo.Interfaces {
+			if !sPodIntf.CheckPolicyNetwork(policyNetworks) {
 				continue
 			}
-			if nsSelector != nil && !nsSelector.Matches(labels.Set(nsLabels.Labels)) {
-				continue
-			}
-			s.podMap.Update(s.podChanges)
-			sPodinfo, err := s.podMap.GetPodInfo(sPod)
-			if err != nil {
-				klog.Errorf("cannot get %s/%s podInfo: %v", sPod.Namespace, sPod.Name, err)
-				continue
-			}
-
-			for _, sPodIntf := range sPodinfo.Interfaces {
-				if !sPodIntf.CheckPolicyNetwork(policyNetworks) {
-					continue
-				}
-				for _, ip := range sPodIntf.IPs {
-					if _, isProtected := protectedIPs[ip]; !isProtected {
-						globalPeerIPs[ip] = struct{}{}
-					}
+			for _, ip := range sPodIntf.IPs {
+				if _, isProtected := protectedIPs[ip]; !isProtected {
+					globalPeerIPs[ip] = struct{}{}
 				}
 			}
 		}
