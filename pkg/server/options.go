@@ -60,18 +60,6 @@ type ReconcilerConfig struct {
 	Master                   string
 	NodeName                 string
 	HostPrefix               string
-	ContainerRuntimeEndpoint string
-	NetworkPlugins           []string
-	SyncPeriodSeconds        int
-	CommonRuleConfig         controllers.CommonRuleConfig
-}
-
-// ReconcilerConfig holds all configuration values needed to construct a NodeReconciler.
-type ReconcilerConfig struct {
-	Kubeconfig               string
-	Master                   string
-	NodeName                 string
-	HostPrefix               string
 	PodIptables              string
 	ContainerRuntime         controllers.RuntimeKind
 	ContainerRuntimeEndpoint string
