@@ -641,6 +641,21 @@ func TestApplyPodRules(t *testing.T) {
 			if err != nil {
 				t.Fatalf("c.GetRules(%q, %q) failed: %s", filterTable.Name, peerChainActualName, err.Error())
 			}
+
+			// Collect rules from the peer chain and any sub-chains it jumps to,
+			// since ipBlock peers are now placed in a dedicated ipblock sub-chain.
+			allRules := peerChainRules
+			for _, r := range peerChainRules {
+				for _, e := range r.Exprs {
+					if v, ok := e.(*expr.Verdict); ok && v.Kind == expr.VerdictJump {
+						subRules, subErr := c.GetRules(filterTable, &nftables.Chain{Name: v.Chain})
+						if subErr == nil {
+							allRules = append(allRules, subRules...)
+						}
+					}
+				}
+			}
+
 			prefix, err := netip.ParsePrefix(cidrStr)
 			if err != nil {
 				t.Fatalf("failed to parse expected CIDR %q: %v", cidrStr, err)
@@ -662,7 +677,7 @@ func TestApplyPodRules(t *testing.T) {
 
 			foundStart := false
 			foundEnd := false
-			for _, r := range peerChainRules {
+			for _, r := range allRules {
 				for _, e := range r.Exprs {
 					if el, ok := e.(*expr.Lookup); ok {
 						peerSet, err := c.GetSetByName(filterTable, el.SetName)
