@@ -1434,7 +1434,6 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *testPo
 	return nftState, testNs, deps, podMockInfo, nil
 }
 
-
 func TestValidatePortSpec(t *testing.T) {
 	t.Parallel()
 
