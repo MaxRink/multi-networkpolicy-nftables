@@ -60,8 +60,6 @@ type ReconcilerConfig struct {
 	Master                   string
 	NodeName                 string
 	HostPrefix               string
-	PodIptables              string
-	ContainerRuntime         controllers.RuntimeKind
 	ContainerRuntimeEndpoint string
 	NetworkPlugins           []string
 	SyncPeriodSeconds        int
