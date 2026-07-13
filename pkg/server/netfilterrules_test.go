@@ -1691,9 +1691,8 @@ func TestFindRuleReturnsFirstMatch(t *testing.T) {
 		}
 	}
 
-	addDuplicateRuleDirectly := func() { c.AddRule(makeRule()) }
-	addDuplicateRuleDirectly()
-	addDuplicateRuleDirectly()
+	c.AddRule(makeRule())
+	c.AddRule(makeRule())
 
 	if err := c.Flush(); err != nil {
 		t.Fatalf("c.Flush() failed: %v", err)
