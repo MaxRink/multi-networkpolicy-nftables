@@ -1434,6 +1434,125 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *testPo
 	return nftState, testNs, deps, podMockInfo, nil
 }
 
+func TestValidatePortSpec(t *testing.T) {
+	t.Parallel()
+
+	ptr32 := func(v int32) *int32 { return &v }
+	port80Int := intstr.FromInt32(80)
+	port80Str := intstr.FromString("80")
+	portHTTPStr := intstr.FromString("http")
+	port0Int := intstr.FromInt32(0)
+	portNegStr := intstr.FromString("-1")
+	portBigStr := intstr.FromString("99999")
+
+	cases := []struct {
+		name       string
+		port       multiv1beta1.MultiNetworkPolicyPort
+		wantErr    bool
+		wantErrSub string
+		wantStart  uint16
+		wantEnd    uint16
+	}{
+		{
+			name: "nil port returns nil elements",
+			port: multiv1beta1.MultiNetworkPolicyPort{Port: nil},
+		},
+		{
+			name:      "int port 80 accepted",
+			port:      multiv1beta1.MultiNetworkPolicyPort{Port: &port80Int},
+			wantStart: 80,
+			wantEnd:   81,
+		},
+		{
+			name:      "numeric string port '80' accepted (Cellebyte feedback)",
+			port:      multiv1beta1.MultiNetworkPolicyPort{Port: &port80Str},
+			wantStart: 80,
+			wantEnd:   81,
+		},
+		{
+			name:       "named port 'http' rejected with clear error",
+			port:       multiv1beta1.MultiNetworkPolicyPort{Port: &portHTTPStr},
+			wantErr:    true,
+			wantErrSub: "named port",
+		},
+		{
+			name:       "named port '-1' (negative numeric string) rejected",
+			port:       multiv1beta1.MultiNetworkPolicyPort{Port: &portNegStr},
+			wantErr:    true,
+			wantErrSub: "named port",
+		},
+		{
+			name:       "named port '99999' (out-of-range numeric string) rejected",
+			port:       multiv1beta1.MultiNetworkPolicyPort{Port: &portBigStr},
+			wantErr:    true,
+			wantErrSub: "named port",
+		},
+		{
+			name:       "int port 0 rejected as out of range",
+			port:       multiv1beta1.MultiNetworkPolicyPort{Port: &port0Int},
+			wantErr:    true,
+			wantErrSub: "out of range",
+		},
+		{
+			name: "int port range 1000-2000 accepted",
+			port: multiv1beta1.MultiNetworkPolicyPort{
+				Port:    func() *intstr.IntOrString { p := intstr.FromInt32(1000); return &p }(),
+				EndPort: ptr32(2000),
+			},
+			wantStart: 1000,
+			wantEnd:   2001,
+		},
+		{
+			name: "numeric string port range '1000' with EndPort 2000 accepted",
+			port: multiv1beta1.MultiNetworkPolicyPort{
+				Port:    func() *intstr.IntOrString { p := intstr.FromString("1000"); return &p }(),
+				EndPort: ptr32(2000),
+			},
+			wantStart: 1000,
+			wantEnd:   2001,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			elements, err := validatePortSpec(tc.port)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("validatePortSpec() expected error containing %q, got nil", tc.wantErrSub)
+				}
+				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Fatalf("validatePortSpec() error = %q, want it to contain %q", err.Error(), tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validatePortSpec() unexpected error: %v", err)
+			}
+			if tc.port.Port == nil {
+				if elements != nil {
+					t.Fatalf("validatePortSpec() expected nil elements for nil port, got %v", elements)
+				}
+				return
+			}
+			if len(elements) != 2 {
+				t.Fatalf("validatePortSpec() expected 2 set elements, got %d", len(elements))
+			}
+			gotStart := binaryutil.BigEndian.Uint16(elements[0].Key)
+			gotEnd := binaryutil.BigEndian.Uint16(elements[1].Key)
+			if gotStart != tc.wantStart {
+				t.Errorf("validatePortSpec() start port = %d, want %d", gotStart, tc.wantStart)
+			}
+			if gotEnd != tc.wantEnd {
+				t.Errorf("validatePortSpec() end port (sentinel) = %d, want %d", gotEnd, tc.wantEnd)
+			}
+			if !elements[1].IntervalEnd {
+				t.Errorf("validatePortSpec() last element should have IntervalEnd=true")
+			}
+		})
+	}
+}
+
 func TestCleanupLegacyTables(t *testing.T) {
 	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
 	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
@@ -1710,124 +1829,5 @@ func TestCleanupChainsKeepsForeignTableChains(t *testing.T) {
 	}
 	if !foundForeignChain {
 		t.Errorf("foreign empty chain was incorrectly removed")
-	}
-}
-
-func TestValidatePortSpec(t *testing.T) {
-	t.Parallel()
-
-	ptr32 := func(v int32) *int32 { return &v }
-	port80Int := intstr.FromInt32(80)
-	port80Str := intstr.FromString("80")
-	portHTTPStr := intstr.FromString("http")
-	port0Int := intstr.FromInt32(0)
-	portNegStr := intstr.FromString("-1")
-	portBigStr := intstr.FromString("99999")
-
-	cases := []struct {
-		name       string
-		port       multiv1beta1.MultiNetworkPolicyPort
-		wantErr    bool
-		wantErrSub string
-		wantStart  uint16
-		wantEnd    uint16
-	}{
-		{
-			name: "nil port returns nil elements",
-			port: multiv1beta1.MultiNetworkPolicyPort{Port: nil},
-		},
-		{
-			name:      "int port 80 accepted",
-			port:      multiv1beta1.MultiNetworkPolicyPort{Port: &port80Int},
-			wantStart: 80,
-			wantEnd:   81,
-		},
-		{
-			name:      "numeric string port '80' accepted (Cellebyte feedback)",
-			port:      multiv1beta1.MultiNetworkPolicyPort{Port: &port80Str},
-			wantStart: 80,
-			wantEnd:   81,
-		},
-		{
-			name:       "named port 'http' rejected with clear error",
-			port:       multiv1beta1.MultiNetworkPolicyPort{Port: &portHTTPStr},
-			wantErr:    true,
-			wantErrSub: "named port",
-		},
-		{
-			name:       "named port '-1' (negative numeric string) rejected",
-			port:       multiv1beta1.MultiNetworkPolicyPort{Port: &portNegStr},
-			wantErr:    true,
-			wantErrSub: "named port",
-		},
-		{
-			name:       "named port '99999' (out-of-range numeric string) rejected",
-			port:       multiv1beta1.MultiNetworkPolicyPort{Port: &portBigStr},
-			wantErr:    true,
-			wantErrSub: "named port",
-		},
-		{
-			name:       "int port 0 rejected as out of range",
-			port:       multiv1beta1.MultiNetworkPolicyPort{Port: &port0Int},
-			wantErr:    true,
-			wantErrSub: "out of range",
-		},
-		{
-			name: "int port range 1000-2000 accepted",
-			port: multiv1beta1.MultiNetworkPolicyPort{
-				Port:    func() *intstr.IntOrString { p := intstr.FromInt32(1000); return &p }(),
-				EndPort: ptr32(2000),
-			},
-			wantStart: 1000,
-			wantEnd:   2001,
-		},
-		{
-			name: "numeric string port range '1000' with EndPort 2000 accepted",
-			port: multiv1beta1.MultiNetworkPolicyPort{
-				Port:    func() *intstr.IntOrString { p := intstr.FromString("1000"); return &p }(),
-				EndPort: ptr32(2000),
-			},
-			wantStart: 1000,
-			wantEnd:   2001,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			elements, err := validatePortSpec(tc.port)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("validatePortSpec() expected error containing %q, got nil", tc.wantErrSub)
-				}
-				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
-					t.Fatalf("validatePortSpec() error = %q, want it to contain %q", err.Error(), tc.wantErrSub)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("validatePortSpec() unexpected error: %v", err)
-			}
-			if tc.port.Port == nil {
-				if elements != nil {
-					t.Fatalf("validatePortSpec() expected nil elements for nil port, got %v", elements)
-				}
-				return
-			}
-			if len(elements) != 2 {
-				t.Fatalf("validatePortSpec() expected 2 set elements, got %d", len(elements))
-			}
-			gotStart := binaryutil.BigEndian.Uint16(elements[0].Key)
-			gotEnd := binaryutil.BigEndian.Uint16(elements[1].Key)
-			if gotStart != tc.wantStart {
-				t.Errorf("validatePortSpec() start port = %d, want %d", gotStart, tc.wantStart)
-			}
-			if gotEnd != tc.wantEnd {
-				t.Errorf("validatePortSpec() end port (sentinel) = %d, want %d", gotEnd, tc.wantEnd)
-			}
-			if !elements[1].IntervalEnd {
-				t.Errorf("validatePortSpec() last element should have IntervalEnd=true")
-			}
-		})
 	}
 }

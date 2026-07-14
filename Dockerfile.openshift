@@ -1,5 +1,5 @@
 # This dockerfile is specific to building Multus for OpenShift
-FROM openshift/origin-release:golang-1.24 as build
+FROM golang:1.25.11 AS build
 
 # Add everything
 ADD . /usr/src/multi-networkpolicy-nftables
@@ -7,7 +7,7 @@ WORKDIR /usr/src/multi-networkpolicy-nftables
 RUN CGO_ENABLED=0 go build ./cmd/multi-networkpolicy-nftables/
 
 FROM registry.access.redhat.com/ubi8/ubi:latest
-LABEL org.opencontainers.image.source https://github.com/k8snetworkplumbingwg/multi-networkpolicy-nftables
+LABEL org.opencontainers.image.source="https://github.com/k8snetworkplumbingwg/multi-networkpolicy-nftables"
 RUN dnf install -y nftables
 COPY --from=build /usr/src/multi-networkpolicy-nftables/multi-networkpolicy-nftables /usr/bin
 WORKDIR /usr/bin
@@ -18,5 +18,3 @@ LABEL io.k8s.display-name="Multus NetworkPolicy" \
       maintainer="Doug Smith <dosmith@redhat.com>"
 
 ENTRYPOINT ["multi-networkpolicy-nftables"]
-
-
