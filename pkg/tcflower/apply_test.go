@@ -60,6 +60,36 @@ func (d *fakeDriver) Close() error { return nil }
 
 var _ Driver = (*fakeDriver)(nil)
 
+// TestIsManagedFilterRecognizesBothModes asserts that isManagedFilter treats
+// both a hardware (skip_sw) and a software (skip_hw) flower filter as managed,
+// while leaving a foreign (non-flower) filter and a flag-less flower filter
+// untouched.
+func TestIsManagedFilterRecognizesBothModes(t *testing.T) {
+	hw := FlowerRule{Rep: testRep, Direction: DirIngress, Priority: 1, Verdict: VerdictDrop}
+	sw := hw
+	sw.Offload = OffloadSoftware
+
+	if !isManagedFilter(hw.toObject(1)) {
+		t.Errorf("hardware-mode (skip_sw) filter must be managed")
+	}
+	if !isManagedFilter(sw.toObject(1)) {
+		t.Errorf("software-mode (skip_hw) filter must be managed")
+	}
+
+	// A foreign non-flower filter is not managed.
+	foreign := tc.Object{Attribute: tc.Attribute{Kind: "u32"}}
+	if isManagedFilter(foreign) {
+		t.Errorf("non-flower filter must not be managed")
+	}
+
+	// A flower filter with no offload flags (e.g. a plain software filter added
+	// out-of-band) is not ours.
+	noFlags := tc.Object{Attribute: tc.Attribute{Kind: "flower", Flower: &tc.Flower{}}}
+	if isManagedFilter(noFlags) {
+		t.Errorf("flag-less flower filter must not be managed")
+	}
+}
+
 func TestReconcileAddsMissingAndDeletesStale(t *testing.T) {
 	const ifindex = 10
 

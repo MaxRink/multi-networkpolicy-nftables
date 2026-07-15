@@ -33,10 +33,11 @@ jobs:
       # required switchdev/tc features are unavailable on the runner kernel.
       run: sudo modprobe netdevsim || echo "netdevsim modprobe failed; tests will self-skip"
 
-    - name: Run tc-flower netdevsim integration tests (control plane)
-      # -E preserves the Go env/cache; the netdevsim Go test self-skips without
-      # root/netdevsim. Not run with -short so the integration test is eligible.
-      run: sudo -E env "PATH=$PATH" go test -run 'Netdevsim|TCFlower' ./pkg/tcflower/... -v
+    - name: Run tc-flower netdevsim + software-enforcement e2e tests
+      # -E preserves the Go env/cache; the tests self-skip without root/netdevsim
+      # or the required tools. Not run with -short so the integration and
+      # software-datapath e2e (TestSoftwareEnforcementE2E) tests are eligible.
+      run: sudo -E env "PATH=$PATH" go test -run 'Netdevsim|TCFlower|E2E' ./pkg/tcflower/... -v
 
     - name: Run emulation harness (discovery + software enforcement)
       run: sudo bash test/emulation/run.sh

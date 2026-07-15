@@ -141,6 +141,71 @@ func (v Verdict) String() string {
 	return "accept"
 }
 
+// OffloadMode selects how a flower filter's hardware-offload flags are stamped
+// (see toObject). It is derived once from CommonRuleConfig.TCOffloadMode and
+// threaded onto every FlowerRule so the mode is captured in the comparable rule
+// identity (and thus in the reconcile diff key). OffloadHardware is the zero
+// value, so a rule literal without an explicit Offload is byte-for-byte the
+// production hardware-only rule it always was.
+type OffloadMode uint8
+
+const (
+	// OffloadHardware (zero value / "hardware") stamps skip_sw: the filter is
+	// hardware-only and fail-closed — the kernel rejects it if the NIC cannot
+	// offload it, rather than silently enforcing it in software. Production
+	// default on ConnectX switchdev NICs.
+	OffloadHardware OffloadMode = iota
+	// OffloadSoftware ("software") stamps skip_hw: the filter is enforced in the
+	// kernel software datapath. Enables real enforcement on veth/netdevsim (no
+	// hardware offload) for CI and graceful use on non-offload NICs.
+	OffloadSoftware
+	// OffloadAuto ("auto") would stamp neither flag (kernel offloads if it can,
+	// else software). It is NOT supported yet: managed-filter detection keys on
+	// an explicit skip_sw/skip_hw flag, so a flag-less filter cannot be
+	// distinguished from a foreign one. parseOffloadMode rejects it.
+	OffloadAuto
+)
+
+func (m OffloadMode) String() string {
+	switch m {
+	case OffloadSoftware:
+		return "software"
+	case OffloadAuto:
+		return "auto"
+	default:
+		return "hardware"
+	}
+}
+
+// parseOffloadMode normalizes the CommonRuleConfig.TCOffloadMode string into a
+// typed OffloadMode. The empty string and "hardware" both map to the
+// fail-closed hardware-only default. "auto" is rejected as not-yet-supported
+// (see OffloadAuto); any other value is an error.
+func parseOffloadMode(s string) (OffloadMode, error) {
+	switch s {
+	case "", "hardware":
+		return OffloadHardware, nil
+	case "software":
+		return OffloadSoftware, nil
+	case "auto":
+		return OffloadAuto, fmt.Errorf("tc offload mode %q is not yet supported: "+
+			"managed-filter detection requires an explicit skip_sw/skip_hw flag", s)
+	default:
+		return OffloadHardware, fmt.Errorf("invalid tc offload mode %q: want \"hardware\", \"software\" (or \"auto\")", s)
+	}
+}
+
+// offloadFlags maps an OffloadMode to the go-tc flower Flags value stamped in
+// toObject: skip_sw (hardware-only) for the default, skip_hw (software) for
+// software mode. OffloadAuto is unreachable here (rejected by parseOffloadMode)
+// and falls through to the fail-closed hardware default.
+func offloadFlags(m OffloadMode) uint32 {
+	if m == OffloadSoftware {
+		return tc.SkipHw
+	}
+	return tc.SkipSw
+}
+
 // tc gact control actions (from include/uapi/linux/pkt_cls.h).
 const (
 	tcActOK        uint32 = 0          // TC_ACT_OK   — accept/pass
@@ -203,6 +268,13 @@ const (
 type FlowerRule struct {
 	// Rep is the host VF representor netdev name (the enforcement point).
 	Rep string
+	// Offload selects how toObject stamps the filter's hardware-offload flags
+	// (skip_sw for OffloadHardware, skip_hw for OffloadSoftware). It is a
+	// comparable scalar so FlowerRule stays a valid map key, and it is part of
+	// the rule identity so hardware- and software-mode filters never alias in
+	// the reconcile diff. OffloadHardware is the zero value, so a rule literal
+	// without an explicit Offload is the production hardware-only rule.
+	Offload OffloadMode
 	// Direction selects the policy direction (and thus representor parent).
 	Direction Direction
 	// Priority is the tc filter priority. Lower = evaluated first. Assigned
@@ -334,6 +406,15 @@ func BuildFlowerRules(ctx context.Context, deps controllers.PolicyDeps, cfg cont
 	// signature for parity with the nft engine.
 	ctEnabled := cfg.CTEnabled
 
+	// The offload mode is uniform across every filter this call emits, so it is
+	// parsed once and stamped onto each candidate before priority assignment
+	// (below). Parsing here fails closed: an invalid/unsupported mode aborts the
+	// build rather than emitting filters with the wrong (or missing) flags.
+	mode, err := parseOffloadMode(cfg.TCOffloadMode)
+	if err != nil {
+		return nil, err
+	}
+
 	rep := iface.RepresentorDevice
 	if rep == "" {
 		return nil, fmt.Errorf("interface %q has no resolved representor device", iface.InterfaceName)
@@ -376,6 +457,13 @@ func BuildFlowerRules(ctx context.Context, deps controllers.PolicyDeps, cfg cont
 		if ctEnabled {
 			cands = append(cands, ctEntryRules(rep, DirEgress)...)
 		}
+	}
+
+	// Stamp the (uniform) offload mode onto every candidate. Doing it here keeps
+	// buildRule/defaultDeny/ctEntryRules mode-agnostic and guarantees the mode
+	// is part of the comparable rule identity used for the reconcile diff.
+	for i := range cands {
+		cands[i].rule.Offload = mode
 	}
 
 	return assignPriorities(cands), nil
@@ -966,8 +1054,8 @@ func (d Direction) parentHandle() uint32 {
 // collide in the reconcile diff key.
 func (r FlowerRule) handle() uint32 {
 	h := fnv.New32a()
-	_, _ = fmt.Fprintf(h, "%d|%d|%d|%d|%d|%s|%s|%t|%d|%d|%d|%t|%d|%d|%t|%d|%d",
-		r.Chain, r.Direction, r.Priority, r.Family, r.Proto, prefixString(r.Src), prefixString(r.Dst),
+	_, _ = fmt.Fprintf(h, "%d|%d|%d|%d|%d|%d|%s|%s|%t|%d|%d|%d|%t|%d|%d|%t|%d|%d",
+		r.Offload, r.Chain, r.Direction, r.Priority, r.Family, r.Proto, prefixString(r.Src), prefixString(r.Dst),
 		r.HasPort, r.PortMin, r.PortMax, r.Verdict,
 		r.HasCTState, r.CTState, r.CTStateMask, r.CTDispatch, r.GotoChain, r.CTZone)
 	sum := h.Sum32()
@@ -978,16 +1066,25 @@ func (r FlowerRule) handle() uint32 {
 }
 
 // toObject converts the abstract FlowerRule into a go-tc Object ready to be
-// installed on the given representor ifindex. Every filter carries the SkipSw
-// flag so it is HARDWARE-ONLY (fail closed: if the NIC cannot offload it, the
-// kernel rejects the insertion rather than silently enforcing in software).
+// installed on the given representor ifindex. The hardware-offload flag is
+// stamped from r.Offload:
+//   - OffloadHardware (default): SkipSw — HARDWARE-ONLY, fail closed: if the NIC
+//     cannot offload it, the kernel rejects the insertion rather than silently
+//     enforcing in software. This is the production behavior on switchdev NICs.
+//   - OffloadSoftware: SkipHw — in-kernel (software) enforcement, so the same
+//     match/verdict is enforced on veth/netdevsim (no hardware offload) and on
+//     non-offload NICs.
+//
+// OffloadAuto (no flag) is rejected at build time (see parseOffloadMode), so
+// every emitted filter always carries exactly one of SkipSw/SkipHw — which
+// isManagedFilter relies on to recognize filters this backend owns.
 func (r FlowerRule) toObject(ifindex int) tc.Object {
-	skipSw := tc.SkipSw
+	flags := offloadFlags(r.Offload)
 	ethType := ethTypeFor(r.Family)
 
 	flower := &tc.Flower{
 		KeyEthType: &ethType,
-		Flags:      &skipSw,
+		Flags:      &flags,
 	}
 
 	if r.Proto != ipProtoAny {

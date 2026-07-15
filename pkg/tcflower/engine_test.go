@@ -726,6 +726,123 @@ func TestPodSelectorPeerDualStack(t *testing.T) {
 	}
 }
 
+// TestParseOffloadMode covers every accepted value, the unsupported "auto"
+// case, and an invalid value.
+func TestParseOffloadMode(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    OffloadMode
+		wantErr bool
+	}{
+		{"", OffloadHardware, false},
+		{"hardware", OffloadHardware, false},
+		{"software", OffloadSoftware, false},
+		{"auto", OffloadAuto, true},      // recognized but not-yet-supported
+		{"bogus", OffloadHardware, true}, // invalid -> error, fail-closed default
+	}
+	for _, tt := range tests {
+		got, err := parseOffloadMode(tt.in)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("parseOffloadMode(%q) err=%v, wantErr=%v", tt.in, err, tt.wantErr)
+		}
+		if got != tt.want {
+			t.Errorf("parseOffloadMode(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestToObjectOffloadFlags asserts hardware mode emits SkipSw and software mode
+// emits SkipHw. (isManagedFilter recognition for both modes is asserted in the
+// linux-tagged apply_test.go, since isManagedFilter lives in the linux build.)
+func TestToObjectOffloadFlags(t *testing.T) {
+	base := FlowerRule{
+		Rep:       testRep,
+		Direction: DirIngress,
+		Priority:  1,
+		Src:       netip.MustParsePrefix("192.168.1.0/24"),
+		Verdict:   VerdictAccept,
+	}
+
+	hw := base // OffloadHardware is the zero value
+	hwObj := hw.toObject(1)
+	if hwObj.Flower.Flags == nil || *hwObj.Flower.Flags != tc.SkipSw {
+		t.Errorf("hardware mode: expected Flags==SkipSw, got %v", hwObj.Flower.Flags)
+	}
+
+	sw := base
+	sw.Offload = OffloadSoftware
+	swObj := sw.toObject(1)
+	if swObj.Flower.Flags == nil || *swObj.Flower.Flags != tc.SkipHw {
+		t.Errorf("software mode: expected Flags==SkipHw, got %v", swObj.Flower.Flags)
+	}
+
+	// Different offload modes must produce distinct handles/identities so the
+	// two never alias in the reconcile diff.
+	if hwObj.Handle == swObj.Handle {
+		t.Errorf("hardware and software filters must have distinct handles; both = %#x", hwObj.Handle)
+	}
+}
+
+// TestBuildFlowerRulesSoftwareMode threads TCOffloadMode="software" through the
+// engine and asserts every emitted rule carries OffloadSoftware and stamps
+// SkipHw, while the default (empty) stays hardware/SkipSw.
+func TestBuildFlowerRulesSoftwareMode(t *testing.T) {
+	deps := newFakeDeps()
+	policy := makePolicy("p1",
+		[]multiv1beta1.MultiPolicyType{multiv1beta1.PolicyTypeIngress},
+		[]multiv1beta1.MultiNetworkPolicyIngressRule{
+			{From: []multiv1beta1.MultiNetworkPolicyPeer{{IPBlock: &multiv1beta1.IPBlock{CIDR: "192.168.1.0/24"}}}},
+		}, nil)
+	pm := policyMapOf(policy)
+
+	swRules, err := BuildFlowerRules(context.Background(), deps,
+		controllers.CommonRuleConfig{TCOffloadMode: "software"},
+		pm, targetPod(nil), targetPodInfo(), targetIface())
+	if err != nil {
+		t.Fatalf("BuildFlowerRules(software): %v", err)
+	}
+	if len(swRules) == 0 {
+		t.Fatal("expected rules in software mode")
+	}
+	for _, r := range swRules {
+		if r.Offload != OffloadSoftware {
+			t.Errorf("software mode: rule %+v has Offload=%v", r, r.Offload)
+		}
+		if o := r.toObject(1); o.Flower.Flags == nil || *o.Flower.Flags != tc.SkipHw {
+			t.Errorf("software mode: rule %+v must stamp SkipHw", r)
+		}
+	}
+
+	// Default (empty mode) stays hardware/SkipSw.
+	hwRules := buildRules(t, deps, pm)
+	for _, r := range hwRules {
+		if r.Offload != OffloadHardware {
+			t.Errorf("default mode: rule %+v has Offload=%v, want hardware", r, r.Offload)
+		}
+		if o := r.toObject(1); o.Flower.Flags == nil || *o.Flower.Flags != tc.SkipSw {
+			t.Errorf("default mode: rule %+v must stamp SkipSw", r)
+		}
+	}
+}
+
+// TestBuildFlowerRulesAutoRejected asserts the engine fails closed on the
+// not-yet-supported "auto" mode rather than emitting flag-less filters.
+func TestBuildFlowerRulesAutoRejected(t *testing.T) {
+	deps := newFakeDeps()
+	policy := makePolicy("p1",
+		[]multiv1beta1.MultiPolicyType{multiv1beta1.PolicyTypeIngress},
+		[]multiv1beta1.MultiNetworkPolicyIngressRule{
+			{From: []multiv1beta1.MultiNetworkPolicyPeer{{IPBlock: &multiv1beta1.IPBlock{CIDR: "192.168.1.0/24"}}}},
+		}, nil)
+
+	_, err := BuildFlowerRules(context.Background(), deps,
+		controllers.CommonRuleConfig{TCOffloadMode: "auto"},
+		policyMapOf(policy), targetPod(nil), targetPodInfo(), targetIface())
+	if err == nil {
+		t.Fatal("expected BuildFlowerRules to reject auto mode, got nil error")
+	}
+}
+
 // --- helpers ---
 
 func intPort(v int) *intstr.IntOrString {

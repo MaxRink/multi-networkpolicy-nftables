@@ -54,6 +54,7 @@ type Options struct {
 	// healthBindAddress is the IP address the health HTTP server binds to.
 	// Defaults to "" (all interfaces); set to "127.0.0.1" to restrict to loopback.
 	healthBindAddress string
+	tcOffloadMode     string
 
 	// updated by command line parsing
 	allowSrcPrefix []string
@@ -94,6 +95,7 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.allowDstPrefixText, "allow-dst-prefix", "", "Accept destination IP prefix list, comma separated CIDRs (e.g. \"fe80::/10,ff00::/8\")")
 	fs.IntVar(&o.healthPort, "health-port", 0, "TCP port for the health HTTP server (0 to disable, 1-65535 to enable).")
 	fs.StringVar(&o.healthBindAddress, "health-bind-address", "", "IP address the health HTTP server binds to (empty = all interfaces, 127.0.0.1 = loopback only).")
+	fs.StringVar(&o.tcOffloadMode, "tc-offload-mode", "hardware", "tc flower offload mode for the SR-IOV backend: 'hardware' (skip_sw, hardware-only, fail-closed; production default) or 'software' (skip_hw, in-kernel software enforcement). Ignored by the nft backend.")
 	fs.AddGoFlagSet(flag.CommandLine)
 }
 
@@ -169,6 +171,7 @@ func (o *Options) BuildReconcilerConfig() (*ReconcilerConfig, error) {
 			AcceptICMPv6:   o.acceptICMPv6,
 			AllowSrcPrefix: o.allowSrcPrefix,
 			AllowDstPrefix: o.allowDstPrefix,
+			TCOffloadMode:  o.tcOffloadMode,
 		},
 	}, nil
 }

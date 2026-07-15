@@ -9,10 +9,15 @@
 # qdisc ACTUALLY drops matching traffic and PASSES non-matching traffic. This is
 # the T2 enforcement-correctness proof for the rule translation.
 #
-# IMPORTANT: the filter is installed in SOFTWARE (no skip_sw) because veth and
-# netdevsim have no hardware offload. The production backend installs the same
-# flower match with skip_sw (hardware-only); here we drop skip_sw so the kernel
-# enforces the identical match in software, validating the match/verdict shape.
+# IMPORTANT: the filter is installed in SOFTWARE (skip_hw) because veth and
+# netdevsim have no hardware offload. The production backend defaults to skip_sw
+# (hardware-only), but the tc flower engine now supports a configurable SOFTWARE
+# offload mode (--tc-offload-mode=software / OffloadSoftware), which emits the
+# identical flower match with skip_hw for in-kernel enforcement. This script
+# hand-writes that same skip_hw match; its Go-driven twin,
+# TestSoftwareEnforcementE2E (pkg/tcflower/e2e_linux_test.go), proves the engine
+# produces and enforces it end to end. Hardware offload (skip_sw in the eSwitch)
+# remains gated to real ConnectX (CX5+) hardware.
 #
 # Topology (two network namespaces joined by a veth pair):
 #
