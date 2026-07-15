@@ -127,9 +127,9 @@ func Apply(ctx context.Context, deps controllers.PolicyDeps, cfg controllers.Com
 //
 // It is tolerant of a representor that has already gone away (VF returned to the
 // host, node reboot): an unresolvable representor or a missing clsact qdisc is
-// treated as "nothing to clean", not an error. Only managed filters (flower +
-// SkipSw) are removed; the clsact qdisc itself is left in place because it may
-// be shared with other tenants of the same representor.
+// treated as "nothing to clean", not an error. Only managed filters (flower
+// carrying skip_sw or skip_hw) are removed; the clsact qdisc itself is left in
+// place because it may be shared with other tenants of the same representor.
 func Flush(_ context.Context, podInfo *controllers.PodInfo, hostPrefix string) error {
 	if podInfo == nil {
 		return nil
@@ -267,7 +267,9 @@ func reconcile(drv Driver, rep string, ifindex int, desired []FlowerRule) error 
 			// Classify the failure for the fail-closed error counter: a hardware
 			// offload rejection (skip_sw insertion refused) is the security-
 			// critical case and is labeled distinctly from other add failures.
-			incFilterApplyError(rep, addErrorReason(err))
+			// Only a skip_sw (hardware) filter can be an offload rejection; a
+			// skip_hw (software) filter that fails is a plain add error.
+			incFilterApplyError(rep, addErrorReason(obj, err))
 			return err
 		}
 	}
@@ -287,24 +289,37 @@ func reconcile(drv Driver, rep string, ifindex int, desired []FlowerRule) error 
 }
 
 // addErrorReason classifies an AddFilter failure for the apply-error counter.
-// Every managed filter carries the SkipSw (hardware-only) flag, so the kernel
-// rejects an un-offloadable filter rather than falling back to software. That
-// rejection surfaces as EOPNOTSUPP/ENOTSUPP from the driver; we label it
-// skip_sw (the fail-closed offload-insertion signal). Anything else is a
-// generic add failure.
-func addErrorReason(err error) string {
-	if errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.ENOTSUP) {
+// A hardware-only (skip_sw) filter that the NIC cannot offload is rejected by
+// the kernel rather than falling back to software; that rejection surfaces as
+// EOPNOTSUPP/ENOTSUPP and is labeled skip_sw (the fail-closed offload-insertion
+// signal). A software (skip_hw) filter never triggers an offload rejection, so
+// any failure installing one is a generic add failure — as is any non-offload
+// error on a hardware filter.
+func addErrorReason(obj tc.Object, err error) string {
+	offloadReject := errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.ENOTSUP)
+	if offloadReject && isSkipSw(obj) {
 		return reasonSkipSw
 	}
 	return reasonAdd
 }
 
+// isSkipSw reports whether a flower object carries the SkipSw (hardware-only)
+// flag, i.e. was built in the default OffloadHardware mode.
+func isSkipSw(obj tc.Object) bool {
+	return obj.Flower != nil && obj.Flower.Flags != nil && (*obj.Flower.Flags&tc.SkipSw) != 0
+}
+
 // isManagedFilter reports whether an installed filter is one this backend owns.
-// Managed filters are flower filters carrying the SkipSw flag (every filter we
-// install sets it); non-flower or software filters are left untouched.
+// Managed filters are flower filters carrying an explicit offload flag: SkipSw
+// (hardware mode, the production default) OR SkipHw (software mode). Every
+// filter this backend installs stamps exactly one of the two (OffloadAuto,
+// which would carry neither, is rejected at build time — see parseOffloadMode),
+// so keying on "flower AND (SkipSw or SkipHw)" recognizes our filters in both
+// modes while leaving foreign filters (non-flower, or a plain software flower
+// with no skip_hw flag) untouched.
 func isManagedFilter(obj tc.Object) bool {
-	if obj.Kind != "flower" || obj.Flower == nil {
+	if obj.Kind != "flower" || obj.Flower == nil || obj.Flower.Flags == nil {
 		return false
 	}
-	return obj.Flower.Flags != nil && (*obj.Flower.Flags&tc.SkipSw) != 0
+	return (*obj.Flower.Flags & (tc.SkipSw | tc.SkipHw)) != 0
 }
