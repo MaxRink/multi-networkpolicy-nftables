@@ -146,12 +146,21 @@ func NewPodInfoFromPod(ctx context.Context, pod *corev1.Pod, criClient pb.Runtim
 
 			for _, pluginName := range networkPlugins {
 				if networkPluginsMap[namespacedName] == pluginName {
-					netifs = append(netifs, InterfaceInfo{
+					iface := InterfaceInfo{
 						NetattachName: s.Name,
 						InterfaceName: s.Interface,
 						InterfaceType: networkPluginsMap[namespacedName],
 						IPs:           s.IPs,
-					})
+					}
+					// Carry SR-IOV device info (VF PCI address, PF PCI address,
+					// host representor netdev) when the CNI reported it, so the
+					// interface can be enforced on its VF representor via tc flower.
+					if s.DeviceInfo != nil && s.DeviceInfo.Pci != nil {
+						iface.PCIAddress = s.DeviceInfo.Pci.PciAddress
+						iface.PFPCIAddress = s.DeviceInfo.Pci.PfPciAddress
+						iface.RepresentorDevice = s.DeviceInfo.Pci.RepresentorDevice
+					}
+					netifs = append(netifs, iface)
 				}
 			}
 		}
