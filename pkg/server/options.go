@@ -55,6 +55,7 @@ type Options struct {
 	// Defaults to "" (all interfaces); set to "127.0.0.1" to restrict to loopback.
 	healthBindAddress string
 	tcOffloadMode     string
+	enableTCBackend   bool
 
 	// updated by command line parsing
 	allowSrcPrefix []string
@@ -70,6 +71,7 @@ type ReconcilerConfig struct {
 	ContainerRuntimeEndpoint string
 	NetworkPlugins           []string
 	SyncPeriodSeconds        int
+	EnableTCBackend          bool
 	CommonRuleConfig         controllers.CommonRuleConfig
 }
 
@@ -96,6 +98,7 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&o.healthPort, "health-port", 0, "TCP port for the health HTTP server (0 to disable, 1-65535 to enable).")
 	fs.StringVar(&o.healthBindAddress, "health-bind-address", "", "IP address the health HTTP server binds to (empty = all interfaces, 127.0.0.1 = loopback only).")
 	fs.StringVar(&o.tcOffloadMode, "tc-offload-mode", "hardware", "tc flower offload mode for the SR-IOV backend: 'hardware' (skip_sw, hardware-only, fail-closed; production default) or 'software' (skip_hw, in-kernel software enforcement). Ignored by the nft backend.")
+	fs.BoolVar(&o.enableTCBackend, "enable-tc-backend", true, "Enable the SR-IOV tc-flower dataplane backend for VF-representor interfaces. When false, SR-IOV interfaces are NOT enforced by this daemon (only the nftables backend runs). Default: true.")
 	fs.AddGoFlagSet(flag.CommandLine)
 }
 
@@ -166,6 +169,7 @@ func (o *Options) BuildReconcilerConfig() (*ReconcilerConfig, error) {
 		ContainerRuntimeEndpoint: o.containerRuntimeEndpoint,
 		NetworkPlugins:           o.networkPlugins,
 		SyncPeriodSeconds:        o.syncPeriod,
+		EnableTCBackend:          o.enableTCBackend,
 		CommonRuleConfig: controllers.CommonRuleConfig{
 			AcceptICMP:     o.acceptICMP,
 			AcceptICMPv6:   o.acceptICMPv6,
@@ -180,6 +184,10 @@ func (o *Options) BuildReconcilerConfig() (*ReconcilerConfig, error) {
 func NewOptions() *Options {
 	return &Options{
 		containerRuntime: controllers.Cri,
+		// The SR-IOV tc-flower backend is on by default; AddFlags also sets this
+		// default for the CLI path, but set it here too so an Options built
+		// programmatically without AddFlags still defaults to enabled.
+		enableTCBackend: true,
 	}
 }
 

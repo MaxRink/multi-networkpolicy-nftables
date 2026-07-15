@@ -487,6 +487,59 @@ func TestReconcile_MixedInterfacesDispatchToBothBackends(t *testing.T) {
 	}
 }
 
+func TestReconcile_TCBackendDisabledSkipsSRIOV(t *testing.T) {
+	namespace, nodeName := testScope(t)
+	pod := newPod(namespace, "pod-mixed-tcoff", nodeName, map[string]string{"app": "demo"})
+	seedObjects(t,
+		newNamespace(namespace, nil),
+		newNode(nodeName),
+		pod,
+	)
+	setPodRunning(t, pod)
+
+	nftCalled := false
+	tcCalled := false
+	r := &NodeReconciler{
+		NodeName:          nodeName,
+		Client:            testClient,
+		TCBackendDisabled: true, // <-- --enable-tc-backend=false
+		PolicyDeps: &mockPolicyDeps{
+			listPodsFunc: func(labels.Selector) ([]*corev1.Pod, error) {
+				return []*corev1.Pod{pod}, nil
+			},
+			getPodInfoFunc: func(*corev1.Pod) (*controllers.PodInfo, error) {
+				return &controllers.PodInfo{
+					Name:      pod.Name,
+					Namespace: pod.Namespace,
+					NodeName:  nodeName,
+					Interfaces: []controllers.InterfaceInfo{
+						{NetattachName: "macvlan-net", InterfaceName: "net1", InterfaceType: "macvlan", IPs: []netip.Addr{netip.MustParseAddr("10.0.0.1")}},
+						{NetattachName: "sriov-net", InterfaceName: "net2", PCIAddress: "0000:04:00.2", RepresentorDevice: "enp4s0f0_3"},
+					},
+				}, nil
+			},
+		},
+		ApplyRulesForPodFunc: func(context.Context, controllers.PolicyDeps, controllers.CommonRuleConfig, controllers.PolicyMap, *corev1.Pod, *controllers.PodInfo, string) error {
+			nftCalled = true
+			return nil
+		},
+		ApplyTCRulesForPodFunc: func(context.Context, controllers.PolicyDeps, controllers.CommonRuleConfig, controllers.PolicyMap, *corev1.Pod, *controllers.PodInfo, string) error {
+			tcCalled = true
+			return nil
+		},
+	}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if tcCalled {
+		t.Fatal("tc backend must NOT be invoked when TCBackendDisabled is set")
+	}
+	if !nftCalled {
+		t.Fatal("nft backend must still run for the pod's veth-style interface")
+	}
+}
+
 func TestReconcile_TCBackendErrorDoesNotAbortNFT(t *testing.T) {
 	namespace, nodeName := testScope(t)
 	pod := newPod(namespace, "pod-mixed-err", nodeName, map[string]string{"app": "demo"})
