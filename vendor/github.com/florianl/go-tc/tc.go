@@ -3,12 +3,17 @@ package tc
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/florianl/go-tc/internal/unix"
 	"github.com/josharian/native"
 	"github.com/mdlayher/netlink"
 )
+
+// tcMsgHdrLen is the length in bytes of the Msg header that precedes the
+// attributes in every qdisc/class/filter netlink message.
+const tcMsgHdrLen = 20
 
 // tcConn defines a subset of netlink.Conn.
 type tcConn interface {
@@ -24,11 +29,31 @@ type tcConn interface {
 var _ tcConn = &netlink.Conn{}
 
 // Tc represents a RTNETLINK wrapper
+//
+// A Tc wraps a single netlink socket. That socket cannot be used for a
+// synchronous call (e.g. Qdisc().Get(), Filter().Add()) and Monitor() or
+// MonitorWithErrorFunc() at the same time. Replies to synchronous calls and
+// messages destined for a Monitor loop are read from the same underlying
+// connection with no way to tell them apart, so one call can accidentally
+// consume the message meant for the other. Open a dedicated Tc for
+// Monitor()/MonitorWithErrorFunc() and use a separate one for synchronous
+// calls. Once a Monitor loop is active on a Tc, synchronous calls on it
+// return ErrMonitorActive.
 type Tc struct {
 	con tcConn
+
+	// TODO: Switch to *atomic.Bool once upgraded to Go 1.19.
+	monitoring *atomic.Value
 }
 
 var nativeEndian = native.Endian
+
+// newMonitoringFlag returns an atomic.Value ready to guard a Tc's connection.
+func newMonitoringFlag() *atomic.Value {
+	v := new(atomic.Value)
+	v.Store(false)
+	return v
+}
 
 // Open establishes a RTNETLINK socket for traffic control
 func Open(config *Config) (*Tc, error) {
@@ -43,8 +68,31 @@ func Open(config *Config) (*Tc, error) {
 		return nil, err
 	}
 	tc.con = con
+	tc.monitoring = newMonitoringFlag()
 
 	return &tc, nil
+}
+
+// monitoringActive reports whether a Monitor loop is currently receiving on
+// this connection.
+func (tc *Tc) monitoringActive() bool {
+	return tc.monitoring != nil && tc.monitoring.Load().(bool)
+}
+
+// tryStartMonitoring marks this connection as being monitored. It reports
+// false if a Monitor loop is already active on it.
+func (tc *Tc) tryStartMonitoring() bool {
+	if tc.monitoring == nil {
+		return true
+	}
+	return tc.monitoring.CompareAndSwap(false, true)
+}
+
+// stopMonitoring clears the monitoring flag set by tryStartMonitoring.
+func (tc *Tc) stopMonitoring() {
+	if tc.monitoring != nil {
+		tc.monitoring.Store(false)
+	}
 }
 
 // SetOption allows to enable or disable netlink socket options.
@@ -58,6 +106,10 @@ func (tc *Tc) Close() error {
 }
 
 func (tc *Tc) query(req netlink.Message) ([]netlink.Message, error) {
+	if tc.monitoringActive() {
+		return nil, ErrMonitorActive
+	}
+
 	verify, err := tc.con.Send(req)
 	if err != nil {
 		return nil, err
@@ -100,6 +152,9 @@ func (tc *Tc) action(action int, flags netlink.HeaderFlags, msg interface{}, opt
 	for _, msg := range msgs {
 		switch msg.Header.Type {
 		case netlink.Error:
+			if len(msg.Data) < 4 {
+				return fmt.Errorf("received error message from netlink: %w", ErrShortMsg)
+			}
 			errCode := bytesToInt32(msg.Data[:4])
 			// Check if the success message is embedded encoded as error code 0:
 			if errCode != 0 {
@@ -138,11 +193,14 @@ func (tc *Tc) get(action int, i *Msg) ([]Object, error) {
 	}
 
 	for _, msg := range msgs {
+		if len(msg.Data) < tcMsgHdrLen {
+			return results, fmt.Errorf("received message from netlink: %w", ErrShortMsg)
+		}
 		var result Object
-		if err := unmarshalStruct(msg.Data[:20], &result.Msg); err != nil {
+		if err := unmarshalStruct(msg.Data[:tcMsgHdrLen], &result.Msg); err != nil {
 			return results, err
 		}
-		if err := extractTcmsgAttributes(action, msg.Data[20:], &result.Attribute); err != nil {
+		if err := extractTcmsgAttributes(action, msg.Data[tcMsgHdrLen:], &result.Attribute); err != nil {
 			return results, err
 		}
 		results = append(results, result)
@@ -281,12 +339,25 @@ type ErrorFunc func(e error) int
 
 // MonitorWithErrorFunc handles NETLINK_ROUTE messages and calls for each HookFunc.
 // Received errors tigger the given ErrorFunc.
+//
+// This dedicates tc's connection to monitoring until the loop stops: do not use tc, or any
+// Qdisc()/Filter()/Class()/Chain()/Actions() derived from it, for synchronous calls while the
+// loop is running, and do not call Monitor()/MonitorWithErrorFunc() again on it. Either will
+// return ErrMonitorActive. See the Tc doc comment for details, and use a separate Tc, opened
+// via Open(), for synchronous calls.
 func (tc *Tc) MonitorWithErrorFunc(ctx context.Context, deadline time.Duration,
-	fn HookFunc, errfn ErrorFunc) error {
+	fn HookFunc, errfn ErrorFunc,
+) error {
 	return tc.monitor(ctx, deadline, fn, errfn)
 }
 
 // Monitor NETLINK_ROUTE messages
+//
+// This dedicates tc's connection to monitoring until the loop stops: do not use tc, or any
+// Qdisc()/Filter()/Class()/Chain()/Actions() derived from it, for synchronous calls while the
+// loop is running, and do not call Monitor()/MonitorWithErrorFunc() again on it. Either will
+// return ErrMonitorActive. See the Tc doc comment for details, and use a separate Tc, opened
+// via Open(), for synchronous calls.
 //
 // Deprecated: Use MonitorWithErrorFunc() instead.
 func (tc *Tc) Monitor(ctx context.Context, deadline time.Duration, fn HookFunc) error {
@@ -301,11 +372,17 @@ func (tc *Tc) Monitor(ctx context.Context, deadline time.Duration, fn HookFunc) 
 }
 
 func (tc *Tc) monitor(ctx context.Context, deadline time.Duration,
-	fn HookFunc, errfn ErrorFunc) error {
+	fn HookFunc, errfn ErrorFunc,
+) error {
+	if !tc.tryStartMonitoring() {
+		return ErrMonitorActive
+	}
+
 	ifinfomsg, err := marshalStruct(unix.IfInfomsg{
 		Family: unix.AF_UNSPEC,
 	})
 	if err != nil {
+		tc.stopMonitoring()
 		return err
 	}
 
@@ -313,6 +390,7 @@ func (tc *Tc) monitor(ctx context.Context, deadline time.Duration,
 		{Interpretation: vtUint32, Type: unix.IFLA_EXT_MASK, Data: uint32(1)},
 	})
 	if err != nil {
+		tc.stopMonitoring()
 		return err
 	}
 
@@ -328,21 +406,25 @@ func (tc *Tc) monitor(ctx context.Context, deadline time.Duration,
 	}
 
 	if err := tc.con.JoinGroup(unix.RTNLGRP_TC); err != nil {
+		tc.stopMonitoring()
 		return err
 	}
 
 	verify, err := tc.con.Send(req)
 	if err != nil {
 		tc.con.LeaveGroup(unix.RTNLGRP_TC)
+		tc.stopMonitoring()
 		return err
 	}
 
 	if err := netlink.Validate(req, []netlink.Message{verify}); err != nil {
 		tc.con.LeaveGroup(unix.RTNLGRP_TC)
+		tc.stopMonitoring()
 		return err
 	}
 
 	go func() {
+		defer tc.stopMonitoring()
 		go func() {
 			<-ctx.Done()
 			stop := time.Now().Add(deadline)
@@ -361,11 +443,14 @@ func (tc *Tc) monitor(ctx context.Context, deadline time.Duration,
 				continue
 			}
 			for _, msg := range msgs {
-				var monitored Object
-				if err := unmarshalStruct(msg.Data[:20], &monitored.Msg); err != nil {
+				if len(msg.Data) < tcMsgHdrLen {
 					continue
 				}
-				if err := extractTcmsgAttributes(int(msg.Header.Type), msg.Data[20:],
+				var monitored Object
+				if err := unmarshalStruct(msg.Data[:tcMsgHdrLen], &monitored.Msg); err != nil {
+					continue
+				}
+				if err := extractTcmsgAttributes(int(msg.Header.Type), msg.Data[tcMsgHdrLen:],
 					&monitored.Attribute); err != nil {
 					continue
 				}

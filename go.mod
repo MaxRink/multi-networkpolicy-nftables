@@ -5,13 +5,15 @@ go 1.25.13
 require (
 	github.com/containernetworking/cni v1.3.0
 	github.com/containernetworking/plugins v1.9.0
-	github.com/florianl/go-tc v0.4.8
+	github.com/florianl/go-tc v0.4.9-0.20260715183334-04acaa107113
 	github.com/google/nftables v0.3.1-0.20251119083706-1db35da82052
 	github.com/k8snetworkplumbingwg/multi-networkpolicy v1.0.1
 	github.com/k8snetworkplumbingwg/network-attachment-definition-client v1.7.7
 	github.com/mdlayher/netlink v1.8.1-0.20251028132421-dcc6cab9a6eb
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/gomega v1.39.1
+	github.com/prometheus/client_golang v1.23.2
+	github.com/prometheus/client_model v0.6.2
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/vishvananda/netns v0.0.5
@@ -59,8 +61,6 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nxadm/tail v1.4.8 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/prometheus/client_golang v1.23.2 // indirect
-	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
@@ -118,5 +118,3 @@ replace (
 	k8s.io/pod-security-admission => k8s.io/pod-security-admission v0.35.1
 	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.35.1
 )
-
-replace github.com/florianl/go-tc => github.com/MaxRink/go-tc v0.4.9-0.20260715140802-3da426f39fea
