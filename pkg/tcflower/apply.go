@@ -112,6 +112,76 @@ func Apply(ctx context.Context, deps controllers.PolicyDeps, cfg controllers.Com
 	return errors.Join(errs...)
 }
 
+// Flush removes all daemon-managed tc flower filters from the representors of a
+// pod's SR-IOV interfaces. It is called on pod delete and daemon shutdown.
+//
+// It is tolerant of a representor that has already gone away (VF returned to the
+// host, node reboot): an unresolvable representor or a missing clsact qdisc is
+// treated as "nothing to clean", not an error. Only managed filters (flower +
+// SkipSw) are removed; the clsact qdisc itself is left in place because it may
+// be shared with other tenants of the same representor.
+func Flush(_ context.Context, podInfo *controllers.PodInfo, hostPrefix string) error {
+	if podInfo == nil {
+		return nil
+	}
+
+	drv, err := NewDriver()
+	if err != nil {
+		return fmt.Errorf("open tc driver: %w", err)
+	}
+	defer func() {
+		if cerr := drv.Close(); cerr != nil {
+			klog.Errorf("failed to close tc driver: %v", cerr)
+		}
+	}()
+
+	var errs []error
+	for _, iface := range podInfo.Interfaces {
+		if !iface.IsSRIOV() {
+			continue
+		}
+
+		rep, err := ResolveRepresentor(hostPrefix, iface)
+		if err != nil {
+			// The representor is gone (VF returned to host, reboot): nothing to
+			// clean. Not an error.
+			klog.V(4).Infof("tc flush: representor for interface %q unresolved, skipping: %v", iface.InterfaceName, err)
+			continue
+		}
+		if rep.IfIndex == 0 {
+			continue
+		}
+		if err := flushRepresentor(drv, rep.IfIndex); err != nil {
+			errs = append(errs, fmt.Errorf("flush filters on representor %q: %w", rep.Name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// flushRepresentor deletes every managed filter on both clsact parents of the
+// representor. A representor with no clsact qdisc (ListFilters errors) is
+// treated as already-clean.
+func flushRepresentor(drv Driver, ifindex int) error {
+	var errs []error
+	for _, parent := range []uint32{DirIngress.parentHandle(), DirEgress.parentHandle()} {
+		objs, err := drv.ListFilters(ifindex, int(parent))
+		if err != nil {
+			// No clsact qdisc / no filters: nothing to clean on this parent.
+			klog.V(4).Infof("tc flush: list filters on ifindex %d parent %#x: %v", ifindex, parent, err)
+			continue
+		}
+		for _, obj := range objs {
+			if !isManagedFilter(obj) {
+				continue
+			}
+			if err := drv.DelFilter(obj); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // filterKey identifies an installed managed filter for diffing.
 //
 // chain is part of the key because the CT-offload pipeline (Phase 4) installs
