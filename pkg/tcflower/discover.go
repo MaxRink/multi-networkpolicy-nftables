@@ -255,7 +255,7 @@ func readLinkBase(link string) (string, error) {
 // readTrimmedFile returns the trimmed content of a sysfs file, or "" if it is
 // absent or unreadable.
 func readTrimmedFile(path string) string {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // sysfs path under the daemon-controlled host prefix; reading device attrs is the intended behavior
 	if err != nil {
 		return ""
 	}

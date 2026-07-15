@@ -1524,7 +1524,7 @@ func (n *nftState) applyPolicyPeersRulesSelector(ctx context.Context, deps contr
 		}
 	}
 	// Build set of protected IPs from the protected pod
-	protectedIPs := make(map[string]struct{})
+	protectedIPs := make(map[netip.Addr]struct{})
 	for _, podIntf := range podInfo.Interfaces {
 		if !podIntf.CheckPolicyNetwork(policyNetworks) {
 			continue
@@ -1557,7 +1557,7 @@ func (n *nftState) applyPolicyPeersRulesSelector(ctx context.Context, deps contr
 			}
 			for _, ip := range sPodIntf.IPs {
 				if _, isProtected := protectedIPs[ip]; !isProtected {
-					globalPeerIPs[ip] = struct{}{}
+					globalPeerIPs[ip.String()] = struct{}{}
 				}
 			}
 		}
