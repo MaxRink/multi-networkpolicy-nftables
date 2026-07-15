@@ -51,6 +51,27 @@ allowed.
 |------|---------|--------|
 | `--enable-tc-backend` | `true` | Master switch for the whole SR-IOV tc backend. When `false`, every interface that would route to the tc backend is skipped — SR-IOV VFs are **not enforced** by this daemon and only the nftables backend runs. Use to opt out entirely on nodes/clusters where SR-IOV enforcement is not wanted. |
 | `--tc-offload-mode` | `hardware` | `hardware` = `skip_sw` (hardware-only, fail-closed on insertion; production default). `software` = `skip_hw` (in-kernel software enforcement; for debugging/emulation without offload-capable HW). Ignored by the nftables backend. |
+| `--tc-ct-mode` | `auto` | Stateful conntrack (CT) offload policy. `auto`: emit the CT pipeline where the NIC can hardware-offload it (SMFS steering), otherwise **degrade to the stateless pipeline** and log the lost stateful tracking (DMFS cannot offload CT). `require`: always emit CT; if the NIC cannot offload it the filters are rejected and the interface is left unenforced (fail-closed, stateful-or-nothing). `off`: never use CT (always stateless). Ignored by the nftables backend. |
+
+### Graceful degradation — always enforce the maximum the hardware allows
+
+The backend never silently does nothing. On each representor it enforces the
+largest offloadable subset of the policy for the current NIC/steering config and
+**logs, once, what was lost and how to recover it**:
+
+- **Stateless allow/deny** (5-tuple, CIDR, ports, both IPv4 and IPv6) offloads on
+  any switchdev NIC with `hw-tc-offload on`, regardless of steering mode.
+- **Stateful CT** (established/related auto-accept) needs SMFS; under
+  `--tc-ct-mode=auto` a DMFS/HMFS/unknown NIC degrades to stateless and logs an
+  info-level "improvement available: switch to SMFS" line.
+- If even the stateless filters cannot be offloaded (e.g. `hw-tc-offload off` in
+  hardware mode) insertion fails **fail-closed** and the error is surfaced (log +
+  `multinetworkpolicy_tc_filter_apply_errors_total{reason="skip_sw"}`), never
+  silently allowed.
+
+See [SR-IOV tc backend operations & debugging](sriov-tc-operations.md) for the
+per-mode capability matrix, the exact log lines, metrics, and a debugging
+runbook.
 
 Disabling the backend cluster-wide:
 
