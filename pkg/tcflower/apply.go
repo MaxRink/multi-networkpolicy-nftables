@@ -22,6 +22,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"syscall"
+	"time"
 
 	tc "github.com/florianl/go-tc"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
@@ -98,15 +100,23 @@ func Apply(ctx context.Context, deps controllers.PolicyDeps, cfg controllers.Com
 			continue
 		}
 
+		// Observe the per-representor enforcement latency (build+ensure+reconcile)
+		// regardless of outcome. Timing starts here — after resolution/preflight,
+		// which are gated separately — so the histogram reflects dataplane work.
+		start := time.Now()
+
 		if err := drv.EnsureClsact(rep.IfIndex); err != nil {
+			observeReconcileDuration(rep.Name, start)
 			errs = append(errs, err)
 			continue
 		}
 
-		if err := reconcile(drv, rep.IfIndex, desired); err != nil {
+		if err := reconcile(drv, rep.Name, rep.IfIndex, desired); err != nil {
+			observeReconcileDuration(rep.Name, start)
 			errs = append(errs, fmt.Errorf("reconcile filters on representor %q: %w", rep.Name, err))
 			continue
 		}
+		observeReconcileDuration(rep.Name, start)
 	}
 
 	return errors.Join(errs...)
@@ -207,17 +217,25 @@ func filterChain(obj tc.Object) uint32 {
 }
 
 // reconcile installs missing filters and removes stale managed filters on the
-// representor, per direction/parent.
-func reconcile(drv Driver, ifindex int, desired []FlowerRule) error {
+// representor, per direction/parent. rep is the representor netdev name, used
+// only for metric labels (fail-closed observability).
+func reconcile(drv Driver, rep string, ifindex int, desired []FlowerRule) error {
 	// Build desired objects keyed by (parent, prio, handle).
 	desiredObjs := make(map[filterKey]tc.Object, len(desired))
 	parents := make(map[uint32]struct{})
+	desiredPerDir := make(map[Direction]int)
 	for _, r := range desired {
 		obj := r.toObject(ifindex)
 		key := filterKey{parent: obj.Parent, chain: r.Chain, prio: r.Priority, handle: obj.Handle}
 		desiredObjs[key] = obj
 		parents[obj.Parent] = struct{}{}
+		desiredPerDir[r.Direction]++
 	}
+	// Publish the desired filter count per direction. Both directions are set
+	// (0 when a direction carries no rules) so removing all policies for a
+	// direction is reflected as a drop to zero, not a stale gauge.
+	setFiltersInstalled(rep, DirIngress.String(), desiredPerDir[DirIngress])
+	setFiltersInstalled(rep, DirEgress.String(), desiredPerDir[DirEgress])
 
 	// Always reconcile both representor parents so that removing all policies
 	// tears the previously-installed filters down.
@@ -246,6 +264,10 @@ func reconcile(drv Driver, ifindex int, desired []FlowerRule) error {
 	// or not the filter was in `installed`.
 	for _, obj := range desiredObjs {
 		if err := drv.AddFilter(obj); err != nil {
+			// Classify the failure for the fail-closed error counter: a hardware
+			// offload rejection (skip_sw insertion refused) is the security-
+			// critical case and is labeled distinctly from other add failures.
+			incFilterApplyError(rep, addErrorReason(err))
 			return err
 		}
 	}
@@ -256,11 +278,25 @@ func reconcile(drv Driver, ifindex int, desired []FlowerRule) error {
 			continue
 		}
 		if err := drv.DelFilter(obj); err != nil {
+			incFilterApplyError(rep, reasonDelete)
 			return err
 		}
 	}
 
 	return nil
+}
+
+// addErrorReason classifies an AddFilter failure for the apply-error counter.
+// Every managed filter carries the SkipSw (hardware-only) flag, so the kernel
+// rejects an un-offloadable filter rather than falling back to software. That
+// rejection surfaces as EOPNOTSUPP/ENOTSUPP from the driver; we label it
+// skip_sw (the fail-closed offload-insertion signal). Anything else is a
+// generic add failure.
+func addErrorReason(err error) string {
+	if errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.ENOTSUP) {
+		return reasonSkipSw
+	}
+	return reasonAdd
 }
 
 // isManagedFilter reports whether an installed filter is one this backend owns.
