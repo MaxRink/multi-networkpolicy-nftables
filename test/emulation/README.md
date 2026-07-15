@@ -16,7 +16,7 @@ CI runners have varying `netdevsim`/`devlink`/`tc` support.
 | **A — discovery** | `netdevsim-discovery.sh` + `pkg/tcflower/netdevsim_linux_test.go` (`ResolveRepresentor` path is Go-tested against fake sysfs elsewhere) | `netdevsim` can present a switchdev topology (`phys_switch_id` / `phys_port_name`) that the sysfs representor-resolution algorithm can be pointed at. | `netdevsim` + `devlink … mode switchdev` |
 | **B — control plane** | `pkg/tcflower/netdevsim_linux_test.go` | The real `netlinkDriver` (go-tc) round-trips a flower filter built from `FlowerRule.toObject`: EnsureClsact → AddFilter → ListFilters (assert keys present) → DelFilter (assert gone). Exercises the actual netlink marshaling end-to-end. | `netdevsim` netdev |
 | **C — software enforcement** | `veth-flower-enforcement.sh` | A flower `... action drop` filter installed on a real qdisc **actually drops** matching traffic and passes non-matching traffic. This is the T2 enforcement-correctness proof for the *translation* (`BuildFlowerRules`/`toObject`) — run in **software** (no `skip_sw`) because veth/netdevsim have no HW offload. | veth pair + netns + clsact |
-| **D — offloaded drop actually blocks** | *(future — not implemented here)* | That a `skip_sw` (hardware-only) filter, once accepted by the NIC, blocks packets in the eSwitch. | **Cannot** be emulated on stock `netdevsim` |
+| **D — offloaded drop actually blocks** | *(future — patched-kernel VM via `vm-run.sh` + `VNG_KERNEL`)* | That a `skip_sw` (hardware-only) filter, once accepted by the NIC, blocks packets in the eSwitch. | Needs a patched `netdevsim` kernel booted in the VM tier; **not** possible on stock `netdevsim` |
 
 ## Running
 
@@ -30,10 +30,36 @@ sudo bash test/emulation/veth-flower-enforcement.sh
 
 # the Go control-plane integration test (self-skips without root/netdevsim/-short):
 sudo -E go test -run Netdevsim ./pkg/tcflower/... -v
+
+# the software-enforcement e2e (drives the REAL engine: BuildFlowerRules ->
+# real netlink driver on a veth -> asserts packets are actually dropped/allowed):
+sudo -E go test -run E2E ./pkg/tcflower/... -v
 ```
 
 All scripts use `set -euo pipefail` and clean up their netns / netdevsim devices
 via `trap`.
+
+## VM tier — closest to reality without hardware
+
+`vm-run.sh` boots the whole suite inside a **real VM kernel** via KVM
+([virtme-ng](https://github.com/arighi/virtme-ng)), reusing the host rootfs so
+the Go toolchain and repo checkout are available with no image build:
+
+```sh
+# needs /dev/kvm (nested virtualization) + `vng`; skips (exit 0) otherwise:
+bash test/emulation/vm-run.sh
+```
+
+A shared-kernel container (e.g. the default GitHub-runner environment) often
+lacks the `netdevsim` module and `devlink` switchdev support, so Layers A/B
+*skip* there. A VM has a full kernel with modules, so it actually runs them.
+This is wired in GitLab CI as the `tc-flower-vm-e2e` job (GitLab runners support
+KVM); set `VM_E2E_RUNNER_TAG` to a KVM-capable runner tag to enable it.
+
+**Layer D via a patched kernel:** point `VNG_KERNEL` at a built kernel tree /
+`bzImage` whose `netdevsim` `TC_SETUP_CLSFLOWER` handler enforces offloaded
+flower rules, and `vm-run.sh` boots that instead of the host kernel — the path
+to closing the Layer-D gap in CI (still short of real CX5 silicon).
 
 ## What is NOT emulated (remains CX5-gated)
 
