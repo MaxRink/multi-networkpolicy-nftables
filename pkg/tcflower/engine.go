@@ -96,8 +96,53 @@ func (v Verdict) String() string {
 
 // tc gact control actions (from include/uapi/linux/pkt_cls.h).
 const (
-	tcActOK   uint32 = 0 // TC_ACT_OK   — accept/pass
-	tcActShot uint32 = 2 // TC_ACT_SHOT — drop
+	tcActOK        uint32 = 0          // TC_ACT_OK   — accept/pass
+	tcActPipe      uint32 = 3          // TC_ACT_PIPE — continue to the next action in the list
+	tcActShot      uint32 = 2          // TC_ACT_SHOT — drop
+	tcActGotoChain uint32 = 0x40000000 // TC_ACT_GOTO_CHAIN — jump to (control & TC_ACT_EXT_VAL_MASK) chain
+)
+
+// conntrack ct_state flag bits (from include/uapi/linux/pkt_cls.h,
+// TCA_FLOWER_KEY_CT_FLAGS_*). These are matched via the flower KeyCtState /
+// KeyCtStateMask key pair. A match encodes (value, mask): a bit set in the mask
+// is examined; the corresponding value bit is the required setting.
+const (
+	ctStateNew         uint16 = 1 << 0 // +new  — first packet of a new connection
+	ctStateEstablished uint16 = 1 << 1 // +est  — part of an established connection
+	ctStateRelated     uint16 = 1 << 2 // +rel  — related to an established connection
+	ctStateTracked     uint16 = 1 << 3 // +trk  — the packet has been through conntrack
+	ctStateInvalid     uint16 = 1 << 4 // +inv  — conntrack could not classify the packet
+	ctStateReply       uint16 = 1 << 5 // +rpl  — reply direction of a tracked connection
+)
+
+// conntrack ct action bitfield (struct tc_ct / TCA_CT_ACT_* from
+// include/uapi/linux/tc_act/tc_ct.h). Carried in go-tc's Ct.Action.
+const (
+	ctActCommit uint16 = 1 // TCA_CT_ACT_COMMIT — commit the (new) connection to conntrack
+	ctActForce  uint16 = 2 // TCA_CT_ACT_FORCE
+	ctActClear  uint16 = 4 // TCA_CT_ACT_CLEAR
+	ctActNAT    uint16 = 8 // TCA_CT_ACT_NAT
+)
+
+// The full ct_state and ct-action bit sets are declared above to document the
+// UAPI as a unit; only a subset is currently emitted. Reference the remainder
+// so the enum stays complete without tripping the unused-symbol linter.
+var _ = [...]uint16{ctStateNew, ctStateReply, ctActForce, ctActClear, ctActNAT}
+
+// CT pipeline chain numbers. In stateful (CT offload) mode traffic is split
+// across two tc filter chains per representor parent:
+//   - chain 0 (ctEntryChain) is the entry chain: it dispatches untracked
+//     packets through conntrack and statefully accepts established/related
+//     return traffic (mirroring the nft backend's allowConntracked).
+//   - chain 1 (ctPolicyChain) holds the per-policy allow/except/default-deny
+//     rules — the same first-match set as the stateless pipeline, except each
+//     accept also commits the NEW connection so its reply is tracked.
+//
+// In stateless mode everything lives in chain 0 (ctEntryChain), exactly as in
+// Phase 2, so the stateless golden output is unchanged.
+const (
+	ctEntryChain  uint32 = 0
+	ctPolicyChain uint32 = 1
 )
 
 // FlowerRule is an abstract, comparable description of one desired tc flower
@@ -134,6 +179,40 @@ type FlowerRule struct {
 
 	// Verdict is the terminal action.
 	Verdict Verdict
+
+	// --- CT (stateful) offload fields (Phase 4) ---
+	//
+	// These are all zero-valued for stateless (Phase 2) rules, so a stateless
+	// FlowerRule is byte-for-byte identical to before and the existing golden
+	// output is unchanged. They are only populated when CT is enabled.
+
+	// Chain is the tc filter chain this rule lives in (ctEntryChain /
+	// ctPolicyChain). Zero == chain 0 (the default), which is also the only
+	// chain used in stateless mode.
+	Chain uint32
+
+	// HasCTState reports whether a ct_state match (CTState/CTStateMask) is
+	// present on this filter. Used by the chain-0 dispatch/accept rules.
+	HasCTState  bool
+	CTState     uint16 // ct_state value bits (see ctState* consts)
+	CTStateMask uint16 // ct_state mask bits: which flags are examined
+
+	// CTCommit, when set on an accept rule, prepends a `ct commit` action
+	// (zone CTZone) before the terminal gact pass, so the NEW connection is
+	// committed to conntrack and its reply direction is tracked.
+	CTCommit bool
+
+	// CTDispatch, when set, marks the chain-0 untracked-packet rule whose
+	// action list is [ct (zone CTZone) pipe, gact goto_chain GotoChain]: send
+	// the packet through conntrack, then continue policy evaluation in
+	// GotoChain.
+	CTDispatch bool
+	GotoChain  uint32 // goto-chain target for a CTDispatch rule
+
+	// CTZone is the conntrack zone used by the ct/ct-commit actions. It is
+	// per-representor+direction so connections on different reps/directions do
+	// not collide in a shared conntrack table.
+	CTZone uint16
 }
 
 // priority tiers. Lower tier => numerically lower priority => evaluated first.
@@ -143,6 +222,18 @@ const (
 	tierExcept  = 0 // ipBlock.Except drops
 	tierAllow   = 1 // allow (accept) rules
 	tierDefault = 2 // default-deny catch-all
+)
+
+// priority tiers WITHIN the CT entry chain (chain 0). Priorities are numbered
+// independently per (direction, chain), so these reuse the same numeric space
+// as the policy-chain tiers above without colliding. The ct_state matches are
+// mutually exclusive (they differ in the +trk / +est / +rel / +inv bits), so
+// ordering only needs to be deterministic, not semantically layered; the tiers
+// give a stable, readable order.
+const (
+	tierCTInvalid  = 0 // +trk+inv  -> drop (defensive)
+	tierCTEstRel   = 1 // +trk+est / +trk+rel -> accept (stateful return traffic)
+	tierCTDispatch = 2 // -trk      -> ct + goto policy chain
 )
 
 // candidate is an in-progress FlowerRule plus the metadata used to allocate a
@@ -173,7 +264,10 @@ type candidate struct {
 // IPv4 ONLY: IPv6 peer IPs and v6 CIDRs are skipped (TODO Phase 3).
 func BuildFlowerRules(ctx context.Context, deps controllers.PolicyDeps, cfg controllers.CommonRuleConfig,
 	policyMap controllers.PolicyMap, pod *corev1.Pod, podInfo *controllers.PodInfo, iface controllers.InterfaceInfo) ([]FlowerRule, error) {
-	_ = cfg // common-prefix / ICMP rules are Phase 3+; kept in the signature for parity with the nft engine.
+	// cfg.CTEnabled selects the stateful CT-offload pipeline; the remaining
+	// cfg fields (common-prefix / ICMP rules) are Phase 3+ and kept in the
+	// signature for parity with the nft engine.
+	ctEnabled := cfg.CTEnabled
 
 	rep := iface.RepresentorDevice
 	if rep == "" {
@@ -186,7 +280,7 @@ func BuildFlowerRules(ctx context.Context, deps controllers.PolicyDeps, cfg cont
 
 	for _, sp := range ingressPolicies {
 		for idx, rule := range sp.policy.Spec.Ingress {
-			c, err := expandRule(ctx, deps, rep, DirIngress, sp, idx, rule.Ports, rule.From, podInfo)
+			c, err := expandRule(ctx, deps, rep, DirIngress, sp, idx, rule.Ports, rule.From, podInfo, ctEnabled)
 			if err != nil {
 				return nil, err
 			}
@@ -195,7 +289,7 @@ func BuildFlowerRules(ctx context.Context, deps controllers.PolicyDeps, cfg cont
 	}
 	for _, sp := range egressPolicies {
 		for idx, rule := range sp.policy.Spec.Egress {
-			c, err := expandRule(ctx, deps, rep, DirEgress, sp, idx, rule.Ports, rule.To, podInfo)
+			c, err := expandRule(ctx, deps, rep, DirEgress, sp, idx, rule.Ports, rule.To, podInfo, ctEnabled)
 			if err != nil {
 				return nil, err
 			}
@@ -203,30 +297,111 @@ func BuildFlowerRules(ctx context.Context, deps controllers.PolicyDeps, cfg cont
 		}
 	}
 
-	// default-deny catch-all per direction that carries any policy.
+	// default-deny catch-all per direction that carries any policy, plus (when
+	// CT is enabled) the chain-0 conntrack dispatch/stateful-accept rules that
+	// sit in front of the per-policy chain.
 	if len(ingressPolicies) > 0 {
-		cands = append(cands, defaultDeny(rep, DirIngress))
+		cands = append(cands, defaultDeny(rep, DirIngress, ctEnabled))
+		if ctEnabled {
+			cands = append(cands, ctEntryRules(rep, DirIngress)...)
+		}
 	}
 	if len(egressPolicies) > 0 {
-		cands = append(cands, defaultDeny(rep, DirEgress))
+		cands = append(cands, defaultDeny(rep, DirEgress, ctEnabled))
+		if ctEnabled {
+			cands = append(cands, ctEntryRules(rep, DirEgress)...)
+		}
 	}
 
 	return assignPriorities(cands), nil
 }
 
-// defaultDeny builds the lowest-precedence catch-all drop for a direction.
-func defaultDeny(rep string, dir Direction) candidate {
+// ctZoneFor derives a stable, non-zero conntrack zone for a representor and
+// direction so connections tracked on different reps/directions do not collide
+// in the shared eSwitch conntrack table. The two directions of the same rep get
+// distinct zones (the low bit encodes the direction) so pod-ingress and
+// pod-egress flows are tracked independently.
+func ctZoneFor(rep string, dir Direction) uint16 {
+	h := fnv.New32a()
+	_, _ = fmt.Fprint(h, rep)
+	// Fold the 32-bit hash into 15 bits and use the low bit for direction,
+	// keeping the zone within uint16 and non-zero.
+	base := uint16(h.Sum32()&0x7fff) << 1
+	zone := base | uint16(dir)
+	if zone == 0 {
+		zone = 1
+	}
+	return zone
+}
+
+// ctEntryRules builds the chain-0 (ctEntryChain) conntrack pipeline for a
+// direction. Ordered by tier (lower prio evaluated first):
+//   - +trk+inv               -> drop (defensive: reject packets conntrack
+//     could not classify, mirroring nft's implicit invalid handling).
+//   - +trk+est / +trk+rel    -> accept (stateful return traffic; mirrors the
+//     nft backend's allowConntracked "ct state related,established accept").
+//   - -trk (untracked)       -> ct(zone) pipe + goto ctPolicyChain: run the
+//     packet through conntrack, then evaluate the per-policy rules.
+//
+// NEW packets fall through conntrack as untracked on first sight, get dispatched
+// by the -trk rule, and are then matched (and committed) by the policy chain.
+func ctEntryRules(rep string, dir Direction) []candidate {
+	zone := ctZoneFor(rep, dir)
+	base := FlowerRule{Rep: rep, Direction: dir, Chain: ctEntryChain, HasCTState: true, CTZone: zone}
+
+	invalid := base
+	invalid.CTState = ctStateTracked | ctStateInvalid
+	invalid.CTStateMask = ctStateTracked | ctStateInvalid
+	invalid.Verdict = VerdictDrop
+
+	established := base
+	established.CTState = ctStateTracked | ctStateEstablished
+	established.CTStateMask = ctStateTracked | ctStateEstablished
+	established.Verdict = VerdictAccept
+
+	related := base
+	related.CTState = ctStateTracked | ctStateRelated
+	related.CTStateMask = ctStateTracked | ctStateRelated
+	related.Verdict = VerdictAccept
+
+	dispatch := base
+	dispatch.CTState = 0
+	dispatch.CTStateMask = ctStateTracked // match -trk (tracked bit examined, value 0)
+	dispatch.CTDispatch = true
+	dispatch.GotoChain = ctPolicyChain
+	dispatch.Verdict = VerdictAccept // unused for a dispatch rule; goto-chain is the control action
+
+	return []candidate{
+		{rule: invalid, tier: tierCTInvalid},
+		{rule: established, tier: tierCTEstRel},
+		{rule: related, tier: tierCTEstRel},
+		{rule: dispatch, tier: tierCTDispatch},
+	}
+}
+
+// defaultDeny builds the lowest-precedence catch-all drop for a direction. When
+// CT is enabled it lives in the post-conntrack policy chain (ctPolicyChain).
+func defaultDeny(rep string, dir Direction, ctEnabled bool) candidate {
 	return candidate{
-		rule: FlowerRule{Rep: rep, Direction: dir, Verdict: VerdictDrop},
+		rule: FlowerRule{Rep: rep, Direction: dir, Chain: policyChain(ctEnabled), Verdict: VerdictDrop},
 		tier: tierDefault,
 	}
+}
+
+// policyChain returns the chain the per-policy allow/except/default-deny rules
+// live in: the post-conntrack chain when CT is enabled, else chain 0.
+func policyChain(ctEnabled bool) uint32 {
+	if ctEnabled {
+		return ctPolicyChain
+	}
+	return ctEntryChain
 }
 
 // expandRule expands a single ingress/egress rule (ports × peers) into
 // candidates for the given direction.
 func expandRule(ctx context.Context, deps controllers.PolicyDeps, rep string, dir Direction,
 	sp selectedPolicy, ruleIdx int, ports []multiv1beta1.MultiNetworkPolicyPort,
-	peers []multiv1beta1.MultiNetworkPolicyPeer, podInfo *controllers.PodInfo) ([]candidate, error) {
+	peers []multiv1beta1.MultiNetworkPolicyPeer, podInfo *controllers.PodInfo, ctEnabled bool) ([]candidate, error) {
 	_ = ruleIdx // ruleIdx is not needed for priority (mask-shape keyed); kept for readability/parity.
 
 	policyID := sp.policy.GetNamespace() + "/" + sp.policy.GetName()
@@ -273,14 +448,14 @@ func expandRule(ctx context.Context, deps controllers.PolicyDeps, rep string, di
 		for _, pa := range expanded {
 			for _, ex := range pa.except {
 				out = append(out, candidate{
-					rule:     buildRule(rep, dir, pm, ex, VerdictDrop),
+					rule:     buildRule(rep, dir, pm, ex, VerdictDrop, ctEnabled),
 					tier:     tierExcept,
 					policyID: policyID,
 				})
 			}
 			for _, cidr := range pa.allow {
 				out = append(out, candidate{
-					rule:     buildRule(rep, dir, pm, cidr, VerdictAccept),
+					rule:     buildRule(rep, dir, pm, cidr, VerdictAccept, ctEnabled),
 					tier:     tierAllow,
 					policyID: policyID,
 				})
@@ -290,17 +465,27 @@ func expandRule(ctx context.Context, deps controllers.PolicyDeps, rep string, di
 	return out, nil
 }
 
-// buildRule assembles a FlowerRule, placing the peer CIDR in the src slot for
-// policy ingress and the dst slot for policy egress.
-func buildRule(rep string, dir Direction, pm portMatch, cidr string, verdict Verdict) FlowerRule {
+// buildRule assembles a per-policy FlowerRule, placing the peer CIDR in the src
+// slot for policy ingress and the dst slot for policy egress.
+//
+// When CT is enabled the rule lives in the post-conntrack policy chain, and an
+// accept additionally commits the NEW connection (CTCommit) so its reply
+// direction is tracked and statefully accepted by the chain-0 est/rel rules.
+// Drops (except-carve-outs, default-deny) never commit.
+func buildRule(rep string, dir Direction, pm portMatch, cidr string, verdict Verdict, ctEnabled bool) FlowerRule {
 	r := FlowerRule{
 		Rep:       rep,
 		Direction: dir,
+		Chain:     policyChain(ctEnabled),
 		Proto:     pm.proto,
 		HasPort:   pm.hasPort,
 		PortMin:   pm.portMin,
 		PortMax:   pm.portMax,
 		Verdict:   verdict,
+	}
+	if ctEnabled && verdict == VerdictAccept {
+		r.CTCommit = true
+		r.CTZone = ctZoneFor(rep, dir)
 	}
 	if cidr != "" {
 		if dir == DirIngress {
@@ -485,10 +670,11 @@ func resolvePeerIPv4s(ctx context.Context, deps controllers.PolicyDeps, peer mul
 
 // assignPriorities deterministically allocates tc filter priorities.
 //
-// Scheme: within each direction (an independent tc priority space, since
-// ingress/egress are different qdisc parents) rules are grouped into priority
-// CLASSES keyed by (tier, mask-shape, policy identity). The classes are sorted
-// by that key and numbered from 1. Consequences:
+// Scheme: within each (direction, chain) — an independent tc priority space,
+// since ingress/egress are different qdisc parents and each chain numbers its
+// preferences independently — rules are grouped into priority CLASSES keyed by
+// (tier, mask-shape, policy identity). The classes are sorted by that key and
+// numbered from 1. Consequences:
 //   - tc flower's "one mask per priority" rule is honored: a class shares a
 //     single mask shape, so all filters at a priority use the same mask (only
 //     their VALUES differ, e.g. several /32 peer addresses).
@@ -498,32 +684,45 @@ func resolvePeerIPv4s(ctx context.Context, deps controllers.PolicyDeps, peer mul
 //     precede the allows they carve out, and default-deny is evaluated last.
 //   - the mapping is a pure function of the candidate set, so repeated calls
 //     yield identical priorities (stability).
+//
+// The mask-shape signature includes the chain and ct_state shape, so chain-0
+// CT rules and chain-N policy rules occupy separate priority classes even
+// though both directions share a parent.
 func assignPriorities(cands []candidate) []FlowerRule {
+	type spaceKey struct {
+		dir   Direction
+		chain uint32
+	}
 	type classKey struct {
-		dir      Direction
+		space    spaceKey
 		tier     int
 		sig      string
 		policyID string
 	}
 
-	// Collect distinct classes per direction.
-	classesByDir := make(map[Direction]map[classKey]struct{})
+	// Collect distinct classes per (direction, chain) priority space.
+	classesBySpace := make(map[spaceKey]map[classKey]struct{})
 	keyOf := func(c candidate) classKey {
-		return classKey{dir: c.rule.Direction, tier: c.tier, sig: maskSignature(c.rule), policyID: c.policyID}
+		return classKey{
+			space:    spaceKey{dir: c.rule.Direction, chain: c.rule.Chain},
+			tier:     c.tier,
+			sig:      maskSignature(c.rule),
+			policyID: c.policyID,
+		}
 	}
 	for _, c := range cands {
 		k := keyOf(c)
-		if classesByDir[k.dir] == nil {
-			classesByDir[k.dir] = make(map[classKey]struct{})
+		if classesBySpace[k.space] == nil {
+			classesBySpace[k.space] = make(map[classKey]struct{})
 		}
-		classesByDir[k.dir][k] = struct{}{}
+		classesBySpace[k.space][k] = struct{}{}
 	}
 
-	// Sort each direction's classes and assign priorities.
+	// Sort each space's classes and assign priorities.
 	prio := make(map[classKey]uint16)
-	for dir := range classesByDir {
-		keys := make([]classKey, 0, len(classesByDir[dir]))
-		for k := range classesByDir[dir] {
+	for space := range classesBySpace {
+		keys := make([]classKey, 0, len(classesBySpace[space]))
+		for k := range classesBySpace[space] {
 			keys = append(keys, k)
 		}
 		slices.SortFunc(keys, func(a, b classKey) int {
@@ -557,8 +756,11 @@ func assignPriorities(cands []candidate) []FlowerRule {
 }
 
 // maskSignature captures every aspect of a rule that determines the tc flower
-// key MASK: direction, src/dst prefix lengths (-1 when absent), the L4 protocol
-// and whether/what kind of destination-port match is present.
+// key MASK: chain, direction, src/dst prefix lengths (-1 when absent), the L4
+// protocol, whether/what kind of destination-port match is present, and the
+// ct_state mask. Including chain + ct_state mask keeps chain-0 CT rules and
+// chain-N policy rules in separate priority classes and honors flower's
+// one-mask-per-priority constraint for the ct_state key too.
 func maskSignature(r FlowerRule) string {
 	portKind := 0
 	if r.HasPort {
@@ -568,7 +770,8 @@ func maskSignature(r FlowerRule) string {
 			portKind = 2 // range
 		}
 	}
-	return fmt.Sprintf("d%d|s%d|D%d|p%d|k%d", r.Direction, prefixLen(r.SrcCIDR), prefixLen(r.DstCIDR), r.Proto, portKind)
+	return fmt.Sprintf("c%d|d%d|s%d|D%d|p%d|k%d|m%d", r.Chain, r.Direction,
+		prefixLen(r.SrcCIDR), prefixLen(r.DstCIDR), r.Proto, portKind, r.CTStateMask)
 }
 
 // prefixLen returns the CIDR prefix length, or -1 when cidr is empty.
@@ -589,8 +792,17 @@ func compareFlowerRule(a, b FlowerRule) int {
 	if a.Direction != b.Direction {
 		return int(a.Direction) - int(b.Direction)
 	}
+	if a.Chain != b.Chain {
+		return int(a.Chain) - int(b.Chain)
+	}
 	if a.Priority != b.Priority {
 		return int(a.Priority) - int(b.Priority)
+	}
+	if a.CTStateMask != b.CTStateMask {
+		return int(a.CTStateMask) - int(b.CTStateMask)
+	}
+	if a.CTState != b.CTState {
+		return int(a.CTState) - int(b.CTState)
 	}
 	if a.Verdict != b.Verdict {
 		return int(a.Verdict) - int(b.Verdict)
@@ -623,11 +835,19 @@ func (d Direction) parentHandle() uint32 {
 
 // handle derives a stable, non-zero 32-bit tc filter handle from the rule's
 // identity so that AddFilter is idempotent and reconcile can key filters by
-// (parent, priority, handle) without relying on kernel-assigned handles.
+// (parent, chain, priority, handle) without relying on kernel-assigned handles.
+//
+// The chain and ct_state / CT-action fields are folded into the hash so that
+// two filters that share a numeric priority but live in different chains (e.g.
+// a chain-0 CT rule and a chain-N policy rule) — or two chain-0 CT rules whose
+// only difference is their ct_state combo — get distinct handles and never
+// collide in the reconcile diff key.
 func (r FlowerRule) handle() uint32 {
 	h := fnv.New32a()
-	_, _ = fmt.Fprintf(h, "%d|%d|%d|%s|%s|%t|%d|%d|%d",
-		r.Direction, r.Priority, r.Proto, r.SrcCIDR, r.DstCIDR, r.HasPort, r.PortMin, r.PortMax, r.Verdict)
+	_, _ = fmt.Fprintf(h, "%d|%d|%d|%d|%s|%s|%t|%d|%d|%d|%t|%d|%d|%t|%d|%d",
+		r.Chain, r.Direction, r.Priority, r.Proto, r.SrcCIDR, r.DstCIDR,
+		r.HasPort, r.PortMin, r.PortMax, r.Verdict,
+		r.HasCTState, r.CTState, r.CTStateMask, r.CTDispatch, r.GotoChain, r.CTZone)
 	sum := h.Sum32()
 	if sum == 0 {
 		sum = 1
@@ -685,19 +905,28 @@ func (r FlowerRule) toObject(ifindex int) tc.Object {
 		}
 	}
 
-	control := tcActOK
-	if r.Verdict == VerdictDrop {
-		control = tcActShot
+	// ct_state match (stateful pipeline only): match on (value, mask) so the
+	// chain-0 rules can select untracked / established / related / invalid
+	// packets. A zero mask (stateless rules) emits no ct_state key.
+	if r.HasCTState {
+		state := r.CTState
+		mask := r.CTStateMask
+		flower.KeyCtState = &state
+		flower.KeyCtStateMask = &mask
 	}
-	actions := []*tc.Action{
-		{
-			Kind: "gact",
-			Gact: &tc.Gact{
-				Parms: &tc.GactParms{Action: control},
-			},
-		},
+
+	flower.Actions = r.buildActions()
+
+	// Chain is only stamped when non-zero: chain 0 filters (stateless rules and
+	// the CT entry chain) omit the attribute exactly as Phase 2 did.
+	attr := tc.Attribute{
+		Kind:   "flower",
+		Flower: flower,
 	}
-	flower.Actions = &actions
+	if r.Chain != 0 {
+		chain := r.Chain
+		attr.Chain = &chain
+	}
 
 	return tc.Object{
 		Msg: tc.Msg{
@@ -706,10 +935,75 @@ func (r FlowerRule) toObject(ifindex int) tc.Object {
 			Parent:  r.Direction.parentHandle(),
 			Info:    core.FilterInfo(r.Priority, ethTypeIPv4),
 		},
-		Attribute: tc.Attribute{
-			Kind:   "flower",
-			Flower: flower,
-		},
+		Attribute: attr,
+	}
+}
+
+// buildActions assembles the ordered tc action list for the filter:
+//   - CTDispatch (chain-0 untracked rule): [ct(zone) pipe, gact goto_chain N] —
+//     send the packet through conntrack, then jump to the policy chain.
+//   - CTCommit accept (chain-N NEW-connection allow): [ct commit(zone), gact
+//     pass] — commit the connection so its reply is statefully tracked, then
+//     pass.
+//   - everything else: a single gact (pass for accept, shot for drop),
+//     identical to the stateless Phase 2 output.
+func (r FlowerRule) buildActions() *[]*tc.Action {
+	switch {
+	case r.CTDispatch:
+		zone := r.CTZone
+		goto_ := r.GotoChain
+		actions := []*tc.Action{
+			{
+				Kind: "ct",
+				Ct:   &tc.Ct{Zone: &zone},
+				// TC_ACT_PIPE: continue to the next action after conntrack.
+				Gact: nil,
+			},
+			{
+				Kind: "gact",
+				Gact: &tc.Gact{
+					Parms: &tc.GactParms{Action: tcActGotoChain | goto_},
+				},
+			},
+		}
+		// The ct action's own control disposition is PIPE (fall through to the
+		// next action). go-tc carries the ct action's control in CtParms.Action.
+		(actions)[0].Ct.Parms = &tc.CtParms{Action: tcActPipe}
+		return &actions
+
+	case r.CTCommit && r.Verdict == VerdictAccept:
+		zone := r.CTZone
+		commit := ctActCommit
+		actions := []*tc.Action{
+			{
+				Kind: "ct",
+				Ct: &tc.Ct{
+					Action: &commit,
+					Zone:   &zone,
+					Parms:  &tc.CtParms{Action: tcActPipe},
+				},
+			},
+			{
+				Kind: "gact",
+				Gact: &tc.Gact{Parms: &tc.GactParms{Action: tcActOK}},
+			},
+		}
+		return &actions
+
+	default:
+		control := tcActOK
+		if r.Verdict == VerdictDrop {
+			control = tcActShot
+		}
+		actions := []*tc.Action{
+			{
+				Kind: "gact",
+				Gact: &tc.Gact{
+					Parms: &tc.GactParms{Action: control},
+				},
+			},
+		}
+		return &actions
 	}
 }
 

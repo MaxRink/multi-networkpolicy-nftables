@@ -72,6 +72,12 @@ func Apply(ctx context.Context, deps controllers.PolicyDeps, cfg controllers.Com
 			errs = append(errs, fmt.Errorf("resolve representor for interface %q: %w", iface.InterfaceName, err))
 			continue
 		}
+
+		// Best-effort CT-offload preflight: log (never fail) if SMFS steering
+		// mode / ct_max_offloaded_conns cannot be confirmed. See ctPreflight.
+		if cfg.CTEnabled {
+			ctPreflight(hostPrefix, rep.Name, iface.PCIAddress)
+		}
 		if err := VerifyOffloadReady(hostPrefix, rep.Name); err != nil {
 			errs = append(errs, fmt.Errorf("offload not ready for representor %q: %w", rep.Name, err))
 			continue
@@ -107,10 +113,27 @@ func Apply(ctx context.Context, deps controllers.PolicyDeps, cfg controllers.Com
 }
 
 // filterKey identifies an installed managed filter for diffing.
+//
+// chain is part of the key because the CT-offload pipeline (Phase 4) installs
+// filters in more than one chain per parent: the same numeric priority can be
+// reused across chains, so (parent, prio, handle) alone is no longer unique.
+// Handles are already chain-salted (see FlowerRule.handle), but keying by chain
+// too keeps the diff correct and robust even if two chains ever collide on a
+// handle. A chain-0 filter (stateless rules, CT entry chain) has chain==0.
 type filterKey struct {
 	parent uint32
+	chain  uint32
 	prio   uint16
 	handle uint32
+}
+
+// filterChain returns the tc chain of an installed filter, treating an absent
+// Chain attribute as chain 0 (the kernel omits it for the default chain).
+func filterChain(obj tc.Object) uint32 {
+	if obj.Attribute.Chain != nil {
+		return *obj.Attribute.Chain
+	}
+	return 0
 }
 
 // reconcile installs missing filters and removes stale managed filters on the
@@ -121,7 +144,7 @@ func reconcile(drv Driver, ifindex int, desired []FlowerRule) error {
 	parents := make(map[uint32]struct{})
 	for _, r := range desired {
 		obj := r.toObject(ifindex)
-		key := filterKey{parent: obj.Parent, prio: r.Priority, handle: obj.Handle}
+		key := filterKey{parent: obj.Parent, chain: r.Chain, prio: r.Priority, handle: obj.Handle}
 		desiredObjs[key] = obj
 		parents[obj.Parent] = struct{}{}
 	}
@@ -142,7 +165,7 @@ func reconcile(drv Driver, ifindex int, desired []FlowerRule) error {
 			if !isManagedFilter(obj) {
 				continue
 			}
-			key := filterKey{parent: obj.Parent, prio: filterPriority(obj.Info), handle: obj.Handle}
+			key := filterKey{parent: obj.Parent, chain: filterChain(obj), prio: filterPriority(obj.Info), handle: obj.Handle}
 			installed[key] = obj
 		}
 	}
