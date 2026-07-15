@@ -20,10 +20,19 @@ package tcflower
 
 import (
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"k8s.io/klog/v2"
 )
+
+// ctMaxConnsRe extracts the integer value from a devlink param show line such as
+//
+//	pci/0000:03:00.0: name ct_max_offloaded_conns type driver-specific
+//	  values:
+//	    cmode runtime value 1048576
+var ctMaxConnsRe = regexp.MustCompile(`value\s+(\d+)`)
 
 // ctPreflight is a BEST-EFFORT readiness check for the mlx5 conntrack-offload
 // (CT) pipeline. Hardware CT offload on CX5+ requires the eSwitch to use the
@@ -68,17 +77,27 @@ func ctPreflight(hostPrefix, repName, pciAddress string) {
 			"CT offload requires SMFS; verify manually on CX5+ hardware.", handle, err, strings.TrimSpace(string(out)))
 	} else {
 		mode := strings.TrimSpace(string(out))
-		if strings.Contains(mode, "smfs") {
+		smfs := strings.Contains(mode, "smfs")
+		setCTOffloadReady(repName, smfs)
+		if smfs {
 			klog.V(2).Infof("tcflower CT preflight: %q flow_steering_mode reports smfs (CT-offload capable)", handle)
 		} else {
 			klog.Warningf("tcflower CT preflight: %q flow_steering_mode is NOT smfs; CT offload will not work: %s", handle, mode)
 		}
 	}
 
-	// Max offloaded connections: informational only.
+	// Max offloaded connections: the hardware conntrack table capacity. Export it
+	// as a gauge so operators can alert on approaching the limit (ENOSPC on
+	// insertion means new connections are no longer tracked in hardware).
 	if out, err := exec.Command(devlink, "dev", "param", "show", handle, "name", "ct_max_offloaded_conns").CombinedOutput(); err != nil { //nolint:gosec // handle is a device PCI address, not user input
 		klog.V(2).Infof("tcflower CT preflight: ct_max_offloaded_conns not resolvable for %q (%v): %s", handle, err, strings.TrimSpace(string(out)))
 	} else {
-		klog.V(2).Infof("tcflower CT preflight: %q %s", handle, strings.TrimSpace(string(out)))
+		text := strings.TrimSpace(string(out))
+		klog.V(2).Infof("tcflower CT preflight: %q %s", handle, text)
+		if m := ctMaxConnsRe.FindStringSubmatch(text); m != nil {
+			if n, perr := strconv.Atoi(m[1]); perr == nil {
+				setCTMaxOffloadedConns(repName, n)
+			}
+		}
 	}
 }
