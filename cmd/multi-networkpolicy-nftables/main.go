@@ -33,6 +33,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controller"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/server"
+	"github.com/telekom/multi-networkpolicy-nftables/pkg/tcflower"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -96,6 +97,14 @@ func run(opts *server.Options) error {
 	}
 
 	klog.Infof("hostname: %v", cfg.NodeName)
+
+	// Log a one-shot summary of the host's SR-IOV offload configuration and any
+	// limits that would prevent hardware enforcement (switchdev off, hw-tc-offload
+	// off, non-SMFS steering with CT enabled, ...). Only relevant when the tc
+	// backend is enabled; the tc applier forces conntrack offload on.
+	if cfg.EnableTCBackend {
+		tcflower.LogHostOffloadConfig(cfg.HostPrefix, cfg.CommonRuleConfig.TCOffloadMode, true)
+	}
 
 	var restCfg *rest.Config
 	if cfg.Kubeconfig == "" {
