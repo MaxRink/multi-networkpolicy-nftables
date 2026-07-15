@@ -53,4 +53,3 @@ func TestCTModeString(t *testing.T) {
 		}
 	}
 }
-

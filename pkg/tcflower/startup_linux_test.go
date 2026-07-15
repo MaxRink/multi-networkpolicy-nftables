@@ -27,15 +27,15 @@ import (
 // fakeSysfs builds a minimal sysfs tree under a temp dir for PF discovery tests.
 // It returns the hostPrefix to pass to discoverMLX5PFs.
 type fakePF struct {
-	pci        string
-	vendor     string
-	device     string
-	driver     string // driver dir basename the "driver" symlink points at
-	totalVFs   string // "" omits sriov_totalvfs (makes it a non-SR-IOV device)
-	numVFs     string
-	uplinkNet  string // uplink netdev name ("" = none)
-	switchID   string // phys_switch_id on the uplink ("" = not switchdev)
-	isVF       bool   // create a physfn link (marks device as a VF, not a PF)
+	pci       string
+	vendor    string
+	device    string
+	driver    string // driver dir basename the "driver" symlink points at
+	totalVFs  string // "" omits sriov_totalvfs (makes it a non-SR-IOV device)
+	numVFs    string
+	uplinkNet string // uplink netdev name ("" = none)
+	switchID  string // phys_switch_id on the uplink ("" = not switchdev)
+	isVF      bool   // create a physfn link (marks device as a VF, not a PF)
 }
 
 func writeFile(t *testing.T, path, content string) {
