@@ -346,7 +346,7 @@ func TestSinglePortAndPortRange(t *testing.T) {
 	if so.Flower.KeyTCPDst == nil || *so.Flower.KeyTCPDst != 80 {
 		t.Errorf("single port: expected KeyTCPDst=80, got %+v", so.Flower.KeyTCPDst)
 	}
-	if so.Flower.KeyIPProto == nil || *so.Flower.KeyIPProto != ipProtoTCP {
+	if so.Flower.KeyIPProto == nil || *so.Flower.KeyIPProto != uint8(ipProtoTCP) {
 		t.Errorf("single port: expected ip_proto TCP")
 	}
 	ro := rangeR.toObject(1)
@@ -464,7 +464,7 @@ func TestToObjectSkipSwAndKeys(t *testing.T) {
 	if obj.Flower.Flags == nil || *obj.Flower.Flags != tc.SkipSw {
 		t.Errorf("expected skip_sw flag set")
 	}
-	if obj.Flower.KeyIPProto == nil || *obj.Flower.KeyIPProto != ipProtoTCP {
+	if obj.Flower.KeyIPProto == nil || *obj.Flower.KeyIPProto != uint8(ipProtoTCP) {
 		t.Errorf("expected ip_proto TCP")
 	}
 	if obj.Flower.KeyTCPDst == nil || *obj.Flower.KeyTCPDst != 443 {

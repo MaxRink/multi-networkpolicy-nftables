@@ -36,14 +36,20 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-// L2/L3/L4 protocol constants (IANA / EtherType). Hardcoded so the pure
-// translation layer does not need golang.org/x/sys/unix.
+// ipProto is an IANA IP protocol number. The zero value means "match any L4
+// protocol" (no ip_proto key emitted).
+type ipProto uint8
+
+// L2/L3/L4 protocol constants (IANA / EtherType). Hardcoded rather than taken
+// from golang.org/x/sys/unix so the pure translation layer stays
+// cross-platform (ETH_P_IP is Linux-only and the golden tests run on darwin).
 const (
 	ethTypeIPv4 uint16 = 0x0800
 
-	ipProtoTCP  uint8 = 6
-	ipProtoUDP  uint8 = 17
-	ipProtoSCTP uint8 = 132
+	ipProtoAny  ipProto = 0
+	ipProtoTCP  ipProto = 6
+	ipProtoUDP  ipProto = 17
+	ipProtoSCTP ipProto = 132
 )
 
 // Direction is the MultiNetworkPolicy rule direction that a FlowerRule
@@ -163,7 +169,7 @@ type FlowerRule struct {
 
 	// Proto is the IP protocol to match (ipProtoTCP/UDP/SCTP). 0 = match any
 	// L4 protocol (no ip_proto key).
-	Proto uint8
+	Proto ipProto
 
 	// Src / Dst carry the address match as an IPv4 prefix. For policy ingress
 	// the peer is the SOURCE (Src); for policy egress the peer is the
@@ -503,7 +509,7 @@ func buildRule(rep string, dir Direction, pm portMatch, cidr netip.Prefix, verdi
 // portMatch is one expanded L4 match: a protocol plus an optional destination
 // port (single or inclusive range).
 type portMatch struct {
-	proto   uint8 // 0 = any L4
+	proto   ipProto // 0 = any L4
 	hasPort bool
 	portMin uint16
 	portMax uint16
@@ -542,7 +548,7 @@ func expandPorts(ports []multiv1beta1.MultiNetworkPolicyPort) ([]portMatch, erro
 
 // protoToNumber maps a k8s protocol to its IP protocol number, defaulting to
 // TCP (mirrors pkg/server.getProtocolInfo).
-func protoToNumber(p *corev1.Protocol) uint8 {
+func protoToNumber(p *corev1.Protocol) ipProto {
 	if p == nil {
 		return ipProtoTCP
 	}
@@ -882,8 +888,8 @@ func (r FlowerRule) toObject(ifindex int) tc.Object {
 		Flags:      &skipSw,
 	}
 
-	if r.Proto != 0 {
-		proto := r.Proto
+	if r.Proto != ipProtoAny {
+		proto := uint8(r.Proto)
 		flower.KeyIPProto = &proto
 	}
 
