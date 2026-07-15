@@ -182,9 +182,13 @@ a hardware-only filter (`EOPNOTSUPP`/`ENOTSUPP`). Common causes:
   already in offloads mode** [secondary: MLNX_OFED devlink.c], so ordering
   matters — this usually means re-imaging or a careful un-switchdev → SMFS →
   switchdev dance.
-- New connections dropped at scale → CT table full (`-ENOSPC` at
-  `num_offloaded_flows >= ct_max_offloaded_conns * 2`) [secondary]. Raise
-  `ct_max_offloaded_conns` or reduce connection churn.
+- New connections not offloaded at scale (**MLNX-OFED only**) → the driver's
+  software admission check `num_offloaded_flows >= ct_max_offloaded_conns * 2`
+  returns `-ENOSPC` *before programming any HW rule* — it is **not** a firmware
+  table-full error, and it **does not exist in the upstream/inbox driver** at all
+  [secondary: OFED `tc_ct.c`; primary: absent from mainline]. On OFED, raise
+  `ct_max_offloaded_conns` or reduce connection churn; on an inbox-driver kernel
+  there is no such cap.
 
 ### Step 6 — reproduce translation without hardware
 
@@ -223,4 +227,102 @@ harness and what remains hardware-gated.
   [primary: absence confirmed]; treat as measured, watch `filters_installed` and
   `filters_not_in_hw`.
 - **`ct_max_offloaded_conns` and the `×2` ENOSPC behaviour are MLNX_OFED
-  (out-of-tree)** [secondary]; a stock upstream kernel may differ.
+  (out-of-tree)** [secondary]; the upstream/inbox driver has no such cap
+  [primary: absent from mainline].
+
+## 6. Deep debugging (mlx5-specific)
+
+Beyond the top-down runbook, these give live/low-level signal.
+
+### Live filter stats & events
+
+```sh
+# per-filter packet/byte counters + offload state (the "is this rule hit?" signal)
+tc -s filter show dev <rep> ingress
+# scriptable:
+tc -j -s filter show dev <rep> ingress | jq '.[] | {pref,in_hw,not_in_hw,in_hw_count}'
+# stream filter/qdisc add-del events live during a reconcile:
+tc monitor
+```
+
+- `in_hw_count` = how many HW flows a filter expands to [primary: iproute2
+  `f_flower.c`]. Note `in_hw`/`not_in_hw`/`in_hw_count` are iproute2 print
+  artifacts, **not** documented in the man pages.
+- mlx5 flow stats are **polled, ~1 s cadence, `HW_STATS_DELAYED`** — counters lag
+  real traffic, they are not instantaneous [primary: `fs_counters.c`
+  `MLX5_FC_STATS_PERIOD`].
+
+### Decoding `not_in_hw`
+
+A filter that installed but shows `not_in_hw` was accepted for bookkeeping but
+the ASIC did not program it. mlx5 emits an extack string explaining why — capture
+it and check `dmesg`:
+
+```sh
+dmesg | grep -iE 'mlx5|eswitch|steering'
+```
+
+Common causes and their verbatim mlx5 strings (see
+[mellanox-internals §2](sriov-tc-mellanox-internals.md#2-why-a-flower-rule-fails-to-offload-not_in_hw--eopnotsupp)):
+unsupported match key ("Unsupported key", "Matching on TTL is not supported"),
+action-list violation ("Rule cannot support forward+drop action", "Drop with
+modify header action is not supported"), chain/goto out of range (FDB limit is 3
+chains / 16 prios without the `ignore_flow_level` cap), or FW that doesn't
+support chains at all ("Tc chains and priorities offload aren't supported, update
+firmware").
+
+### mlx5 SMFS steering-table dump (debugfs)
+
+On **SMFS** mode only, and for the **FDB domain** only, the driver exposes a
+software-steering rule dump [primary: `steering/sws/dr_dbg.c`]:
+
+```sh
+ls /sys/kernel/debug/mlx5/<pci-bdf>/steering/fdb/
+cat /sys/kernel/debug/mlx5/<pci-bdf>/steering/fdb/<domain-handle>
+```
+
+There is no equivalent dump for DMFS (firmware-managed) or for NIC RX/TX domains.
+
+### Capturing offloaded traffic (it's invisible to tcpdump on the rep)
+
+A fully-offloaded flow switches inside the eSwitch and never traverses the
+representor's RX, so `tcpdump -i <rep>` shows only miss/slow-path packets. To see
+offloaded traffic:
+
+```sh
+# (a) mirror matched packets to a monitor netdev, capture there:
+tc filter add dev <rep> ingress protocol ip flower skip_sw ip_proto tcp dst_port 179 \
+   action mirred egress mirror dev <monitor>
+tcpdump -i <monitor>
+# (b) or force the flow to software (loses offload) to capture on the rep:
+ethtool -K <uplink> hw-tc-offload off
+# (c) or capture inside the pod on the VF netdev directly.
+```
+
+## 7. Validating the direction inversion (highest-risk check)
+
+The representor mirrors the VF, so policy **ingress** is enforced on the
+representor **egress** parent and vice-versa (see
+[backend.md §A](sriov-tc-backend.md#a-data-path--the-direction-inversion)). This
+inversion is the most likely correctness bug and can only be confirmed on real
+switchdev hardware. Procedure:
+
+1. Two pods on the same VF-backed network, A and B, on one switchdev NIC.
+2. Apply a **one-directional** policy — e.g. allow A→B on tcp/9999 **ingress**
+   for B, default-deny.
+3. From A: `nc B 9999` (should connect); from B: `nc A 9999` (should be blocked).
+4. Watch which representor parent's counter increments:
+   ```sh
+   watch -n1 'tc -s filter show dev <repB> ingress; echo ---; tc -s filter show dev <repB> egress'
+   ```
+   The allow filter on **repB egress** (policy ingress → rep egress) should show
+   incrementing packets for the A→B flow.
+5. If allow/deny is **mirrored** (B→A works, A→B blocked; or the wrong parent
+   counts), the `Direction.parentHandle()` mapping is inverted for your
+   driver/firmware — this is the first thing to suspect. Cross-check against the
+   kernel statement that "a mirred egress redirect to a VF representor
+   corresponds in hardware to delivery directly to the representee VF"
+   [primary: representors.rst].
+
+Run this once per new NIC/firmware combination before trusting the backend in
+production.
