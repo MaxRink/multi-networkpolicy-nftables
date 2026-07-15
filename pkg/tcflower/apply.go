@@ -71,20 +71,26 @@ func Apply(ctx context.Context, deps controllers.PolicyDeps, cfg controllers.Com
 		if err != nil {
 			// Fail closed: leaving an SR-IOV interface unenforced is a security
 			// failure.
+			incRepresentorResolutionError(resolutionErrorReason(err))
 			errs = append(errs, fmt.Errorf("resolve representor for interface %q: %w", iface.InterfaceName, err))
 			continue
 		}
 
-		// Best-effort CT-offload preflight: log (never fail) if SMFS steering
-		// mode / ct_max_offloaded_conns cannot be confirmed. See ctPreflight.
+		// Best-effort CT-offload preflight: log + export hardware metrics (SMFS
+		// mode, ct_max_offloaded_conns, offloaded-conn count); never fail. See
+		// ctPreflight.
 		if cfg.CTEnabled {
 			ctPreflight(hostPrefix, rep.Name, iface.PCIAddress)
 		}
 		if err := VerifyOffloadReady(hostPrefix, rep.Name); err != nil {
+			setOffloadReady(rep.Name, false)
+			incRepresentorResolutionError(resolveReasonOffloadNotReady)
 			errs = append(errs, fmt.Errorf("offload not ready for representor %q: %w", rep.Name, err))
 			continue
 		}
+		setOffloadReady(rep.Name, true)
 		if rep.IfIndex == 0 {
+			incRepresentorResolutionError(resolveReasonNoIfindex)
 			errs = append(errs, fmt.Errorf("representor %q has no resolvable ifindex", rep.Name))
 			continue
 		}
@@ -285,7 +291,58 @@ func reconcile(drv Driver, rep string, ifindex int, desired []FlowerRule) error 
 		}
 	}
 
+	// Read back the HARDWARE-OFFLOAD state of the now-installed filters and
+	// publish in_hw / not_in_hw gauges per direction. This is the truth signal
+	// for eSwitch offload: a filter can install without error yet not be
+	// offloaded (not_in_hw), which on a switchdev NIC means it is not actually
+	// enforcing in hardware. Best-effort: a ListFilters error here does not fail
+	// the (already successful) reconcile.
+	publishHWState(drv, rep, ifindex)
+
 	return nil
+}
+
+// publishHWState re-lists managed filters per representor parent and records how
+// many are offloaded (in_hw) vs. present-but-not-offloaded (not_in_hw). The
+// kernel reports this via the TCA_CLS_FLAGS_IN_HW / NOT_IN_HW bits carried in the
+// flower Flags word (go-tc: tc.InHw / tc.NotInHw).
+func publishHWState(drv Driver, rep string, ifindex int) {
+	for dir, parent := range map[Direction]uint32{
+		DirIngress: DirIngress.parentHandle(),
+		DirEgress:  DirEgress.parentHandle(),
+	} {
+		objs, err := drv.ListFilters(ifindex, int(parent))
+		if err != nil {
+			klog.V(4).Infof("tcflower hw-state: list filters on %q parent %#x: %v", rep, parent, err)
+			continue
+		}
+		inHW, notInHW := 0, 0
+		for _, obj := range objs {
+			if !isManagedFilter(obj) || obj.Flower == nil || obj.Flower.Flags == nil {
+				continue
+			}
+			flags := *obj.Flower.Flags
+			switch {
+			case flags&tc.InHw != 0:
+				inHW++
+			case flags&tc.NotInHw != 0:
+				notInHW++
+			}
+		}
+		setFiltersHWState(rep, dir.String(), inHW, notInHW)
+	}
+}
+
+// resolutionErrorReason maps a ResolveRepresentor error to a metric reason label.
+func resolutionErrorReason(err error) string {
+	switch {
+	case errors.Is(err, ErrNotSwitchdev):
+		return resolveReasonNotSwitchdev
+	case errors.Is(err, ErrNotVF):
+		return resolveReasonNotVF
+	default:
+		return resolveReasonNotFound
+	}
 }
 
 // addErrorReason classifies an AddFilter failure for the apply-error counter.

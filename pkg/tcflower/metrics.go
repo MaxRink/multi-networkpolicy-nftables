@@ -53,6 +53,31 @@ const (
 	reasonSkipSw = "skip_sw"
 )
 
+// Representor-resolution failure reasons for
+// multinetworkpolicy_tc_representor_resolution_errors_total.
+const (
+	// resolveReasonNotFound: no VF representor could be resolved for the interface
+	// (annotation absent/stale and sysfs walk found nothing).
+	resolveReasonNotFound = "not_found"
+	// resolveReasonNotSwitchdev: the parent PF is not in switchdev mode, so no
+	// representors exist.
+	resolveReasonNotSwitchdev = "not_switchdev"
+	// resolveReasonNotVF: the PCI device is not an SR-IOV virtual function.
+	resolveReasonNotVF = "not_vf"
+	// resolveReasonNoIfindex: the representor resolved but has no usable ifindex.
+	resolveReasonNoIfindex = "no_ifindex"
+	// resolveReasonOffloadNotReady: the representor exists but TC hardware offload
+	// is not enabled on it (VerifyOffloadReady failed).
+	resolveReasonOffloadNotReady = "offload_not_ready"
+)
+
+func boolToFloat(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 var (
 	// filtersInstalled tracks the number of managed flower filters desired (and,
 	// on success, installed) per representor and direction. Set from the desired
@@ -63,6 +88,21 @@ var (
 		Help: "Number of managed tc flower filters desired/installed on a VF representor per direction.",
 	}, []string{"representor", "direction"})
 
+	// filtersInHW / filtersNotInHW report the HARDWARE-OFFLOAD state read back from
+	// the kernel per representor+direction: how many managed filters the driver
+	// actually programmed into the eSwitch (in_hw) vs. how many are present but NOT
+	// offloaded (not_in_hw). For a healthy CX5+ switchdev NIC every skip_sw filter
+	// should be in_hw; a non-zero not_in_hw is a hardware-offload problem even
+	// though the filter installed without error.
+	filtersInHW = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "multinetworkpolicy_tc_filters_in_hw",
+		Help: "Number of managed tc flower filters confirmed offloaded to hardware (in_hw) on a VF representor per direction.",
+	}, []string{"representor", "direction"})
+	filtersNotInHW = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "multinetworkpolicy_tc_filters_not_in_hw",
+		Help: "Number of managed tc flower filters present but NOT offloaded to hardware (not_in_hw) on a VF representor per direction. Non-zero indicates a hardware-offload problem.",
+	}, []string{"representor", "direction"})
+
 	// filterApplyErrors counts filter install/remove failures by representor and
 	// reason. reason=skip_sw is the fail-closed offload-rejection signal.
 	filterApplyErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -70,13 +110,38 @@ var (
 		Help: "Total tc flower filter apply failures, labeled by representor and reason (add|delete|skip_sw). Any increase means a VF representor is not enforcing desired policy (fail-closed).",
 	}, []string{"representor", "reason"})
 
-	// ctConnections is a best-effort gauge of the conntrack-offloaded connection
-	// count per representor. It is only meaningful when it can be resolved cheaply
-	// via the devlink/ctPreflight path; it is currently left UNSET (no cheap pure
-	// path exists — see ctPreflight) and reserved for future devlink wiring.
-	ctConnections = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "multinetworkpolicy_tc_ct_connections",
-		Help: "Best-effort count of conntrack-offloaded connections per VF representor (unset unless resolvable via devlink).",
+	// representorResolutionErrors counts failures to map a pod's SR-IOV VF to its
+	// host representor (or to confirm offload readiness), labeled by reason. Each
+	// increment is an SR-IOV interface left unenforced (fail-closed).
+	representorResolutionErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "multinetworkpolicy_tc_representor_resolution_errors_total",
+		Help: "Total failures resolving a pod VF to its host representor / confirming offload readiness, by reason (not_found|not_switchdev|not_vf|no_ifindex|offload_not_ready).",
+	}, []string{"reason"})
+
+	// offloadReady is 1 when a representor is present and TC hardware offload is
+	// enabled on it, 0 otherwise. It reflects the last VerifyOffloadReady result.
+	offloadReady = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "multinetworkpolicy_tc_offload_ready",
+		Help: "1 if a VF representor is present and TC hardware offload (hw-tc-offload) is enabled, 0 otherwise.",
+	}, []string{"representor"})
+
+	// ctOffloadReady is 1 when the representor's eSwitch is in SMFS steering mode
+	// (required for conntrack offload), 0 when it is not, and unset when it cannot
+	// be introspected (no devlink). Set by ctPreflight.
+	ctOffloadReady = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "multinetworkpolicy_tc_ct_offload_ready",
+		Help: "1 if the VF representor's eSwitch uses SMFS steering (conntrack-offload capable), 0 if not. Unset when devlink cannot introspect it.",
+	}, []string{"representor"})
+
+	// ctMaxOffloadedConns exposes the mlx5 devlink ct_max_offloaded_conns capacity
+	// (the hardware conntrack table limit) per representor, when resolvable. This
+	// is the hardware CT-offload ceiling operators alert against (ENOSPC on
+	// insertion once exceeded). The live offloaded-connection count is not exposed:
+	// it is not a devlink param and has no cheap, reliable source, so publishing an
+	// always-unset gauge would be misleading.
+	ctMaxOffloadedConns = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "multinetworkpolicy_tc_ct_max_offloaded_conns",
+		Help: "Hardware conntrack-offload capacity (mlx5 devlink ct_max_offloaded_conns) per VF representor, when resolvable via devlink.",
 	}, []string{"representor"})
 
 	// reconcileDuration observes how long enforcing one representor's filters
@@ -97,8 +162,13 @@ func registerMetrics() {
 	registerMetricsOnce.Do(func() {
 		ctrlmetrics.Registry.MustRegister(
 			filtersInstalled,
+			filtersInHW,
+			filtersNotInHW,
 			filterApplyErrors,
-			ctConnections,
+			representorResolutionErrors,
+			offloadReady,
+			ctOffloadReady,
+			ctMaxOffloadedConns,
 			reconcileDuration,
 		)
 	})
@@ -112,22 +182,41 @@ func setFiltersInstalled(rep, direction string, n int) {
 	filtersInstalled.WithLabelValues(rep, direction).Set(float64(n))
 }
 
+// setFiltersHWState records the read-back hardware-offload state
+// (in_hw / not_in_hw counts) for a representor+direction.
+func setFiltersHWState(rep, direction string, inHW, notInHW int) {
+	filtersInHW.WithLabelValues(rep, direction).Set(float64(inHW))
+	filtersNotInHW.WithLabelValues(rep, direction).Set(float64(notInHW))
+}
+
 // incFilterApplyError bumps the fail-closed apply-error counter.
 func incFilterApplyError(rep, reason string) {
 	filterApplyErrors.WithLabelValues(rep, reason).Inc()
+}
+
+// incRepresentorResolutionError bumps the discovery/offload-readiness failure
+// counter (each increment = an SR-IOV interface left unenforced).
+func incRepresentorResolutionError(reason string) {
+	representorResolutionErrors.WithLabelValues(reason).Inc()
+}
+
+// setOffloadReady records whether a representor is present + offload-ready.
+func setOffloadReady(rep string, ready bool) {
+	offloadReady.WithLabelValues(rep).Set(boolToFloat(ready))
+}
+
+// setCTOffloadReady records whether the representor's eSwitch is SMFS (CT-offload
+// capable).
+func setCTOffloadReady(rep string, ready bool) {
+	ctOffloadReady.WithLabelValues(rep).Set(boolToFloat(ready))
+}
+
+// setCTMaxOffloadedConns records the hardware conntrack-offload capacity.
+func setCTMaxOffloadedConns(rep string, n int) {
+	ctMaxOffloadedConns.WithLabelValues(rep).Set(float64(n))
 }
 
 // observeReconcileDuration records the time spent enforcing one representor.
 func observeReconcileDuration(rep string, since time.Time) {
 	reconcileDuration.WithLabelValues(rep).Observe(time.Since(since).Seconds())
 }
-
-// setCTConnections records the offloaded-connection count for a representor. It
-// is reserved for a future devlink-backed CT introspection path (see
-// ctPreflight); referenced here so the helper is retained without tripping the
-// unused-symbol linter.
-func setCTConnections(rep string, n int) {
-	ctConnections.WithLabelValues(rep).Set(float64(n))
-}
-
-var _ = setCTConnections // reserved: wired once devlink CT-conn readout lands.
