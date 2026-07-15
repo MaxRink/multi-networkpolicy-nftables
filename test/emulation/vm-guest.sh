@@ -10,7 +10,16 @@ set -uo pipefail
 
 echo "== inside VM: kernel $(uname -r) =="
 
-: "${REPO_ROOT:?REPO_ROOT must be set by vm-run.sh}"
+# Self-locate the repo root from this script's own path. The VM shares the host
+# rootfs, so this file lives at the same path inside the guest — no need to pass
+# REPO_ROOT across the host->guest boundary (virtme-ng versions differ on --env
+# support). Falls back to $1 or an inherited REPO_ROOT if BASH_SOURCE is unset.
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+elif [[ -n "${1:-}" ]]; then
+  REPO_ROOT="$1"
+fi
+: "${REPO_ROOT:?could not determine REPO_ROOT}"
 export PATH="/usr/local/go/bin:/usr/lib/go/bin:${PATH}"
 cd "${REPO_ROOT}" || { echo "cannot cd ${REPO_ROOT}"; exit 1; }
 
