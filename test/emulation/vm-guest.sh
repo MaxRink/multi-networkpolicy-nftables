@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# Copyright 2026 Deutsche Telekom AG.
+# Licensed under the Apache License, Version 2.0.
+#
+# vm-guest.sh — the in-VM half of vm-run.sh. Runs as root inside a virtme-ng VM
+# with a real kernel and the host rootfs (Go toolchain + repo checkout) shared
+# in. Do not run this directly; use test/emulation/vm-run.sh.
+set -uo pipefail
+
+echo "== inside VM: kernel $(uname -r) =="
+
+: "${REPO_ROOT:?REPO_ROOT must be set by vm-run.sh}"
+export PATH="/usr/local/go/bin:/usr/lib/go/bin:${PATH}"
+cd "${REPO_ROOT}" || { echo "cannot cd ${REPO_ROOT}"; exit 1; }
+
+modprobe netdevsim 2>/dev/null || true
+modprobe nft_ct 2>/dev/null || true
+
+rc=0
+
+echo "== emulation scripts (netdevsim discovery + veth flower enforcement) =="
+bash test/emulation/run.sh || rc=1
+
+echo "== Go real-kernel tests (netdevsim round-trip + software-enforcement e2e) =="
+# Not -short: these root-only tests must actually run in the VM. They still
+# self-skip if a specific feature is genuinely absent from this kernel.
+if command -v go >/dev/null 2>&1; then
+  go test -count=1 -run 'Netdevsim|TCFlower|E2E' ./pkg/tcflower/... -v || rc=1
+else
+  echo "SKIP: go toolchain not found on shared rootfs PATH"
+fi
+
+echo "== vm-guest exit: ${rc} =="
+exit "${rc}"
