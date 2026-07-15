@@ -62,7 +62,7 @@ jobs:
         go-version: ${{ matrix.go-version }}
         cache: true
 
-    - name: Check KVM availability
+    - name: Check KVM availability and make host kernel readable
       run: |
         if [ -e /dev/kvm ]; then
           echo "KVM present: $(ls -l /dev/kvm)"
@@ -70,6 +70,9 @@ jobs:
         else
           echo "KVM NOT present on this runner; vm-run.sh will self-skip."
         fi
+        # virtme-ng reuses the host kernel image + modules, which are root-only
+        # on GitHub runners; make them world-readable so vng can boot them.
+        sudo chmod -R +rX "/boot" "/lib/modules/$(uname -r)" 2>/dev/null || true
 
     - name: Install QEMU, virtme-ng, and net tools
       run: |

@@ -50,6 +50,14 @@ if [[ -n "${VNG_KERNEL:-}" ]]; then
   echo "== booting custom kernel: ${VNG_KERNEL} =="
 else
   echo "== booting host kernel in a VM =="
+  # virtme-ng reuses the host kernel image + modules; on some CI runners these
+  # are root-only. Best-effort make them readable so vng (even non-root) can
+  # boot them. Ignored if we lack sudo or the files are already readable.
+  krel="$(uname -r)"
+  if [[ ! -r "/boot/vmlinuz-${krel}" ]]; then
+    sudo chmod -R +rX "/boot" "/lib/modules/${krel}" 2>/dev/null \
+      || skip "host kernel /boot/vmlinuz-${krel} not readable and cannot chmod; boot a kernel via VNG_KERNEL or run as root"
+  fi
 fi
 
 # --user root: run privileged in the guest (modprobe, tc, netns all need it).
