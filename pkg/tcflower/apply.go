@@ -76,12 +76,14 @@ func Apply(ctx context.Context, deps controllers.PolicyDeps, cfg controllers.Com
 			continue
 		}
 
-		// Best-effort CT-offload preflight: log + export hardware metrics (SMFS
-		// mode, ct_max_offloaded_conns, offloaded-conn count); never fail. See
-		// ctPreflight.
-		if cfg.CTEnabled {
-			ctPreflight(hostPrefix, rep.Name, iface.PCIAddress)
-		}
+		// Resolve, per representor, whether to emit the stateful conntrack (CT)
+		// pipeline. CT hardware offload needs SMFS steering; on the default DMFS
+		// mode the skip_sw CT filters would be rejected and leave the interface
+		// unenforced. Rather than fail closed, --tc-ct-mode=auto (the default)
+		// DEGRADES to the stateless pipeline and logs the loss, so the maximum
+		// enforceable subset still lands. resolveCTForRep also publishes CT
+		// metrics and returns a cfg copy with CTEnabled set accordingly.
+		repCfg := resolveCTForRep(cfg, hostPrefix, rep.Name, iface.PCIAddress)
 		if err := VerifyOffloadReady(hostPrefix, rep.Name); err != nil {
 			setOffloadReady(rep.Name, false)
 			incRepresentorResolutionError(resolveReasonOffloadNotReady)
@@ -100,7 +102,7 @@ func Apply(ctx context.Context, deps controllers.PolicyDeps, cfg controllers.Com
 		ifaceForBuild := iface
 		ifaceForBuild.RepresentorDevice = rep.Name
 
-		desired, err := BuildFlowerRules(ctx, deps, cfg, policyMap, pod, podInfo, ifaceForBuild)
+		desired, err := BuildFlowerRules(ctx, deps, repCfg, policyMap, pod, podInfo, ifaceForBuild)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("build flower rules for representor %q: %w", rep.Name, err))
 			continue

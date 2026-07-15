@@ -27,8 +27,23 @@ type CommonRuleConfig struct {
 	// consumed only by the tc flower backend (the nft backend is always
 	// stateful via its own conntrack rules); the nft engine ignores it. The
 	// zero value keeps the tc backend stateless, so existing callers/tests are
-	// unaffected. The tc applier flips it on by default (see pkg/controller).
+	// unaffected. On Linux the tc applier no longer sets this directly: it is
+	// resolved per representor from CTMode + the NIC's actual CT-offload
+	// capability (see pkg/tcflower.resolveCTForRep).
 	CTEnabled bool
+
+	// CTMode governs how the tc flower backend decides whether to emit the
+	// stateful conntrack pipeline, given that hardware CT offload requires SMFS
+	// steering (the default DMFS cannot offload it):
+	//   - "" / "auto": emit CT only where SMFS is confirmed; elsewhere DEGRADE
+	//     to the stateless pipeline and log the lost capability (maximizes
+	//     successfully-offloaded enforcement instead of failing closed on DMFS).
+	//   - "require": always emit CT; if the NIC cannot offload it the filters are
+	//     rejected and the interface is left unenforced (stateful-or-nothing).
+	//   - "off": never emit CT; always stateless.
+	// Consumed only by the tc flower backend; validated/normalized in
+	// pkg/tcflower (see parseCTMode). The zero value ("") is auto.
+	CTMode string
 
 	// TCOffloadMode selects how the tc flower backend stamps a filter's
 	// hardware-offload flags:

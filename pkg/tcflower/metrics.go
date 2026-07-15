@@ -127,7 +127,7 @@ var (
 
 	// ctOffloadReady is 1 when the representor's eSwitch is in SMFS steering mode
 	// (required for conntrack offload), 0 when it is not, and unset when it cannot
-	// be introspected (no devlink). Set by ctPreflight.
+	// be introspected (no devlink). Set by probeCTCapability.
 	ctOffloadReady = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "multinetworkpolicy_tc_ct_offload_ready",
 		Help: "1 if the VF representor's eSwitch uses SMFS steering (conntrack-offload capable), 0 if not. Unset when devlink cannot introspect it.",

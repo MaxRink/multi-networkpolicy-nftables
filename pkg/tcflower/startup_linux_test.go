@@ -179,10 +179,11 @@ func TestLogHostOffloadConfigDoesNotPanic(t *testing.T) {
 		{pci: "0000:03:00.0", vendor: mlxVendorID, device: "0x101d", driver: "mlx5_core",
 			totalVFs: "16", numVFs: "4", uplinkNet: "enp3s0f0", switchID: "aabbcc"},
 	})
-	LogHostOffloadConfig(root, "hardware", true)
-	LogHostOffloadConfig(root, "software", false)
-	LogHostOffloadConfig(t.TempDir(), "hardware", true) // no PFs
-	LogHostOffloadConfig(root, "bogus-mode", true)      // invalid mode: warns, continues
+	LogHostOffloadConfig(root, "hardware", "auto")
+	LogHostOffloadConfig(root, "software", "off")
+	LogHostOffloadConfig(root, "hardware", "require")
+	LogHostOffloadConfig(t.TempDir(), "hardware", "auto") // no PFs
+	LogHostOffloadConfig(root, "bogus-mode", "bogus-ct")  // invalid modes: warn, continue
 }
 
 func TestMLX5ModelKnownIDs(t *testing.T) {

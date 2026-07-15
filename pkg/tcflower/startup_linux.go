@@ -70,20 +70,25 @@ type pfOffloadInfo struct {
 // never fails: missing sysfs entries, absent ethtool/devlink, or an
 // unprivileged container simply yield less detail.
 //
-// offloadModeText is the raw --tc-offload-mode value; ctEnabled reflects
-// whether the conntrack-offload pipeline is active (the tc backend enables it
-// by default). Warnings are emitted for the conditions that make a filter fail
-// to offload: a PF not in switchdev mode, hw-tc-offload disabled, or (when CT
-// is enabled) a steering mode other than SMFS.
-func LogHostOffloadConfig(hostPrefix, offloadModeText string, ctEnabled bool) {
+// offloadModeText is the raw --tc-offload-mode value; ctModeText is the raw
+// --tc-ct-mode value. Warnings are emitted for the conditions that make a filter
+// fail to offload: a PF not in switchdev mode, hw-tc-offload disabled, or (when
+// CT is not forced off) a steering mode other than SMFS. When CT mode is "auto"
+// a non-SMFS PF is reported as a graceful DEGRADE to stateless (info-level
+// "improvement available"), not a hard warning, since enforcement still lands.
+func LogHostOffloadConfig(hostPrefix, offloadModeText, ctModeText string) {
 	mode, err := parseOffloadMode(offloadModeText)
 	if err != nil {
 		klog.Warningf("tcflower startup: %v; assuming hardware (skip_sw) mode for this summary", err)
 	}
+	ctMode, cterr := parseCTMode(ctModeText)
+	if cterr != nil {
+		klog.Warningf("tcflower startup: %v; assuming auto for this summary", cterr)
+	}
 
 	pfs := discoverMLX5PFs(hostPrefix)
-	klog.Infof("tcflower startup: SR-IOV tc-flower backend ENABLED (offload-mode=%s, conntrack-offload=%t); "+
-		"found %d Mellanox/NVIDIA SR-IOV PF(s) under %s/sys", mode, ctEnabled, len(pfs), hostPrefix)
+	klog.Infof("tcflower startup: SR-IOV tc-flower backend ENABLED (offload-mode=%s, ct-mode=%s); "+
+		"found %d Mellanox/NVIDIA SR-IOV PF(s) under %s/sys", mode, ctMode, len(pfs), hostPrefix)
 
 	if len(pfs) == 0 {
 		klog.Warningf("tcflower startup: no Mellanox/NVIDIA SR-IOV physical function found in sysfs. " +
@@ -94,15 +99,17 @@ func LogHostOffloadConfig(hostPrefix, offloadModeText string, ctEnabled bool) {
 
 	hardwareMode := mode == OffloadHardware
 	for _, pf := range pfs {
-		logPFOffloadConfig(pf, hardwareMode, ctEnabled)
+		logPFOffloadConfig(pf, hardwareMode, ctMode)
 	}
 }
 
 // logPFOffloadConfig emits the INFO summary line for one PF plus any WARNING
 // lines for offload-blocking conditions. hardwareMode reports whether filters
 // carry skip_sw (so hw-tc-offload being off is fatal rather than merely
-// degrading).
-func logPFOffloadConfig(pf pfOffloadInfo, hardwareMode, ctEnabled bool) {
+// degrading). ctMode tunes the steering-mode message: under CTModeAuto a
+// non-SMFS PF is a graceful DEGRADE-to-stateless (info), under CTModeRequire it
+// is a hard offload-blocking WARNING, and under CTModeOff steering is irrelevant.
+func logPFOffloadConfig(pf pfOffloadInfo, hardwareMode bool, ctMode CTMode) {
 	model := pf.Model
 	if model == "" {
 		model = "unknown mlx5 device " + pf.DeviceID
@@ -141,23 +148,38 @@ func logPFOffloadConfig(pf pfOffloadInfo, hardwareMode, ctEnabled bool) {
 
 	// Steering mode + CT capacity (mlx5 devlink). SMFS is required for hardware
 	// conntrack offload; DMFS (the default) cannot offload the CT pipeline.
+	// Whether a non-SMFS mode is a hard problem or a graceful degrade depends on
+	// --tc-ct-mode: 'off' ignores CT entirely, 'auto' degrades to stateless (and
+	// still fully enforces stateless allow/deny), 'require' fails closed.
 	handle := "pci/" + pf.PCI
+	ctRelevant := ctMode != CTModeOff
 	steering, steeringKnown := devlinkParamValue(handle, "flow_steering_mode")
 	if steeringKnown {
 		klog.Infof("tcflower startup: PF %s flow_steering_mode=%s", pf.PCI, steering)
-		if ctEnabled && steering != "smfs" {
-			klog.Warningf("tcflower startup: conntrack offload is enabled but PF %s steering mode is %q (need smfs); "+
-				"the CT pipeline will NOT hardware-offload and stateful (established/related) filters will be "+
-				"rejected in hardware mode. Switch with: devlink dev param set %s name flow_steering_mode value smfs "+
-				"cmode runtime", pf.PCI, steering, handle)
+		if ctRelevant && steering != "smfs" {
+			switch ctMode {
+			case CTModeRequire:
+				klog.Warningf("tcflower startup: --tc-ct-mode=require but PF %s steering mode is %q (need smfs); "+
+					"the stateful CT filters will be REJECTED at insertion and this PF's VFs left UNENFORCED "+
+					"(fail-closed). Switch with: devlink dev param set %s name flow_steering_mode value smfs "+
+					"cmode runtime (BEFORE switchdev), or use --tc-ct-mode=auto to degrade to stateless.",
+					pf.PCI, steering, handle)
+			default: // CTModeAuto
+				klog.Infof("tcflower startup: PF %s steering mode is %q (not smfs); conntrack offload is NOT "+
+					"available, so --tc-ct-mode=auto DEGRADES this PF to STATELESS enforcement (stateless "+
+					"allow/deny is fully enforced; established/related return traffic is not statefully tracked). "+
+					"IMPROVEMENT: switch to SMFS (devlink dev param set %s name flow_steering_mode value smfs "+
+					"cmode runtime, BEFORE switchdev) to enable stateful CT offload.", pf.PCI, steering, handle)
+			}
 		}
-	} else if ctEnabled {
+	} else if ctRelevant {
 		klog.Warningf("tcflower startup: could not read flow_steering_mode for PF %s (devlink unavailable or "+
-			"unprivileged). Conntrack offload needs SMFS; verify manually with: devlink dev param show %s "+
-			"name flow_steering_mode", pf.PCI, handle)
+			"unprivileged). Conntrack offload needs SMFS; --tc-ct-mode=auto will DEGRADE to stateless when it "+
+			"cannot confirm SMFS. Verify manually with: devlink dev param show %s name flow_steering_mode",
+			pf.PCI, handle)
 	}
 
-	if ctEnabled {
+	if ctRelevant {
 		if v, known := devlinkParamValue(handle, "ct_max_offloaded_conns"); known {
 			klog.Infof("tcflower startup: PF %s ct_max_offloaded_conns=%s (hardware conntrack-offload capacity; "+
 				"new connections beyond this are not tracked in hardware)", pf.PCI, v)

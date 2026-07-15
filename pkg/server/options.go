@@ -55,6 +55,7 @@ type Options struct {
 	// Defaults to "" (all interfaces); set to "127.0.0.1" to restrict to loopback.
 	healthBindAddress string
 	tcOffloadMode     string
+	tcCTMode          string
 	enableTCBackend   bool
 
 	// updated by command line parsing
@@ -98,6 +99,7 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&o.healthPort, "health-port", 0, "TCP port for the health HTTP server (0 to disable, 1-65535 to enable).")
 	fs.StringVar(&o.healthBindAddress, "health-bind-address", "", "IP address the health HTTP server binds to (empty = all interfaces, 127.0.0.1 = loopback only).")
 	fs.StringVar(&o.tcOffloadMode, "tc-offload-mode", "hardware", "tc flower offload mode for the SR-IOV backend: 'hardware' (skip_sw, hardware-only, fail-closed; production default) or 'software' (skip_hw, in-kernel software enforcement). Ignored by the nft backend.")
+	fs.StringVar(&o.tcCTMode, "tc-ct-mode", "auto", "Stateful conntrack (CT) offload policy for the SR-IOV backend. 'auto' (default): use CT where the NIC can hardware-offload it (SMFS steering), otherwise degrade to the stateless pipeline and log the lost stateful tracking (DMFS cannot offload CT). 'require': always emit CT; if the NIC cannot offload it the filters are rejected and the interface is left unenforced (fail-closed, stateful-or-nothing). 'off': never use CT (always stateless). Ignored by the nft backend.")
 	fs.BoolVar(&o.enableTCBackend, "enable-tc-backend", true, "Enable the SR-IOV tc-flower dataplane backend for VF-representor interfaces. When false, SR-IOV interfaces are NOT enforced by this daemon (only the nftables backend runs). Default: true.")
 	fs.AddGoFlagSet(flag.CommandLine)
 }
@@ -176,6 +178,7 @@ func (o *Options) BuildReconcilerConfig() (*ReconcilerConfig, error) {
 			AllowSrcPrefix: o.allowSrcPrefix,
 			AllowDstPrefix: o.allowDstPrefix,
 			TCOffloadMode:  o.tcOffloadMode,
+			CTMode:         o.tcCTMode,
 		},
 	}, nil
 }
