@@ -18,6 +18,7 @@ package tcflower
 
 import (
 	"context"
+	"net/netip"
 	"testing"
 
 	tc "github.com/florianl/go-tc"
@@ -113,10 +114,10 @@ func TestCTIngressPipeline(t *testing.T) {
 		if r.Chain != ctPolicyChain {
 			continue
 		}
-		if r.Verdict == VerdictAccept && r.SrcCIDR == "192.168.1.0/24" {
+		if r.Verdict == VerdictAccept && r.Src.String() == "192.168.1.0/24" {
 			allow = r
 		}
-		if r.Verdict == VerdictDrop && r.SrcCIDR == "" {
+		if r.Verdict == VerdictDrop && !r.Src.IsValid() {
 			deny = r
 		}
 	}
@@ -143,10 +144,10 @@ func TestCTIngressPipeline(t *testing.T) {
 	if do.Flower.Flags == nil || *do.Flower.Flags != tc.SkipSw {
 		t.Errorf("dispatch filter must carry skip_sw")
 	}
-	if do.Attribute.Chain == nil || *do.Attribute.Chain != ctEntryChain {
+	if do.Chain == nil || *do.Chain != ctEntryChain {
 		// chain 0 is emitted with a nil Chain attribute (kernel default).
-		if do.Attribute.Chain != nil {
-			t.Errorf("chain-0 filter should omit Chain attribute, got %v", *do.Attribute.Chain)
+		if do.Chain != nil {
+			t.Errorf("chain-0 filter should omit Chain attribute, got %v", *do.Chain)
 		}
 	}
 	if do.Flower.KeyCtState == nil || do.Flower.KeyCtStateMask == nil {
@@ -168,7 +169,7 @@ func TestCTIngressPipeline(t *testing.T) {
 
 	// Policy-chain allow: chain attribute set, action list [ct commit, gact pass].
 	ao := allow.toObject(11)
-	if ao.Attribute.Chain == nil || *ao.Attribute.Chain != ctPolicyChain {
+	if ao.Chain == nil || *ao.Chain != ctPolicyChain {
 		t.Errorf("policy-chain filter must set Chain=%d", ctPolicyChain)
 	}
 	if ao.Flower.Flags == nil || *ao.Flower.Flags != tc.SkipSw {
@@ -218,7 +219,7 @@ func TestCTEgressPipeline(t *testing.T) {
 	var allow *FlowerRule
 	for i := range rules {
 		r := &rules[i]
-		if r.Chain == ctPolicyChain && r.Verdict == VerdictAccept && r.DstCIDR == "10.10.0.0/16" {
+		if r.Chain == ctPolicyChain && r.Verdict == VerdictAccept && r.Dst.String() == "10.10.0.0/16" {
 			allow = r
 		}
 	}
@@ -266,7 +267,7 @@ func TestCTReturnTrafficWithoutEgressPolicy(t *testing.T) {
 	// NEW-direction allow in the policy chain (ingress).
 	var newAllow *FlowerRule
 	for i := range rules {
-		if rules[i].Chain == ctPolicyChain && rules[i].Verdict == VerdictAccept && rules[i].SrcCIDR == "172.16.0.0/12" {
+		if rules[i].Chain == ctPolicyChain && rules[i].Verdict == VerdictAccept && rules[i].Src.String() == "172.16.0.0/12" {
 			newAllow = &rules[i]
 		}
 	}
@@ -348,7 +349,7 @@ func TestCTHandleUniquenessAcrossChains(t *testing.T) {
 	// Also assert handles differ for two rules at the same prio in different chains.
 	// Build two synthetic rules that share a priority but differ only in chain.
 	a := FlowerRule{Rep: testRep, Direction: DirIngress, Chain: ctEntryChain, Priority: 1, HasCTState: true, CTStateMask: ctStateTracked, CTDispatch: true, GotoChain: ctPolicyChain, CTZone: 7, Verdict: VerdictAccept}
-	b := FlowerRule{Rep: testRep, Direction: DirIngress, Chain: ctPolicyChain, Priority: 1, SrcCIDR: "192.168.1.0/24", CTCommit: true, CTZone: 7, Verdict: VerdictAccept}
+	b := FlowerRule{Rep: testRep, Direction: DirIngress, Chain: ctPolicyChain, Priority: 1, Src: netip.MustParsePrefix("192.168.1.0/24"), CTCommit: true, CTZone: 7, Verdict: VerdictAccept}
 	if a.handle() == b.handle() {
 		t.Errorf("filters differing only in chain must get distinct handles")
 	}
@@ -371,7 +372,7 @@ func TestCTDisabledIsStateless(t *testing.T) {
 			t.Errorf("stateless rule must have no CT fields set: %+v", r)
 		}
 		obj := r.toObject(1)
-		if obj.Attribute.Chain != nil {
+		if obj.Chain != nil {
 			t.Errorf("stateless filter must omit Chain attribute")
 		}
 		if obj.Flower.KeyCtState != nil {

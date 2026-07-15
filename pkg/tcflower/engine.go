@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"net"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -146,7 +147,7 @@ const (
 )
 
 // FlowerRule is an abstract, comparable description of one desired tc flower
-// filter. It is intentionally independent of go-tc marshalling so it can be
+// filter. It is intentionally independent of go-tc marshaling so it can be
 // unit-tested as golden data. toObject converts it to a go-tc Object.
 //
 // Only IPv4 is represented in this phase; IPv6 peers/CIDRs are skipped by
@@ -164,11 +165,12 @@ type FlowerRule struct {
 	// L4 protocol (no ip_proto key).
 	Proto uint8
 
-	// SrcCIDR / DstCIDR carry the address match in CIDR form. For policy
-	// ingress the peer is the SOURCE (SrcCIDR); for policy egress the peer is
-	// the DESTINATION (DstCIDR). "" means no address match (match-any).
-	SrcCIDR string
-	DstCIDR string
+	// Src / Dst carry the address match as an IPv4 prefix. For policy ingress
+	// the peer is the SOURCE (Src); for policy egress the peer is the
+	// DESTINATION (Dst). A zero netip.Prefix{} (i.e. !IsValid()) means no
+	// address match (match-any).
+	Src netip.Prefix
+	Dst netip.Prefix
 
 	// HasPort reports whether an L4 destination-port match is present. When
 	// true PortMin..PortMax (inclusive) is the matched range; PortMin==PortMax
@@ -325,9 +327,10 @@ func ctZoneFor(rep string, dir Direction) uint16 {
 	h := fnv.New32a()
 	_, _ = fmt.Fprint(h, rep)
 	// Fold the 32-bit hash into 15 bits and use the low bit for direction,
-	// keeping the zone within uint16 and non-zero.
-	base := uint16(h.Sum32()&0x7fff) << 1
-	zone := base | uint16(dir)
+	// keeping the zone within uint16 and non-zero. The 0x7fff mask makes the
+	// uint16 conversion provably lossless.
+	base := uint16(h.Sum32()&0x7fff) << 1 //nolint:gosec // masked to 15 bits, fits uint16
+	zone := base | uint16(dir)            //nolint:gosec // dir is a 0/1 enum
 	if zone == 0 {
 		zone = 1
 	}
@@ -411,15 +414,15 @@ func expandRule(ctx context.Context, deps controllers.PolicyDeps, rep string, di
 		return nil, fmt.Errorf("policy %q: %w", policyID, err)
 	}
 
-	// Expand peers into allow CIDRs and (higher-priority) except CIDRs.
+	// Expand peers into allow prefixes and (higher-priority) except prefixes.
 	// An empty peers list means "match any address".
 	type peerAddrs struct {
-		allow  []string // CIDRs to accept ("" = any)
-		except []string // CIDRs to drop (higher priority)
+		allow  []netip.Prefix // prefixes to accept (zero Prefix = any)
+		except []netip.Prefix // prefixes to drop (higher priority)
 	}
 	var expanded []peerAddrs
 	if len(peers) == 0 {
-		expanded = append(expanded, peerAddrs{allow: []string{""}})
+		expanded = append(expanded, peerAddrs{allow: []netip.Prefix{{}}})
 	} else {
 		for _, peer := range peers {
 			switch {
@@ -432,9 +435,9 @@ func expandRule(ctx context.Context, deps controllers.PolicyDeps, rep string, di
 				if err != nil {
 					return nil, fmt.Errorf("policy %q: resolve selector peer: %w", policyID, err)
 				}
-				var cidrs []string
+				var cidrs []netip.Prefix
 				for _, ip := range ips {
-					cidrs = append(cidrs, ip+"/32")
+					cidrs = append(cidrs, netip.PrefixFrom(ip, 32))
 				}
 				expanded = append(expanded, peerAddrs{allow: cidrs})
 			default:
@@ -472,7 +475,7 @@ func expandRule(ctx context.Context, deps controllers.PolicyDeps, rep string, di
 // accept additionally commits the NEW connection (CTCommit) so its reply
 // direction is tracked and statefully accepted by the chain-0 est/rel rules.
 // Drops (except-carve-outs, default-deny) never commit.
-func buildRule(rep string, dir Direction, pm portMatch, cidr string, verdict Verdict, ctEnabled bool) FlowerRule {
+func buildRule(rep string, dir Direction, pm portMatch, cidr netip.Prefix, verdict Verdict, ctEnabled bool) FlowerRule {
 	r := FlowerRule{
 		Rep:       rep,
 		Direction: dir,
@@ -487,11 +490,11 @@ func buildRule(rep string, dir Direction, pm portMatch, cidr string, verdict Ver
 		r.CTCommit = true
 		r.CTZone = ctZoneFor(rep, dir)
 	}
-	if cidr != "" {
+	if cidr.IsValid() {
 		if dir == DirIngress {
-			r.SrcCIDR = cidr
+			r.Src = cidr
 		} else {
-			r.DstCIDR = cidr
+			r.Dst = cidr
 		}
 	}
 	return r
@@ -574,18 +577,19 @@ func portNumber(p *intstr.IntOrString) (uint16, error) {
 }
 
 // v4CIDRs returns the subset of cidrs that are valid IPv4 prefixes, canonicalized
-// to their masked network form. IPv6 prefixes are dropped (TODO Phase 3).
-func v4CIDRs(cidrs []string) []string {
-	var out []string
+// to their masked network form. IPv6 prefixes are dropped (TODO Phase 3). The
+// input strings come from the CRD IPBlock (CIDR / Except) and are parsed here.
+func v4CIDRs(cidrs []string) []netip.Prefix {
+	var out []netip.Prefix
 	for _, c := range cidrs {
-		ip, ipnet, err := net.ParseCIDR(c)
+		p, err := netip.ParsePrefix(c)
 		if err != nil {
 			continue
 		}
-		if ip.To4() == nil {
+		if !p.Addr().Is4() {
 			continue // IPv6 — skipped in this phase.
 		}
-		out = append(out, ipnet.String())
+		out = append(out, p.Masked())
 	}
 	return out
 }
@@ -595,7 +599,7 @@ func v4CIDRs(cidrs []string) []string {
 // pkg/server.applyPolicyPeersRulesSelector but collects only the PEER pod
 // interface IPs (the addresses we must match), filtered to IPv4.
 func resolvePeerIPv4s(ctx context.Context, deps controllers.PolicyDeps, peer multiv1beta1.MultiNetworkPolicyPeer,
-	podInfo *controllers.PodInfo, policyNetworks []string) ([]string, error) {
+	podInfo *controllers.PodInfo, policyNetworks []string) ([]netip.Addr, error) {
 	podSelector := labels.Everything()
 	if peer.PodSelector != nil {
 		s, err := metav1.LabelSelectorAsSelector(peer.PodSelector)
@@ -632,8 +636,8 @@ func resolvePeerIPv4s(ctx context.Context, deps controllers.PolicyDeps, peer mul
 		return nil, nil
 	}
 
-	seen := make(map[string]struct{})
-	var ips []string
+	seen := make(map[netip.Addr]struct{})
+	var ips []netip.Addr
 	for _, sPod := range pods {
 		nsInfo, err := deps.GetNamespaceInfo(ctx, sPod.Namespace)
 		if err != nil {
@@ -651,20 +655,18 @@ func resolvePeerIPv4s(ctx context.Context, deps controllers.PolicyDeps, peer mul
 				continue
 			}
 			for _, ip := range sIntf.IPs {
-				parsed := net.ParseIP(ip)
-				if parsed == nil || parsed.To4() == nil {
-					continue // skip empty / IPv6 (TODO Phase 3).
+				if !ip.Is4() {
+					continue // skip IPv6 (TODO Phase 3).
 				}
-				canonical := parsed.String()
-				if _, ok := seen[canonical]; ok {
+				if _, ok := seen[ip]; ok {
 					continue
 				}
-				seen[canonical] = struct{}{}
-				ips = append(ips, canonical)
+				seen[ip] = struct{}{}
+				ips = append(ips, ip)
 			}
 		}
 	}
-	slices.Sort(ips)
+	slices.SortFunc(ips, func(a, b netip.Addr) int { return a.Compare(b) })
 	return ips, nil
 }
 
@@ -735,7 +737,14 @@ func assignPriorities(cands []candidate) []FlowerRule {
 			return strings.Compare(a.policyID, b.policyID)
 		})
 		for i, k := range keys {
-			prio[k] = uint16(i + 1)
+			// tc filter priorities are a uint16 space. In practice the number of
+			// distinct (tier, mask-shape, policy) classes per direction is tiny;
+			// guard against a pathological overflow rather than wrapping.
+			if i+1 > 0xffff {
+				prio[k] = 0xffff
+				continue
+			}
+			prio[k] = uint16(i + 1) //nolint:gosec // bounded above to <= 0xffff
 		}
 	}
 
@@ -771,20 +780,25 @@ func maskSignature(r FlowerRule) string {
 		}
 	}
 	return fmt.Sprintf("c%d|d%d|s%d|D%d|p%d|k%d|m%d", r.Chain, r.Direction,
-		prefixLen(r.SrcCIDR), prefixLen(r.DstCIDR), r.Proto, portKind, r.CTStateMask)
+		prefixLen(r.Src), prefixLen(r.Dst), r.Proto, portKind, r.CTStateMask)
 }
 
-// prefixLen returns the CIDR prefix length, or -1 when cidr is empty.
-func prefixLen(cidr string) int {
-	if cidr == "" {
+// prefixLen returns the prefix length, or -1 when the prefix is invalid/absent.
+func prefixLen(p netip.Prefix) int {
+	if !p.IsValid() {
 		return -1
 	}
-	if i := strings.LastIndex(cidr, "/"); i >= 0 {
-		if n, err := strconv.Atoi(cidr[i+1:]); err == nil {
-			return n
-		}
+	return p.Bits()
+}
+
+// prefixString renders a prefix for hashing/comparison, returning the empty
+// string for an invalid/absent prefix (match-any) so the derived handle stays
+// stable and unique.
+func prefixString(p netip.Prefix) string {
+	if !p.IsValid() {
+		return ""
 	}
-	return -1
+	return p.String()
 }
 
 // compareFlowerRule provides a total, deterministic ordering for output.
@@ -807,10 +821,10 @@ func compareFlowerRule(a, b FlowerRule) int {
 	if a.Verdict != b.Verdict {
 		return int(a.Verdict) - int(b.Verdict)
 	}
-	if c := strings.Compare(a.SrcCIDR, b.SrcCIDR); c != 0 {
+	if c := strings.Compare(a.Src.String(), b.Src.String()); c != 0 {
 		return c
 	}
-	if c := strings.Compare(a.DstCIDR, b.DstCIDR); c != 0 {
+	if c := strings.Compare(a.Dst.String(), b.Dst.String()); c != 0 {
 		return c
 	}
 	if a.Proto != b.Proto {
@@ -845,7 +859,7 @@ func (d Direction) parentHandle() uint32 {
 func (r FlowerRule) handle() uint32 {
 	h := fnv.New32a()
 	_, _ = fmt.Fprintf(h, "%d|%d|%d|%d|%s|%s|%t|%d|%d|%d|%t|%d|%d|%t|%d|%d",
-		r.Chain, r.Direction, r.Priority, r.Proto, r.SrcCIDR, r.DstCIDR,
+		r.Chain, r.Direction, r.Priority, r.Proto, prefixString(r.Src), prefixString(r.Dst),
 		r.HasPort, r.PortMin, r.PortMax, r.Verdict,
 		r.HasCTState, r.CTState, r.CTStateMask, r.CTDispatch, r.GotoChain, r.CTZone)
 	sum := h.Sum32()
@@ -873,14 +887,14 @@ func (r FlowerRule) toObject(ifindex int) tc.Object {
 		flower.KeyIPProto = &proto
 	}
 
-	if r.SrcCIDR != "" {
-		if ip, mask, ok := cidrToIPMask(r.SrcCIDR); ok {
+	if r.Src.IsValid() {
+		if ip, mask, ok := cidrToIPMask(r.Src); ok {
 			flower.KeyIPv4Src = &ip
 			flower.KeyIPv4SrcMask = &mask
 		}
 	}
-	if r.DstCIDR != "" {
-		if ip, mask, ok := cidrToIPMask(r.DstCIDR); ok {
+	if r.Dst.IsValid() {
+		if ip, mask, ok := cidrToIPMask(r.Dst); ok {
 			flower.KeyIPv4Dst = &ip
 			flower.KeyIPv4DstMask = &mask
 		}
@@ -1007,15 +1021,13 @@ func (r FlowerRule) buildActions() *[]*tc.Action {
 	}
 }
 
-// cidrToIPMask parses an IPv4 CIDR into its 4-byte network address and mask.
-func cidrToIPMask(cidr string) (ip net.IP, mask net.IP, ok bool) {
-	_, ipnet, err := net.ParseCIDR(cidr)
-	if err != nil {
+// cidrToIPMask converts an IPv4 netip.Prefix into its 4-byte network address
+// and mask for go-tc. A non-IPv4 prefix is skipped (ok == false).
+func cidrToIPMask(prefix netip.Prefix) (ip net.IP, mask net.IP, ok bool) {
+	if !prefix.Addr().Is4() {
 		return nil, nil, false
 	}
-	v4 := ipnet.IP.To4()
-	if v4 == nil {
-		return nil, nil, false
-	}
-	return v4, net.IP(ipnet.Mask), true
+	network := prefix.Masked()
+	b := network.Addr().As4()
+	return net.IP(b[:]), net.IP(net.CIDRMask(prefix.Bits(), 32)), true
 }

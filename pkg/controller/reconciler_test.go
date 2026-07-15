@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -448,7 +449,7 @@ func TestReconcile_MixedInterfacesDispatchToBothBackends(t *testing.T) {
 					Namespace: pod.Namespace,
 					NodeName:  nodeName,
 					Interfaces: []controllers.InterfaceInfo{
-						{NetattachName: "macvlan-net", InterfaceName: "net1", InterfaceType: "macvlan", IPs: []string{"10.0.0.1"}},
+						{NetattachName: "macvlan-net", InterfaceName: "net1", InterfaceType: "macvlan", IPs: []netip.Addr{netip.MustParseAddr("10.0.0.1")}},
 						{NetattachName: "sriov-net", InterfaceName: "net2", PCIAddress: "0000:04:00.2", RepresentorDevice: "enp4s0f0_3"},
 					},
 				}, nil
@@ -569,7 +570,7 @@ func testInterface() controllers.InterfaceInfo {
 	return controllers.InterfaceInfo{
 		NetattachName: "net1",
 		InterfaceName: "net1",
-		IPs:           []string{"10.0.0.1"},
+		IPs:           []netip.Addr{netip.MustParseAddr("10.0.0.1")},
 	}
 }
 

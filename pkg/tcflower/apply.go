@@ -130,8 +130,8 @@ type filterKey struct {
 // filterChain returns the tc chain of an installed filter, treating an absent
 // Chain attribute as chain 0 (the kernel omits it for the default chain).
 func filterChain(obj tc.Object) uint32 {
-	if obj.Attribute.Chain != nil {
-		return *obj.Attribute.Chain
+	if obj.Chain != nil {
+		return *obj.Chain
 	}
 	return 0
 }

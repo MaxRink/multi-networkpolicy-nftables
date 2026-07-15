@@ -19,6 +19,7 @@ package tcflower
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"reflect"
 	"testing"
 
@@ -94,11 +95,15 @@ func (s *fakeDeps) addPeerPod(namespace, name string, lbls map[string]string, ne
 	}
 	nn := types.NamespacedName{Namespace: namespace, Name: name}
 	s.pods[nn] = pod
+	addrs := make([]netip.Addr, 0, len(ips))
+	for _, ip := range ips {
+		addrs = append(addrs, netip.MustParseAddr(ip))
+	}
 	s.podMap[nn] = controllers.PodInfo{
 		Name:      name,
 		Namespace: namespace,
 		Interfaces: []controllers.InterfaceInfo{
-			{NetattachName: netattach, InterfaceName: "net1", IPs: ips},
+			{NetattachName: netattach, InterfaceName: "net1", IPs: addrs},
 		},
 	}
 }
@@ -128,7 +133,7 @@ func targetPodInfo() *controllers.PodInfo {
 			{
 				NetattachName:     testNet,
 				InterfaceName:     "net1",
-				IPs:               []string{"10.0.0.5"},
+				IPs:               []netip.Addr{netip.MustParseAddr("10.0.0.5")},
 				PCIAddress:        "0000:03:00.1",
 				RepresentorDevice: testRep,
 			},
@@ -190,7 +195,7 @@ func TestIngressAllowFromCIDRAndDefaultDeny(t *testing.T) {
 	rules := buildRules(t, deps, policyMapOf(policy))
 
 	want := []FlowerRule{
-		{Rep: testRep, Direction: DirIngress, Priority: 1, SrcCIDR: "192.168.1.0/24", Verdict: VerdictAccept},
+		{Rep: testRep, Direction: DirIngress, Priority: 1, Src: netip.MustParsePrefix("192.168.1.0/24"), Verdict: VerdictAccept},
 		{Rep: testRep, Direction: DirIngress, Priority: 2, Verdict: VerdictDrop}, // default-deny
 	}
 	assertRules(t, rules, want)
@@ -219,7 +224,7 @@ func TestEgressAllowToCIDR(t *testing.T) {
 	rules := buildRules(t, deps, policyMapOf(policy))
 
 	want := []FlowerRule{
-		{Rep: testRep, Direction: DirEgress, Priority: 1, DstCIDR: "10.10.0.0/16", Verdict: VerdictAccept},
+		{Rep: testRep, Direction: DirEgress, Priority: 1, Dst: netip.MustParsePrefix("10.10.0.0/16"), Verdict: VerdictAccept},
 		{Rep: testRep, Direction: DirEgress, Priority: 2, Verdict: VerdictDrop},
 	}
 	assertRules(t, rules, want)
@@ -252,11 +257,11 @@ func TestIPBlockWithExcept(t *testing.T) {
 	var exceptPrio, allowPrio uint16
 	var foundExcept, foundAllow bool
 	for _, r := range rules {
-		if r.Verdict == VerdictDrop && r.SrcCIDR == "10.1.0.0/16" {
+		if r.Verdict == VerdictDrop && r.Src.String() == "10.1.0.0/16" {
 			exceptPrio = r.Priority
 			foundExcept = true
 		}
-		if r.Verdict == VerdictAccept && r.SrcCIDR == "10.0.0.0/8" {
+		if r.Verdict == VerdictAccept && r.Src.String() == "10.0.0.0/8" {
 			allowPrio = r.Priority
 			foundAllow = true
 		}
@@ -288,8 +293,8 @@ func TestPodSelectorPeerExpandsToIPv4(t *testing.T) {
 
 	got := map[string]bool{}
 	for _, r := range rules {
-		if r.Verdict == VerdictAccept && r.SrcCIDR != "" {
-			got[r.SrcCIDR] = true
+		if r.Verdict == VerdictAccept && r.Src.IsValid() {
+			got[r.Src.String()] = true
 		}
 	}
 	if !got["10.0.0.20/32"] || !got["10.0.0.21/32"] {
@@ -388,13 +393,13 @@ func TestIPv6PeersSkipped(t *testing.T) {
 	rules := buildRules(t, deps, policyMapOf(policy))
 
 	for _, r := range rules {
-		if r.SrcCIDR == "2001:db8::/32" {
+		if r.Src.IsValid() && r.Src.String() == "2001:db8::/32" {
 			t.Errorf("IPv6 CIDR should have been skipped, got rule %+v", r)
 		}
 	}
 	found := false
 	for _, r := range rules {
-		if r.Verdict == VerdictAccept && r.SrcCIDR == "192.168.5.0/24" {
+		if r.Verdict == VerdictAccept && r.Src.String() == "192.168.5.0/24" {
 			found = true
 		}
 	}
@@ -424,7 +429,7 @@ func TestPriorityStability(t *testing.T) {
 	// Two different mask shapes must land on different priorities.
 	var p24, p32 uint16
 	for _, r := range first {
-		switch r.SrcCIDR {
+		switch r.Src.String() {
 		case "192.168.1.0/24":
 			p24 = r.Priority
 		case "10.0.0.5/32":
@@ -445,7 +450,7 @@ func TestToObjectSkipSwAndKeys(t *testing.T) {
 		Direction: DirIngress,
 		Priority:  3,
 		Proto:     ipProtoTCP,
-		SrcCIDR:   "192.168.1.0/24",
+		Src:       netip.MustParsePrefix("192.168.1.0/24"),
 		HasPort:   true,
 		PortMin:   443,
 		PortMax:   443,

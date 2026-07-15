@@ -60,9 +60,9 @@ func (f *fakeSysfs) writeFile(content string, parts ...string) {
 }
 
 // pciDevice ensures the PCI device dir exists.
-func (f *fakeSysfs) pciDevice(pci string) string {
+func (f *fakeSysfs) pciDevice(pci string) {
 	f.t.Helper()
-	return f.mkdirAll("sys", "bus", "pci", "devices", pci)
+	f.mkdirAll("sys", "bus", "pci", "devices", pci)
 }
 
 // vf wires up a VF: creates its device dir, the physfn link back to the PF, and

@@ -19,6 +19,7 @@ limitations under the License.
 package tcflower
 
 import (
+	"net/netip"
 	"testing"
 
 	tc "github.com/florianl/go-tc"
@@ -63,13 +64,13 @@ func TestReconcileAddsMissingAndDeletesStale(t *testing.T) {
 	const ifindex = 10
 
 	desired := []FlowerRule{
-		{Rep: testRep, Direction: DirIngress, Priority: 1, SrcCIDR: "192.168.1.0/24", Verdict: VerdictAccept},
+		{Rep: testRep, Direction: DirIngress, Priority: 1, Src: netip.MustParsePrefix("192.168.1.0/24"), Verdict: VerdictAccept},
 		{Rep: testRep, Direction: DirIngress, Priority: 2, Verdict: VerdictDrop},
 	}
 
 	// Pre-seed a stale managed filter (skip_sw flower) that is NOT in desired,
 	// plus a foreign filter that must be left untouched.
-	staleRule := FlowerRule{Rep: testRep, Direction: DirIngress, Priority: 9, SrcCIDR: "172.16.0.0/12", Verdict: VerdictAccept}
+	staleRule := FlowerRule{Rep: testRep, Direction: DirIngress, Priority: 9, Src: netip.MustParsePrefix("172.16.0.0/12"), Verdict: VerdictAccept}
 	stale := staleRule.toObject(ifindex)
 
 	foreign := tc.Object{
