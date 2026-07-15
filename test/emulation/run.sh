@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Copyright 2025 Deutsche Telekom AG.
+# Copyright 2026 Deutsche Telekom AG.
 # Licensed under the Apache License, Version 2.0.
 #
 # Runs every emulation layer and prints a pass/skip/fail summary. Each layer

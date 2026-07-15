@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Copyright 2025 Deutsche Telekom AG.
+# Copyright 2026 Deutsche Telekom AG.
 # Licensed under the Apache License, Version 2.0.
 #
 # Layer A — discovery emulation.
