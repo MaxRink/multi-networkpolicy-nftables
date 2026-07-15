@@ -16,6 +16,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 declare -a SCRIPTS=(
   "netdevsim-discovery.sh"
   "veth-flower-enforcement.sh"
+  "netdevsim-layerd-offload-drop.sh"
 )
 
 pass=0
@@ -53,9 +54,11 @@ done
 echo "  ----------------------------------------"
 echo "  pass=${pass} skip=${skipped} fail=${failed}"
 echo
-echo "  NOTE: Layer D (offloaded skip_sw drop actually blocks) is NOT covered:"
-echo "        stock netdevsim's TC_SETUP_CLSFLOWER is a no-op. That property"
-echo "        remains gated to real CX5+ hardware. See test/emulation/README.md."
+echo "  NOTE: Layer D (offloaded skip_sw drop actually blocks) is ATTEMPTED but"
+echo "        SELF-SKIPS on a stock kernel: netdevsim's TC_SETUP_CLSFLOWER is a"
+echo "        no-op, so an offloaded drop does not fire. It ASSERTS only on a"
+echo "        kernel carrying test/emulation/kernel/netdevsim-flower-enforce.patch."
+echo "        Real mlx5 offload remains gated to CX5+ hardware. See README.md."
 
 # Only a hard failure fails the harness; skips are expected on limited runners.
 [[ ${failed} -eq 0 ]]
