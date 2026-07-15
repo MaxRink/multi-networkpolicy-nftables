@@ -270,7 +270,7 @@ are unsupported today — a known gap.
   `ct_action_on_nat_conns`) are **out-of-tree (OFED-only)** and absent from a
   stock upstream kernel; feature parity differs by OFED/DOCA version.
 
-## 10. Visibility / packet inspection (incl. the t5g BGP-over-SR-IOV case)
+## 10. Visibility / packet inspection (incl. the BGP-over-SR-IOV case)
 
 What you can see/log/filter for traffic on a VF (e.g. an app running BGP on
 tcp/179 over an SR-IOV VF). Summary of what's possible **today on CX5+** vs a
@@ -328,7 +328,7 @@ Details:
   (L7 inspection = a DPU job, steer VF traffic to Arm cores) is now
   **[secondary]**. Out of scope for this host-side backend.
 
-**t5g recommendation:** count BGP and allow/deny it by 5-tuple entirely in HW on
+**BGP-over-SR-IOV recommendation:** count BGP and allow/deny it by 5-tuple entirely in HW on
 CX5+; rate-limit needs CX6+; get a packet *copy* via mirror/sample; but plain
 tcpdump on the rep won't show the offloaded fast path, and BGP-message-level
 inspection is not possible in the eSwitch at all.
