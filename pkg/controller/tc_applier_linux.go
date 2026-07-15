@@ -4,16 +4,16 @@ package controller
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
+	"github.com/telekom/multi-networkpolicy-nftables/pkg/tcflower"
 	v1 "k8s.io/api/core/v1"
 )
 
 // applyTCRulesForPod enforces a pod's SR-IOV VF interfaces by programming tc
-// flower filters on the host VF representor. The translation engine and tc
-// driver land in a later phase; until then this returns a clear error so
-// SR-IOV interfaces are never silently left unenforced.
-func applyTCRulesForPod(_ context.Context, _ controllers.PolicyDeps, _ controllers.CommonRuleConfig, _ controllers.PolicyMap, pod *v1.Pod, _ *controllers.PodInfo, _ string) error {
-	return fmt.Errorf("tc flower enforcement for SR-IOV pod %s/%s is not yet implemented", pod.Namespace, pod.Name)
+// flower filters on the host VF representor (hardware-offloaded on switchdev
+// NICs). podInfo has already been narrowed to the pod's SR-IOV interfaces by
+// the reconciler's per-interface backend partitioning.
+func applyTCRulesForPod(ctx context.Context, deps controllers.PolicyDeps, cfg controllers.CommonRuleConfig, policyMap controllers.PolicyMap, pod *v1.Pod, podInfo *controllers.PodInfo, hostPrefix string) error {
+	return tcflower.Apply(ctx, deps, cfg, policyMap, pod, podInfo, hostPrefix)
 }
