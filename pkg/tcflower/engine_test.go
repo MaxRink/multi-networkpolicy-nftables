@@ -196,7 +196,8 @@ func TestIngressAllowFromCIDRAndDefaultDeny(t *testing.T) {
 
 	want := []FlowerRule{
 		{Rep: testRep, Direction: DirIngress, Priority: 1, Src: netip.MustParsePrefix("192.168.1.0/24"), Verdict: VerdictAccept},
-		{Rep: testRep, Direction: DirIngress, Priority: 2, Verdict: VerdictDrop}, // default-deny
+		{Rep: testRep, Direction: DirIngress, Priority: 2, Verdict: VerdictDrop},                   // v4 default-deny
+		{Rep: testRep, Direction: DirIngress, Priority: 3, Family: familyV6, Verdict: VerdictDrop}, // v6 default-deny
 	}
 	assertRules(t, rules, want)
 
@@ -225,7 +226,8 @@ func TestEgressAllowToCIDR(t *testing.T) {
 
 	want := []FlowerRule{
 		{Rep: testRep, Direction: DirEgress, Priority: 1, Dst: netip.MustParsePrefix("10.10.0.0/16"), Verdict: VerdictAccept},
-		{Rep: testRep, Direction: DirEgress, Priority: 2, Verdict: VerdictDrop},
+		{Rep: testRep, Direction: DirEgress, Priority: 2, Verdict: VerdictDrop},                   // v4 default-deny
+		{Rep: testRep, Direction: DirEgress, Priority: 3, Family: familyV6, Verdict: VerdictDrop}, // v6 default-deny
 	}
 	assertRules(t, rules, want)
 
@@ -372,39 +374,82 @@ func TestEmptyPeersAndEmptyPorts(t *testing.T) {
 
 	rules := buildRules(t, deps, policyMapOf(policy))
 
+	// Match-any (empty peers) covers BOTH families, and so does the
+	// default-deny catch-all: a v4 and a v6 filter for each.
 	want := []FlowerRule{
-		{Rep: testRep, Direction: DirIngress, Priority: 1, Verdict: VerdictAccept}, // match-any
-		{Rep: testRep, Direction: DirIngress, Priority: 2, Verdict: VerdictDrop},   // default-deny
+		{Rep: testRep, Direction: DirIngress, Priority: 1, Verdict: VerdictAccept},                   // v4 match-any
+		{Rep: testRep, Direction: DirIngress, Priority: 2, Family: familyV6, Verdict: VerdictAccept}, // v6 match-any
+		{Rep: testRep, Direction: DirIngress, Priority: 3, Verdict: VerdictDrop},                     // v4 default-deny
+		{Rep: testRep, Direction: DirIngress, Priority: 4, Family: familyV6, Verdict: VerdictDrop},   // v6 default-deny
 	}
 	assertRules(t, rules, want)
 }
 
-func TestIPv6PeersSkipped(t *testing.T) {
+// TestMixedIPBlockEmitsBothFamilies proves a single ipBlock peer carrying both
+// a v4 and a v6 CIDR yields one v4 filter and one v6 filter, each with the
+// correct family and address key. (This inverts the former Phase-2
+// "IPv6 peers skipped" test, which asserted v6 was dropped.)
+func TestMixedIPBlockEmitsBothFamilies(t *testing.T) {
 	deps := newFakeDeps()
 	policy := makePolicy("p1",
 		[]multiv1beta1.MultiPolicyType{multiv1beta1.PolicyTypeIngress},
 		[]multiv1beta1.MultiNetworkPolicyIngressRule{
 			{From: []multiv1beta1.MultiNetworkPolicyPeer{
-				{IPBlock: &multiv1beta1.IPBlock{CIDR: "2001:db8::/32"}},  // v6 => skipped
-				{IPBlock: &multiv1beta1.IPBlock{CIDR: "192.168.5.0/24"}}, // v4 => kept
+				{IPBlock: &multiv1beta1.IPBlock{CIDR: "2001:db8::/32"}},  // v6 => v6 filter
+				{IPBlock: &multiv1beta1.IPBlock{CIDR: "192.168.5.0/24"}}, // v4 => v4 filter
 			}},
 		}, nil)
 
 	rules := buildRules(t, deps, policyMapOf(policy))
 
-	for _, r := range rules {
-		if r.Src.IsValid() && r.Src.String() == "2001:db8::/32" {
-			t.Errorf("IPv6 CIDR should have been skipped, got rule %+v", r)
+	var v4, v6 *FlowerRule
+	for i := range rules {
+		r := &rules[i]
+		if r.Verdict != VerdictAccept {
+			continue
+		}
+		if r.Src.String() == "192.168.5.0/24" {
+			v4 = r
+		}
+		if r.Src.String() == "2001:db8::/32" {
+			v6 = r
 		}
 	}
-	found := false
-	for _, r := range rules {
-		if r.Verdict == VerdictAccept && r.Src.String() == "192.168.5.0/24" {
-			found = true
-		}
+	if v4 == nil || v6 == nil {
+		t.Fatalf("expected both a v4 and a v6 allow rule; got %+v", rules)
 	}
-	if !found {
-		t.Errorf("expected the IPv4 CIDR rule to be present; got %+v", rules)
+	if v4.Family != familyV4 {
+		t.Errorf("v4 CIDR rule must carry familyV4, got %d", v4.Family)
+	}
+	if v6.Family != familyV6 {
+		t.Errorf("v6 CIDR rule must carry familyV6, got %d", v6.Family)
+	}
+
+	// v4 filter: ethertype 0x0800, KeyIPv4Src; no v6 keys.
+	o4 := v4.toObject(1)
+	if o4.Flower.KeyEthType == nil || *o4.Flower.KeyEthType != ethTypeIPv4 {
+		t.Errorf("v4 filter ethertype = %v, want 0x0800", o4.Flower.KeyEthType)
+	}
+	if o4.Flower.KeyIPv4Src == nil || o4.Flower.KeyIPv6Src != nil {
+		t.Errorf("v4 filter must set KeyIPv4Src and not KeyIPv6Src")
+	}
+
+	// v6 filter: ethertype 0x86dd, 16-byte KeyIPv6Src + mask; no v4 keys.
+	o6 := v6.toObject(1)
+	if o6.Flower.KeyEthType == nil || *o6.Flower.KeyEthType != ethTypeIPv6 {
+		t.Errorf("v6 filter ethertype = %v, want 0x86dd", o6.Flower.KeyEthType)
+	}
+	if o6.Flower.KeyIPv6Src == nil || o6.Flower.KeyIPv6SrcMask == nil {
+		t.Fatalf("v6 filter must set KeyIPv6Src + mask")
+	}
+	if len(*o6.Flower.KeyIPv6Src) != 16 {
+		t.Errorf("v6 src key must be 16 bytes, got %d", len(*o6.Flower.KeyIPv6Src))
+	}
+	if o6.Flower.KeyIPv4Src != nil {
+		t.Errorf("v6 filter must not set KeyIPv4Src")
+	}
+	if o6.Flower.Flags == nil || *o6.Flower.Flags != tc.SkipSw {
+		t.Errorf("v6 filter must carry skip_sw")
 	}
 }
 
@@ -490,6 +535,194 @@ func TestToObjectSkipSwAndKeys(t *testing.T) {
 	od := rd.toObject(99)
 	if (*od.Flower.Actions)[0].Gact.Parms.Action != tcActShot {
 		t.Errorf("drop verdict should map to TC_ACT_SHOT (%d)", tcActShot)
+	}
+}
+
+// TestIPv6IngressAllowFromCIDR: an ingress ipBlock with a v6 CIDR produces a
+// familyV6 accept whose toObject carries ethertype 0x86dd and a 16-byte
+// KeyIPv6Src + /64 mask, plus a v6 default-deny.
+func TestIPv6IngressAllowFromCIDR(t *testing.T) {
+	deps := newFakeDeps()
+	policy := makePolicy("p1",
+		[]multiv1beta1.MultiPolicyType{multiv1beta1.PolicyTypeIngress},
+		[]multiv1beta1.MultiNetworkPolicyIngressRule{
+			{From: []multiv1beta1.MultiNetworkPolicyPeer{{IPBlock: &multiv1beta1.IPBlock{CIDR: "2001:db8::/64"}}}},
+		}, nil)
+
+	rules := buildRules(t, deps, policyMapOf(policy))
+
+	var allow *FlowerRule
+	for i := range rules {
+		if rules[i].Verdict == VerdictAccept && rules[i].Src.String() == "2001:db8::/64" {
+			allow = &rules[i]
+		}
+	}
+	if allow == nil {
+		t.Fatalf("missing v6 allow for 2001:db8::/64; rules=%+v", rules)
+	}
+	if allow.Family != familyV6 {
+		t.Errorf("allow rule family = %d, want familyV6", allow.Family)
+	}
+
+	obj := allow.toObject(1)
+	if obj.Flower.KeyEthType == nil || *obj.Flower.KeyEthType != ethTypeIPv6 {
+		t.Errorf("expected ethertype 0x86dd, got %v", obj.Flower.KeyEthType)
+	}
+	if obj.Flower.KeyIPv6Src == nil || len(*obj.Flower.KeyIPv6Src) != 16 {
+		t.Fatalf("expected 16-byte KeyIPv6Src, got %v", obj.Flower.KeyIPv6Src)
+	}
+	if obj.Flower.KeyIPv6SrcMask == nil || len(*obj.Flower.KeyIPv6SrcMask) != 16 {
+		t.Fatalf("expected 16-byte KeyIPv6SrcMask, got %v", obj.Flower.KeyIPv6SrcMask)
+	}
+	// /64 mask: first 8 bytes 0xff, last 8 bytes 0x00.
+	m := *obj.Flower.KeyIPv6SrcMask
+	for i := 0; i < 8; i++ {
+		if m[i] != 0xff {
+			t.Errorf("mask byte %d = %#x, want 0xff", i, m[i])
+		}
+	}
+	for i := 8; i < 16; i++ {
+		if m[i] != 0x00 {
+			t.Errorf("mask byte %d = %#x, want 0x00", i, m[i])
+		}
+	}
+	if obj.Flower.Flags == nil || *obj.Flower.Flags != tc.SkipSw {
+		t.Errorf("v6 filter must carry skip_sw")
+	}
+	// A v6 default-deny must exist too.
+	var v6deny bool
+	for _, r := range rules {
+		if r.Verdict == VerdictDrop && r.Family == familyV6 && !r.Src.IsValid() {
+			v6deny = true
+		}
+	}
+	if !v6deny {
+		t.Errorf("expected a v6 default-deny catch-all; got %+v", rules)
+	}
+}
+
+// TestIPv6EgressAllowToCIDR: an egress ipBlock with a v6 CIDR puts the prefix
+// in the Dst slot with familyV6.
+func TestIPv6EgressAllowToCIDR(t *testing.T) {
+	deps := newFakeDeps()
+	policy := makePolicy("p1",
+		[]multiv1beta1.MultiPolicyType{multiv1beta1.PolicyTypeEgress},
+		nil,
+		[]multiv1beta1.MultiNetworkPolicyEgressRule{
+			{To: []multiv1beta1.MultiNetworkPolicyPeer{{IPBlock: &multiv1beta1.IPBlock{CIDR: "fd00::/8"}}}},
+		})
+
+	rules := buildRules(t, deps, policyMapOf(policy))
+
+	var allow *FlowerRule
+	for i := range rules {
+		if rules[i].Verdict == VerdictAccept && rules[i].Dst.String() == "fd00::/8" {
+			allow = &rules[i]
+		}
+	}
+	if allow == nil {
+		t.Fatalf("missing v6 egress allow for fd00::/8; rules=%+v", rules)
+	}
+	if allow.Family != familyV6 {
+		t.Errorf("egress v6 allow family = %d, want familyV6", allow.Family)
+	}
+	obj := allow.toObject(1)
+	if obj.Flower.KeyEthType == nil || *obj.Flower.KeyEthType != ethTypeIPv6 {
+		t.Errorf("expected ethertype 0x86dd")
+	}
+	if obj.Flower.KeyIPv6Dst == nil || len(*obj.Flower.KeyIPv6Dst) != 16 {
+		t.Errorf("expected 16-byte KeyIPv6Dst")
+	}
+	if obj.Flower.KeyIPv4Dst != nil {
+		t.Errorf("v6 filter must not set KeyIPv4Dst")
+	}
+}
+
+// TestIPBlockWithV6Except: a v6 ipBlock with a v6 Except emits the except-drop
+// at a lower priority than the allow, both familyV6.
+func TestIPBlockWithV6Except(t *testing.T) {
+	deps := newFakeDeps()
+	policy := makePolicy("p1",
+		[]multiv1beta1.MultiPolicyType{multiv1beta1.PolicyTypeIngress},
+		[]multiv1beta1.MultiNetworkPolicyIngressRule{
+			{From: []multiv1beta1.MultiNetworkPolicyPeer{{IPBlock: &multiv1beta1.IPBlock{
+				CIDR:   "2001:db8::/32",
+				Except: []string{"2001:db8:1::/48"},
+			}}}},
+		}, nil)
+
+	rules := buildRules(t, deps, policyMapOf(policy))
+
+	var exceptPrio, allowPrio uint16
+	var foundExcept, foundAllow bool
+	for _, r := range rules {
+		if r.Verdict == VerdictDrop && r.Src.String() == "2001:db8:1::/48" {
+			if r.Family != familyV6 {
+				t.Errorf("except drop must be familyV6, got %d", r.Family)
+			}
+			exceptPrio = r.Priority
+			foundExcept = true
+		}
+		if r.Verdict == VerdictAccept && r.Src.String() == "2001:db8::/32" {
+			if r.Family != familyV6 {
+				t.Errorf("allow must be familyV6, got %d", r.Family)
+			}
+			allowPrio = r.Priority
+			foundAllow = true
+		}
+	}
+	if !foundExcept || !foundAllow {
+		t.Fatalf("expected both v6 except-drop and v6 allow; got %+v", rules)
+	}
+	if exceptPrio >= allowPrio {
+		t.Errorf("v6 except drop priority %d must be < allow priority %d", exceptPrio, allowPrio)
+	}
+}
+
+// TestPodSelectorPeerDualStack: a peer pod carrying both a v4 and a v6 address
+// yields one v4 filter (/32) and one v6 filter (/128).
+func TestPodSelectorPeerDualStack(t *testing.T) {
+	deps := newFakeDeps()
+	deps.addNamespace(testNS, map[string]string{"kubernetes.io/metadata.name": testNS})
+	deps.addPeerPod(testNS, "peer1", map[string]string{"app": "db"}, testNet, []string{"10.0.0.20", "2001:db8::20"})
+
+	policy := makePolicy("p1",
+		[]multiv1beta1.MultiPolicyType{multiv1beta1.PolicyTypeIngress},
+		[]multiv1beta1.MultiNetworkPolicyIngressRule{
+			{From: []multiv1beta1.MultiNetworkPolicyPeer{{
+				PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "db"}},
+			}}},
+		}, nil)
+
+	rules := buildRules(t, deps, policyMapOf(policy))
+
+	var v4, v6 *FlowerRule
+	for i := range rules {
+		r := &rules[i]
+		if r.Verdict != VerdictAccept {
+			continue
+		}
+		if r.Src.String() == "10.0.0.20/32" {
+			v4 = r
+		}
+		if r.Src.String() == "2001:db8::20/128" {
+			v6 = r
+		}
+	}
+	if v4 == nil || v6 == nil {
+		t.Fatalf("expected both /32 (v4) and /128 (v6) allow rules; got %+v", rules)
+	}
+	if v4.Family != familyV4 {
+		t.Errorf("v4 /32 rule family = %d, want familyV4", v4.Family)
+	}
+	if v6.Family != familyV6 {
+		t.Errorf("v6 /128 rule family = %d, want familyV6", v6.Family)
+	}
+	if o := v4.toObject(1); o.Flower.KeyIPv4Src == nil {
+		t.Errorf("v4 /32 filter must set KeyIPv4Src")
+	}
+	if o := v6.toObject(1); o.Flower.KeyIPv6Src == nil || len(*o.Flower.KeyIPv6Src) != 16 {
+		t.Errorf("v6 /128 filter must set 16-byte KeyIPv6Src")
 	}
 }
 

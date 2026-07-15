@@ -118,3 +118,5 @@ replace (
 	k8s.io/pod-security-admission => k8s.io/pod-security-admission v0.35.1
 	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.35.1
 )
+
+replace github.com/florianl/go-tc => github.com/MaxRink/go-tc v0.4.9-0.20260715140802-3da426f39fea

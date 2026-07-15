@@ -40,7 +40,7 @@ github.com/emicklei/go-restful/v3/log
 ## explicit; go 1.18
 github.com/evanphx/json-patch/v5
 github.com/evanphx/json-patch/v5/internal/json
-# github.com/florianl/go-tc v0.4.8
+# github.com/florianl/go-tc v0.4.8 => github.com/MaxRink/go-tc v0.4.9-0.20260715140802-3da426f39fea
 ## explicit; go 1.15
 github.com/florianl/go-tc
 github.com/florianl/go-tc/core
@@ -951,3 +951,4 @@ sigs.k8s.io/yaml
 # k8s.io/mount-utils => k8s.io/mount-utils v0.35.1
 # k8s.io/pod-security-admission => k8s.io/pod-security-admission v0.35.1
 # k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.35.1
+# github.com/florianl/go-tc => github.com/MaxRink/go-tc v0.4.9-0.20260715140802-3da426f39fea

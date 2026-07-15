@@ -355,6 +355,65 @@ func TestCTHandleUniquenessAcrossChains(t *testing.T) {
 	}
 }
 
+// TestCTEntryRulesPerFamily proves the chain-0 conntrack entry pipeline is
+// emitted for BOTH families: a flower filter always carries an ethertype, so
+// there must be a v4 AND a v6 established/related/invalid/dispatch set. Without
+// the v6 set, established/related v6 return traffic would not be statefully
+// accepted and untracked v6 packets would not be dispatched through conntrack.
+func TestCTEntryRulesPerFamily(t *testing.T) {
+	deps := newFakeDeps()
+	policy := makePolicy("p1",
+		[]multiv1beta1.MultiPolicyType{multiv1beta1.PolicyTypeIngress},
+		[]multiv1beta1.MultiNetworkPolicyIngressRule{
+			{From: []multiv1beta1.MultiNetworkPolicyPeer{{IPBlock: &multiv1beta1.IPBlock{CIDR: "192.168.1.0/24"}}}},
+		}, nil)
+
+	rules := buildCTRules(t, deps, policyMapOf(policy))
+
+	// Count chain-0 established / related accepts per family.
+	type fam struct{ est, rel, inv, disp bool }
+	byFamily := map[ipFamily]*fam{familyV4: {}, familyV6: {}}
+	for i := range rules {
+		r := &rules[i]
+		if r.Direction != DirIngress || r.Chain != ctEntryChain || !r.HasCTState {
+			continue
+		}
+		f := byFamily[r.Family]
+		switch {
+		case r.CTDispatch:
+			f.disp = true
+		case r.CTStateMask == ctStateTracked|ctStateEstablished && r.Verdict == VerdictAccept:
+			f.est = true
+		case r.CTStateMask == ctStateTracked|ctStateRelated && r.Verdict == VerdictAccept:
+			f.rel = true
+		case r.CTStateMask == ctStateTracked|ctStateInvalid && r.Verdict == VerdictDrop:
+			f.inv = true
+		}
+	}
+	for _, family := range []ipFamily{familyV4, familyV6} {
+		f := byFamily[family]
+		if !f.est || !f.rel || !f.inv || !f.disp {
+			t.Errorf("family %d: missing chain-0 CT rules (est=%v rel=%v inv=%v disp=%v)",
+				family, f.est, f.rel, f.inv, f.disp)
+		}
+	}
+
+	// The v6 established accept must emit ethertype 0x86dd and a ct_state key.
+	for i := range rules {
+		r := &rules[i]
+		if r.Chain == ctEntryChain && r.Family == familyV6 &&
+			r.CTStateMask == ctStateTracked|ctStateEstablished && r.Verdict == VerdictAccept {
+			obj := r.toObject(1)
+			if obj.Flower.KeyEthType == nil || *obj.Flower.KeyEthType != ethTypeIPv6 {
+				t.Errorf("v6 established filter ethertype = %v, want 0x86dd", obj.Flower.KeyEthType)
+			}
+			if obj.Flower.KeyCtState == nil {
+				t.Errorf("v6 established filter must set ct_state key")
+			}
+		}
+	}
+}
+
 // TestCTDisabledIsStateless confirms the stateless (default) pipeline is
 // unchanged: no chains, no ct_state, no CT actions.
 func TestCTDisabledIsStateless(t *testing.T) {
