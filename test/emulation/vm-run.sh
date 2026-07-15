@@ -54,7 +54,8 @@ fi
 
 # --user root: run privileged in the guest (modprobe, tc, netns all need it).
 # The host rootfs (incl. the repo checkout and the Go toolchain) is shared, so
-# REPO_ROOT resolves the same inside the VM.
-exec vng --run "${KERNEL_ARG[@]}" --user root --cpus 2 --memory 2G \
-  --env "REPO_ROOT=${REPO_ROOT}" -- \
-  bash "${GUEST_SCRIPT}"
+# the guest script resolves REPO_ROOT from its own path; we also pass it as a
+# positional arg as a fallback. We deliberately avoid `vng --env`, which older
+# virtme-ng releases do not support.
+exec vng --run "${KERNEL_ARG[@]}" --user root --cpus 2 --memory 2G -- \
+  bash "${GUEST_SCRIPT}" "${REPO_ROOT}"
