@@ -315,10 +315,18 @@ Details:
   is no payload/byte-offset/L7 key. BGP message contents live in the TCP payload
   → not matchable in the eSwitch. `action ct` adds flow *state* only, not payload
   inspection.
-- **DPU path [secondary/unconfirmed]:** true L7/DPI is a BlueField + DOCA DPI
-  (RegEx/RXP) design steering VF traffic to Arm cores — different architecture,
-  out of scope for host adapters, and unverifiable this session (NVIDIA DOCA
-  portal is JS/bot-blocked).
+- **DPU path [secondary]:** true L7/DPI is a BlueField (DPU) design, not a host
+  ConnectX-adapter feature. Confirmed via a browser against the NVIDIA DOCA docs
+  (v3.4.0, `networking-docs.nvidia.com/doca`): **DOCA Flow Inspector** is
+  described as "the DOCA Flow Inspector service container **on top of NVIDIA
+  BlueField**", and **DOCA Pipeline Language (DPL)** is "a software development
+  solution based on a domain-specific programming language … for NVIDIA
+  BlueField" — i.e. programmable packet processing lives on the DPU Arm cores.
+  The standalone DOCA **DPI/RegEx (RXP)** library that older docs described is
+  no longer a top-level DOCA 3.x component (renamed/folded), so the specific
+  "RXP RegEx engine" claim stays **[unconfirmed]** — but the architectural point
+  (L7 inspection = a DPU job, steer VF traffic to Arm cores) is now
+  **[secondary]**. Out of scope for this host-side backend.
 
 **t5g recommendation:** count BGP and allow/deny it by 5-tuple entirely in HW on
 CX5+; rate-limit needs CX6+; get a packet *copy* via mirror/sample; but plain
