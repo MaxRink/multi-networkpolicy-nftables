@@ -78,12 +78,77 @@ running `devlink dev eswitch set ... mode switchdev` and
 ConnectX-5 (MCX512F) / ConnectX-6 Lx.
 
 **Caveat — CT offload on bm4x as imaged:** bm4x hosts run the mlx5 default
-**DMFS** steering mode, not SMFS. Hardware CT offload requires SMFS, so on bm4x
-as currently imaged the CT chains will **not** be hardware-offloaded. Stateless
-policy (allow/deny by 5-tuple, CIDR, ports) offloads normally; only the
-stateful established/related path is affected. To hardware-offload CT on bm4x,
-switch the uplink to SMFS during provisioning — otherwise leave CT policies off
-these nodes or accept that they are not HW-enforced.
+**DMFS** steering mode, not SMFS. Hardware CT offload is associated with SMFS,
+so on bm4x as currently imaged the CT chains are unlikely to hardware-offload.
+Stateless policy (allow/deny by 5-tuple, CIDR, ports) offloads normally; only
+the stateful established/related path is affected. See the steering-mode
+section below for the recommendation to move bm4x to SMFS.
+
+## Flow-steering modes (DMFS / SMFS / HMFS)
+
+mlx5 selects how eSwitch steering rules are built via one runtime devlink
+parameter, `flow_steering_mode` (values `dmfs` / `smfs` / `hmfs`):
+
+- **DMFS** (Device-Managed Flow Steering) — the **default**. Steering entities
+  are created and managed by **firmware**.
+- **SMFS** (Software-Managed Flow Steering) — the **driver** builds the HW
+  steering entities without firmware round-trips. The upstream kernel doc
+  states plainly: *"SMFS mode is faster and provides better rule insertion rate
+  compared to default DMFS mode."* It is the mode associated with OVS/ASAP²
+  hardware offload and conntrack offload at scale.
+- **HMFS** (Hardware-Managed Flow Steering) — newest, WQE-based, "millions of
+  rules per second"; hardware floor is **ConnectX-6 Dx**.
+
+Set (runtime):
+
+```
+devlink dev param set pci/<pf> name flow_steering_mode value smfs cmode runtime
+```
+
+Per-card support across our fleet (from the upstream mlx5 steering-format enum
+and DR capability gate):
+
+| Card | DMFS | SMFS | HMFS |
+|------|------|------|------|
+| ConnectX-4 / CX4-Lx | ✓ (only) | ✗ (no SW-steering format) | ✗ |
+| ConnectX-5 | ✓ | ✓ | ✗ |
+| ConnectX-6 Lx | ✓ | ✓ | not confirmed |
+| ConnectX-6 Dx | ✓ | ✓ | ✓ |
+| ConnectX-7 | ✓ | ✓ | ✓ |
+
+### Should bm4x switch to SMFS?
+
+**Recommendation: yes, move bm4x (CX5 + CX6 Lx + CX6 Dx) to SMFS** — all three
+support it, it is faster for rule insertion, and it is the mode aligned with
+CT/OVS hardware offload. Caveats to respect:
+
+1. **Set SMFS before switchdev.** The mlx5 driver rejects `smfs` once the
+   eSwitch is already in offloads mode ("Software managed steering is not
+   supported when eswitch offloads enabled"). Provisioning must set
+   `flow_steering_mode=smfs` **first**, then `devlink dev eswitch set … mode
+   switchdev`. Wrong ordering is the main footgun.
+2. **DMFS-only feature lost:** E-Switch *aggregated-affinity* matching is
+   DMFS-only. Only relevant if bm4x uses multi-port/bond affinity matching in
+   the FDB — verify it does not.
+3. **CX5 feature/version floor:** CX5 uses the oldest SW-steering format and
+   lacks some DR optimizations that CX6 Dx+ have; SMFS still works, but confirm
+   the shipped MLNX_OFED/DOCA + kernel is recent enough for the CT ruleset.
+4. **Host cost:** "software-managed" shifts steering-table construction to the
+   host CPU/RAM. NVIDIA publishes no quantified overhead; do a canary rollout
+   and watch driver CPU/RAM.
+
+HMFS is **not** recommended fleet-wide: CX5 cannot do it, so SMFS is the common
+denominator across bm4x.
+
+> **Sourcing note:** the mode definitions, the "SMFS is faster" statement, and
+> the per-card steering-format support are from the upstream kernel docs and
+> mlx5 driver source (primary). "CT offload *requires* SMFS" is widely
+> documented by NVIDIA (ASAP²) but the upstream tc CT path is not gated on
+> steering mode — treat it as strong guidance, verify on the target
+> OFED/firmware. `ct_max_offloaded_conns` and its `-ENOSPC` at
+> `offloaded_flows >= ct_max_offloaded_conns * 2` behaviour are MLNX_OFED
+> (out-of-tree) specifics; the BlueField default is 1,000,000 (adapter default
+> not separately published — read `devlink dev param show`).
 
 ## Testing without hardware
 
