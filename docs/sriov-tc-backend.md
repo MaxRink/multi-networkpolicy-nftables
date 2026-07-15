@@ -277,8 +277,10 @@ different reps/directions do not collide in the shared eSwitch conntrack table.
 
 **Action encodings [primary: include/uapi/linux/pkt_cls.h, tc_act/tc_ct.h;
 impl]:** `TC_ACT_GOTO_CHAIN = 0x40000000`; ct_state bits `new/est/rel/trk/inv/rpl`;
-ct action `commit=1`. IPv6 flower L3 keys are provided by the forked go-tc
-(temporary `replace`, upstream PR florianl/go-tc#330).
+ct action `commit=1`. IPv6 flower L3 keys are provided by upstream go-tc
+(florianl/go-tc#330, merged); the module is pinned to the merge-commit
+pseudo-version until florianl cuts a tagged release, then bump to the tag. The
+personal fork is no longer referenced **[impl]**.
 
 ## D. Discovery internals (VF → representor)
 
