@@ -34,3 +34,8 @@ func Apply(_ context.Context, _ controllers.PolicyDeps, _ controllers.CommonRule
 	_ controllers.PolicyMap, _ *corev1.Pod, _ *controllers.PodInfo, _ string) error {
 	return fmt.Errorf("tc flower Apply is unsupported on GOOS=%s", runtime.GOOS)
 }
+
+// Flush is unsupported on non-Linux platforms.
+func Flush(_ context.Context, _ *controllers.PodInfo, _ string) error {
+	return fmt.Errorf("tc flower Flush is unsupported on GOOS=%s", runtime.GOOS)
+}
