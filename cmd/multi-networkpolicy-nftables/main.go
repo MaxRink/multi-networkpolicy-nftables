@@ -100,10 +100,11 @@ func run(opts *server.Options) error {
 
 	// Log a one-shot summary of the host's SR-IOV offload configuration and any
 	// limits that would prevent hardware enforcement (switchdev off, hw-tc-offload
-	// off, non-SMFS steering with CT enabled, ...). Only relevant when the tc
-	// backend is enabled; the tc applier forces conntrack offload on.
+	// off, non-SMFS steering when CT is wanted, ...). Only relevant when the tc
+	// backend is enabled. The CT mode governs whether a non-SMFS PF is reported
+	// as a hard block (require) or a graceful degrade to stateless (auto).
 	if cfg.EnableTCBackend {
-		tcflower.LogHostOffloadConfig(cfg.HostPrefix, cfg.CommonRuleConfig.TCOffloadMode, true)
+		tcflower.LogHostOffloadConfig(cfg.HostPrefix, cfg.CommonRuleConfig.TCOffloadMode, cfg.CommonRuleConfig.CTMode)
 	}
 
 	var restCfg *rest.Config

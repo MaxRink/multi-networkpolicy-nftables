@@ -206,6 +206,58 @@ func offloadFlags(m OffloadMode) uint32 {
 	return tc.SkipSw
 }
 
+// CTMode governs whether the stateful conntrack-offload (CT) pipeline is used,
+// and how the backend reacts when the NIC/eSwitch cannot hardware-offload it
+// (which requires SMFS steering; the default DMFS mode cannot offload CT).
+//
+// It is resolved once from CommonRuleConfig.CTMode. The zero value is CTModeAuto
+// so an unset config degrades gracefully rather than failing closed on DMFS.
+type CTMode uint8
+
+const (
+	// CTModeAuto (zero / "auto"): emit the CT pipeline only when hardware CT
+	// offload is available (SMFS confirmed). When it is not — DMFS, or the
+	// steering mode cannot be determined — fall back to the STATELESS pipeline
+	// (which offloads on any switchdev NIC) and log the loss of stateful
+	// established/related tracking. Maximizes successfully-offloaded enforcement.
+	CTModeAuto CTMode = iota
+	// CTModeRequire ("require"): always emit the CT pipeline. If the NIC cannot
+	// offload it the skip_sw filters are rejected (fail-closed) and the interface
+	// is left unenforced rather than silently degraded. For SMFS fleets that want
+	// stateful-or-error.
+	CTModeRequire
+	// CTModeOff ("off"): never emit the CT pipeline; always use the stateless
+	// first-match pipeline. Stateful return traffic is not tracked.
+	CTModeOff
+)
+
+func (m CTMode) String() string {
+	switch m {
+	case CTModeRequire:
+		return "require"
+	case CTModeOff:
+		return "off"
+	default:
+		return "auto"
+	}
+}
+
+// parseCTMode normalizes the CommonRuleConfig.CTMode string into a typed CTMode.
+// The empty string and "auto" both map to CTModeAuto. Any other value is an
+// error (fail-closed: an unrecognized mode aborts rather than guessing).
+func parseCTMode(s string) (CTMode, error) {
+	switch s {
+	case "", "auto":
+		return CTModeAuto, nil
+	case "require":
+		return CTModeRequire, nil
+	case "off":
+		return CTModeOff, nil
+	default:
+		return CTModeAuto, fmt.Errorf("invalid tc CT mode %q: want \"auto\", \"require\" or \"off\"", s)
+	}
+}
+
 // tc gact control actions (from include/uapi/linux/pkt_cls.h).
 const (
 	tcActOK        uint32 = 0          // TC_ACT_OK   — accept/pass
