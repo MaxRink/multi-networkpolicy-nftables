@@ -80,7 +80,7 @@ func TestReconcileAddsMissingAndDeletesStale(t *testing.T) {
 
 	drv := &fakeDriver{installed: []tc.Object{stale, foreign}}
 
-	if err := reconcile(drv, ifindex, desired); err != nil {
+	if err := reconcile(drv, testRep, ifindex, desired); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
