@@ -37,7 +37,7 @@ github.com/emicklei/go-restful/v3/log
 ## explicit; go 1.18
 github.com/evanphx/json-patch/v5
 github.com/evanphx/json-patch/v5/internal/json
-# github.com/florianl/go-tc v0.4.8
+# github.com/florianl/go-tc v0.4.8 => github.com/MaxRink/go-tc v0.4.9-0.20260715140802-3da426f39fea
 ## explicit; go 1.15
 github.com/florianl/go-tc
 github.com/florianl/go-tc/core
@@ -920,3 +920,4 @@ sigs.k8s.io/structured-merge-diff/v6/value
 # sigs.k8s.io/yaml v1.6.0
 ## explicit; go 1.22
 sigs.k8s.io/yaml
+# github.com/florianl/go-tc => github.com/MaxRink/go-tc v0.4.9-0.20260715140802-3da426f39fea
