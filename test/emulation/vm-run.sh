@@ -44,6 +44,21 @@ if [[ ! -x "${GUEST_SCRIPT}" ]]; then
   skip "guest script ${GUEST_SCRIPT} missing/not executable"
 fi
 
+# Pre-compile the tcflower test binary ON THE HOST (which has network) so the
+# network-less VM never needs to fetch the Go toolchain or modules. The guest
+# executes this binary instead of running `go test`.
+TESTBIN="${REPO_ROOT}/tcflower.test"
+if command -v go >/dev/null 2>&1; then
+  echo "== pre-building tcflower test binary on host =="
+  if ( cd "${REPO_ROOT}" && go test -c -o "${TESTBIN}" ./pkg/tcflower/ ); then
+    export TCFLOWER_TESTBIN="${TESTBIN}"
+  else
+    echo "WARN: could not pre-build test binary; guest will fall back to offline go test"
+  fi
+else
+  echo "WARN: no go toolchain on host to pre-build the test binary"
+fi
+
 KERNEL_ARG=()
 if [[ -n "${VNG_KERNEL:-}" ]]; then
   KERNEL_ARG=(--kimg "${VNG_KERNEL}")
