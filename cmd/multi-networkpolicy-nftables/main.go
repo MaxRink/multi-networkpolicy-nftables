@@ -186,6 +186,7 @@ func run(opts *server.Options) error {
 		NetworkPlugins:           cfg.NetworkPlugins,
 		CommonCfg:                cfg.CommonRuleConfig,
 		ContainerRuntimeEndpoint: cfg.ContainerRuntimeEndpoint,
+		TCBackendDisabled:        !cfg.EnableTCBackend,
 	}
 	defer func() {
 		if cerr := reconciler.CloseCRI(); cerr != nil {
