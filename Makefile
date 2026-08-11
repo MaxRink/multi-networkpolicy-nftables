@@ -44,25 +44,25 @@ test-nftables:
 		export KUBEBUILDER_ASSETS; \
 	fi; \
 	if [ "$(HOST_OS)" != "linux" ]; then \
-		echo "make $@ requires Linux for nftables tests"; \
+		echo "make $(if $(MAKECMDGOALS),$(firstword $(MAKECMDGOALS)),$@) requires Linux for nftables tests"; \
 		exit 1; \
 	elif [ "$$(id -u)" -eq 0 ]; then \
 		modprobe nft_ct 2>/dev/null || true; \
 		uid=$$(id -u); gid=$$(id -g); \
-		go test -v -coverprofile=$(TEST_PROFILE) $(TEST_NFTABLES_PKGS); \
+		go test -v -coverprofile="$(TEST_PROFILE)" $(TEST_NFTABLES_PKGS); \
 	elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then \
 		sudo -n modprobe nft_ct 2>/dev/null || true; \
 		uid=$$(id -u); gid=$$(id -g); \
 		status=0; \
 		if [ -n "$${KUBEBUILDER_ASSETS:-}" ]; then \
-			sudo env "KUBEBUILDER_ASSETS=$$KUBEBUILDER_ASSETS" go test -v -coverprofile=$(TEST_PROFILE) $(TEST_NFTABLES_PKGS) || status=$$?; \
+			sudo env "KUBEBUILDER_ASSETS=$$KUBEBUILDER_ASSETS" go test -v -coverprofile="$(TEST_PROFILE)" $(TEST_NFTABLES_PKGS) || status=$$?; \
 		else \
-			sudo go test -v -coverprofile=$(TEST_PROFILE) $(TEST_NFTABLES_PKGS) || status=$$?; \
+			sudo go test -v -coverprofile="$(TEST_PROFILE)" $(TEST_NFTABLES_PKGS) || status=$$?; \
 		fi; \
-		if [ -f $(TEST_PROFILE) ]; then sudo chown "$$uid:$$gid" $(TEST_PROFILE); fi; \
+		if [ -f "$(TEST_PROFILE)" ]; then sudo chown "$$uid:$$gid" "$(TEST_PROFILE)"; fi; \
 		exit $$status; \
 	else \
-		echo "make $@ requires root or passwordless sudo; refusing to prompt interactively"; \
+		echo "make $(if $(MAKECMDGOALS),$(firstword $(MAKECMDGOALS)),$@) requires root or passwordless sudo; refusing to prompt interactively"; \
 		exit 1; \
 	fi
 
@@ -114,7 +114,7 @@ fmt-fix:
 
 ## clean: Remove build artifacts
 clean:
-	rm -f $(BINARY_NAME)_* $(TEST_PROFILE)
+	rm -f $(BINARY_NAME)_* "$(TEST_PROFILE)"
 
 ## image: Build container image
 image:
