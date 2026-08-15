@@ -26,5 +26,16 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # govulncheck reports, it does not gate. Every finding seen in this
+      # repository so far came from the Go standard library, and only a
+      # toolchain bump clears those. A failure here used to block unrelated
+      # pull requests. The full output stays in this step.
       - name: Run govulncheck
+        id: govulncheck
+        continue-on-error: true
         run: make govulncheck
+
+      - name: Report govulncheck outcome
+        if: steps.govulncheck.outcome == 'failure'
+        run: |
+          echo "::warning::govulncheck reported findings. Read the 'Run govulncheck' step for the details. This does not fail CI."

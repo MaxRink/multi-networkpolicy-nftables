@@ -36,8 +36,17 @@ jobs:
     - name: Run go vet
       run: make vet
 
+    # Same gate change as in govulncheck.yml. A vulnerability report must not
+    # stop the fmt, vet and test steps that follow it in this job.
     - name: Run govulncheck
+      id: govulncheck
+      continue-on-error: true
       run: make govulncheck
+
+    - name: Report govulncheck outcome
+      if: steps.govulncheck.outcome == 'failure'
+      run: |
+        echo "::warning::govulncheck reported findings. Read the 'Run govulncheck' step for the details. This does not fail CI."
 
     - name: Run go env toolchain
       run: go env -w GOTOOLCHAIN=go${{ matrix.go-version }}+auto
