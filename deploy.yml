@@ -89,11 +89,32 @@ spec:
       - args:
         - --host-prefix=/host
         - --container-runtime-endpoint=/run/crio/crio.sock
+        - --health-port=8081
+        - --health-bind-address=127.0.0.1
         command:
         - /usr/bin/multi-networkpolicy-nftables
         image: ghcr.io/telekom/multi-networkpolicy-nftables
         imagePullPolicy: Always
+        livenessProbe:
+          httpGet:
+            host: 127.0.0.1
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
         name: multi-networkpolicy
+        ports:
+        - containerPort: 8081
+          hostPort: 8081
+          name: health
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            host: 127.0.0.1
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
         resources:
           limits:
             cpu: 100m

@@ -16,6 +16,8 @@ spec:
             - --sync-period=1
             - --network-plugins=macvlan,bond,ipvlan
             - -v=10
+            - --health-port=8081
+            - --health-bind-address=127.0.0.1
           securityContext:
             privileged: true
             capabilities:
