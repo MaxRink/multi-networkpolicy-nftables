@@ -34,7 +34,7 @@ jobs:
     name: build non-linux controller shims
     strategy:
       matrix:
-        go-version: ["1.25.5"]
+        go-version: ["1.25.12"]
         goos: [darwin]
     runs-on: ubuntu-latest
     env:

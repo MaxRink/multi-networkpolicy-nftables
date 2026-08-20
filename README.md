@@ -116,11 +116,23 @@ go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.24.1
 export KUBEBUILDER_ASSETS="$(setup-envtest use 1.35.0 --bin-dir testbin/k8s -p path)"
 ```
 
-Unit tests also require root privileges for nftables operations:
+Run unprivileged unit tests (controller/utils packages) with:
+
+```bash
+make test-unprivileged
+```
+
+Run the full nftables-backed test target (Linux + root/passwordless sudo required) with:
 
 ```bash
 sudo modprobe nft_ct
-sudo --preserve-env=KUBEBUILDER_ASSETS go test -v ./...
+make test
+```
+
+To run only the privileged suite directly:
+
+```bash
+make test-nftables
 ```
 
 ### Lint
