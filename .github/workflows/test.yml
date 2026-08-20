@@ -10,6 +10,8 @@ permissions:
   contents: read
 jobs:
   test:
+    env:
+      NFTEST_SKIP_IF_UNAVAILABLE: "1"
     strategy:
       matrix:
         go-version: ["1.25.13"]

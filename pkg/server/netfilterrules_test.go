@@ -971,6 +971,175 @@ func TestApplyPodRulesNoPorts(t *testing.T) {
 	}
 }
 
+// TestApplyPodRulesNamespaceSelectorOnlyPeer is a regression test for ingress
+// peers that specify only a NamespaceSelector (PodSelector == nil, not an
+// empty &metav1.LabelSelector{}). Per Kubernetes NetworkPolicy semantics, such
+// a peer must match ALL pods in the namespace(s) selected by NamespaceSelector.
+// This relies on applyPolicyPeersRulesSelector() treating a nil PodSelector as
+// labels.Everything() instead of panicking (guarded in PR #51).
+//
+// The negative ("blocked") pod is deliberately attached to the SAME policy
+// network as the allowed pod (via a networks annotation/network-status name
+// prefixed with testNs, same as other pods in this file), but lives in a
+// namespace that does NOT match NamespaceSelector. This ensures the negative
+// assertion actually exercises namespace-selector filtering, rather than
+// being trivially satisfied by the unrelated policy-network filter
+// (InterfaceInfo.CheckPolicyNetwork).
+func TestApplyPodRulesNamespaceSelectorOnlyPeer(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.CloseLasting()
+	c.FlushRuleset()
+	defer c.FlushRuleset()
+
+	nftState, testNs, mockServer, podMockInfo, err := prepareEnv(c, true)
+	if err != nil {
+		t.Fatalf("failed to prepare test env: %s", err.Error())
+	}
+
+	// Add an interface matching the peer pods' network attachment name so
+	// applyPolicyPeersRulesSelector can match the local pod and the selected
+	// pods against the same policyNetworks list (same convention as
+	// TestApplyPodRules).
+	policyNet := fmt.Sprintf("%s/policy-net-1", testNs)
+	podMockInfo.Interfaces = append(podMockInfo.Interfaces, controllers.InterfaceInfo{
+		NetattachName: policyNet,
+		InterfaceType: "macvlan",
+		InterfaceName: "net1",
+		IPs:           []string{"10.1.1.1"},
+	})
+	policyNetworks := []string{"net1", "net2", policyNet}
+
+	// allowedNs is the namespace selected by the peer's NamespaceSelector.
+	// addNamespace() labels namespaces with "nsname": <name>, so selecting
+	// nsname=allowedNs is sufficient to target it.
+	allowedNs := "allowedns"
+	addNamespace(mockServer, allowedNs)
+
+	// blockedNs is NOT selected by NamespaceSelector, but blockedPod is
+	// attached to the exact same policy network as allowedPod (by using
+	// policyNet, prefixed with testNs, as its networks annotation and
+	// network-status name) so the policy-network filter alone would not
+	// exclude it -- only the namespace selector should.
+	blockedNs := "blockedns"
+	addNamespace(mockServer, blockedNs)
+
+	allowedPod := NewFakePodWithNetAnnotation(
+		allowedNs,
+		"allowed-pod",
+		policyNet,
+		NewFakeNetworkStatus(testNs, "policy-net-1", "192.168.10.1", "10.10.10.10"),
+		map[string]string{"app": "allowed"},
+	)
+	addPod(mockServer, allowedPod)
+
+	blockedPod := NewFakePodWithNetAnnotation(
+		blockedNs,
+		"blocked-pod",
+		policyNet,
+		NewFakeNetworkStatus(testNs, "policy-net-1", "192.168.99.1", "10.99.99.99"),
+		map[string]string{"app": "blocked"},
+	)
+	addPod(mockServer, blockedPod)
+
+	mockPolicy := &multiv1beta1.MultiNetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "policy-net-1",
+			Namespace: testNs,
+			Annotations: map[string]string{
+				PolicyNetworkAnnotation: policyNet,
+			},
+		},
+		Spec: multiv1beta1.MultiNetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{},
+			Ingress: []multiv1beta1.MultiNetworkPolicyIngressRule{
+				{
+					From: []multiv1beta1.MultiNetworkPolicyPeer{
+						{
+							// PodSelector intentionally left nil (not
+							// &metav1.LabelSelector{}): this is the
+							// regression case under test.
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{"nsname": allowedNs},
+							},
+						},
+					},
+				},
+			},
+			PolicyTypes: []multiv1beta1.MultiPolicyType{
+				multiv1beta1.PolicyTypeIngress,
+			},
+		},
+	}
+
+	_, err = nftState.applyPodRules(context.Background(), mockServer, mockServer.cfg, nftState.ingressChain, podMockInfo, mockPolicy, policyNetworks)
+	if err != nil {
+		t.Fatalf("applyPodRules() for ingress failed: %v", err)
+	}
+	if err := nftState.nft.Flush(); err != nil {
+		t.Fatalf("nft flush failed after applying ingress rules: %v", err)
+	}
+
+	filterTable, err := c.ListTableOfFamily(nftState.filter.Name, nftables.TableFamilyINet)
+	if err != nil {
+		t.Fatalf("c.ListTable(\"filter\") failed: %v", err)
+	}
+	if filterTable == nil {
+		t.Fatalf("filterTable is nil")
+	}
+
+	ingressChain0 := fmt.Sprintf("%s-%s", ingressChain, policyRuleNamespacedName(mockPolicy))
+	ingressPeerChain := fmt.Sprintf("%s-%s-0", ingressChain0, peersChainSuffix)
+	ingressPeerChainActualName, err := getChainByNameInComment(c, filterTable, ingressPeerChain)
+	if err != nil {
+		t.Fatalf("failed to get peer chain %q: %s", ingressPeerChain, err.Error())
+	}
+	peerChainRules, err := c.GetRules(filterTable, &nftables.Chain{Name: ingressPeerChainActualName})
+	if err != nil {
+		t.Fatalf("c.GetRules(%q, %q) failed: %s", filterTable.Name, ingressPeerChainActualName, err.Error())
+	}
+
+	// Per Copilot review feedback: restrict the assertion to the specific
+	// selector/peer IP set(s) actually created for this peer -- i.e. the
+	// expr.Lookup sets referenced from this peer's own chain (ingressPeerChain,
+	// the source-address ("saddrs" per getAddressSuffix) sets built by
+	// addIPRule for this ingress peer) -- rather than aggregating elements
+	// from every nftables set in the whole filter table, which could
+	// accidentally include non-IP sets (ports, interfaces...) or sets
+	// belonging to unrelated policies/peers.
+	ipInPeerSets := make(map[string]bool)
+	for _, r := range peerChainRules {
+		for _, e := range r.Exprs {
+			el, ok := e.(*expr.Lookup)
+			if !ok {
+				continue
+			}
+			peerSet, err := c.GetSetByName(filterTable, el.SetName)
+			if err != nil {
+				t.Fatalf("failed to get peer set %q: %s", el.SetName, err.Error())
+			}
+			setElems, err := c.GetSetElements(peerSet)
+			if err != nil {
+				t.Fatalf("failed to get elements for set %q: %s", el.SetName, err.Error())
+			}
+			for _, elem := range setElems {
+				ip, ok := netip.AddrFromSlice(elem.Key)
+				if !ok {
+					continue
+				}
+				ipInPeerSets[ip.String()] = true
+			}
+		}
+	}
+
+	if !ipInPeerSets["10.10.10.10"] {
+		t.Errorf("expected allowed pod IP 10.10.10.10 (namespace %q, matched by NamespaceSelector) to be present in peer saddrs sets, got %v", allowedNs, ipInPeerSets)
+	}
+	if ipInPeerSets["10.99.99.99"] {
+		t.Errorf("blocked pod IP 10.99.99.99 (namespace %q, NOT matched by NamespaceSelector, but on the same policy network) must not be present in peer saddrs sets, got %v", blockedNs, ipInPeerSets)
+	}
+}
+
 func TestApplyPolicyPortsRules(t *testing.T) {
 	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
 	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
@@ -1382,6 +1551,7 @@ func prepareEnv(c *nftables.Conn, createServer bool) (*nftState, string, *testPo
 			{NetattachName: "net2", InterfaceType: "ipvlan", InterfaceName: "eth2", IPs: []string{"10.0.0.0"}},
 		},
 	}
+
 	nftState, err := bootstrapNetfilterRules(c, podMockInfo)
 	if err != nil {
 		return nil, "", nil, podMockInfo, fmt.Errorf("bootstrapNetfilterRules() failed: %w", err)
