@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/pflag"
@@ -48,6 +49,11 @@ type Options struct {
 	acceptICMP               bool
 	allowSrcPrefixText       string
 	allowDstPrefixText       string
+	// healthPort is the TCP port the health HTTP server listens on (0 = disabled).
+	healthPort int
+	// healthBindAddress is the IP address the health HTTP server binds to.
+	// Defaults to "" (all interfaces); set to "127.0.0.1" to restrict to loopback.
+	healthBindAddress string
 
 	// updated by command line parsing
 	allowSrcPrefix []string
@@ -86,6 +92,8 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&o.acceptICMPv6, "accept-icmpv6", false, "accept all ICMPv6 traffic")
 	fs.StringVar(&o.allowSrcPrefixText, "allow-src-prefix", "", "Accept source IP prefix list, comma separated CIDRs (e.g. \"fe80::/10\")")
 	fs.StringVar(&o.allowDstPrefixText, "allow-dst-prefix", "", "Accept destination IP prefix list, comma separated CIDRs (e.g. \"fe80::/10,ff00::/8\")")
+	fs.IntVar(&o.healthPort, "health-port", 0, "TCP port for the health HTTP server (0 to disable, 1-65535 to enable).")
+	fs.StringVar(&o.healthBindAddress, "health-bind-address", "", "IP address the health HTTP server binds to (empty = all interfaces, 127.0.0.1 = loopback only).")
 	fs.AddGoFlagSet(flag.CommandLine)
 }
 
@@ -106,6 +114,15 @@ func parseIPPrefixText(prefixText string, prefixList *[]string) error {
 
 // Validate checks several options and fill processed value
 func (o *Options) Validate() error {
+
+	if o.healthPort < 0 || o.healthPort > 65535 {
+		return fmt.Errorf("health-port %d is out of range [0, 65535]", o.healthPort)
+	}
+	if o.healthBindAddress != "" {
+		if ip := net.ParseIP(o.healthBindAddress); ip == nil {
+			return fmt.Errorf("health-bind-address %q is not a valid IP address", o.healthBindAddress)
+		}
+	}
 
 	if err := parseIPPrefixText(o.allowSrcPrefixText, &o.allowSrcPrefix); err != nil {
 		return err
@@ -161,4 +178,17 @@ func NewOptions() *Options {
 	return &Options{
 		containerRuntime: controllers.Cri,
 	}
+}
+
+// HealthEnabled reports whether the health HTTP server should be started
+// (i.e. --health-port was set to a non-zero value).
+func (o *Options) HealthEnabled() bool {
+	return o.healthPort != 0
+}
+
+// HealthAddr returns the address the health HTTP server should bind to, in
+// "host:port" form suitable for net.Listen. Only meaningful when
+// HealthEnabled() is true.
+func (o *Options) HealthAddr() string {
+	return net.JoinHostPort(o.healthBindAddress, strconv.Itoa(o.healthPort))
 }
