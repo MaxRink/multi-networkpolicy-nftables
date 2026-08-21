@@ -1945,6 +1945,87 @@ func TestRuleEqualHandlesShortAndUnknownRules(t *testing.T) {
 	}
 }
 
+func TestFindRuleReturnsFirstMatch(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.CloseLasting()
+	c.FlushRuleset()
+	defer c.FlushRuleset()
+
+	podMockInfo := &controllers.PodInfo{
+		Interfaces: []controllers.InterfaceInfo{
+			{InterfaceName: "eth0", IPs: []string{"10.0.0.1"}},
+		},
+	}
+	state, err := bootstrapNetfilterRules(c, podMockInfo)
+	if err != nil {
+		t.Fatalf("bootstrapNetfilterRules() failed: %v", err)
+	}
+	if state == nil {
+		t.Fatalf("bootstrapNetfilterRules() returned nil state")
+	}
+
+	table := state.filter
+	chain := state.ingressChain
+
+	comment := userdata.AppendString(nil, userdata.TypeComment, "test-duplicate-rule")
+	makeRule := func() *nftables.Rule {
+		return &nftables.Rule{
+			Table:    table,
+			Chain:    chain,
+			UserData: comment,
+			Exprs: []expr.Any{
+				&expr.Verdict{Kind: expr.VerdictAccept},
+			},
+		}
+	}
+
+	c.AddRule(makeRule())
+	c.AddRule(makeRule())
+
+	if err := c.Flush(); err != nil {
+		t.Fatalf("c.Flush() failed: %v", err)
+	}
+
+	rules, err := c.GetRules(table, chain)
+	if err != nil {
+		t.Fatalf("c.GetRules() failed: %v", err)
+	}
+
+	var firstHandle, secondHandle uint64
+	matched := 0
+	for _, r := range rules {
+		if ruleEqual(makeRule(), r) {
+			matched++
+			switch matched {
+			case 1:
+				firstHandle = r.Handle
+			case 2:
+				secondHandle = r.Handle
+			}
+		}
+	}
+	if matched != 2 {
+		t.Fatalf("expected 2 duplicate rules in chain, found %d", matched)
+	}
+	if firstHandle == secondHandle {
+		t.Fatalf("kernel assigned the same handle to both rules: %d", firstHandle)
+	}
+	t.Logf("firstHandle=%d secondHandle=%d", firstHandle, secondHandle)
+
+	got, err := state.findRule(makeRule())
+	if err != nil {
+		t.Fatalf("findRule() returned error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("findRule() returned nil, expected a rule")
+	}
+	if got.Handle != firstHandle {
+		t.Errorf("findRule() returned handle %d, want first handle %d (last handle %d)",
+			got.Handle, firstHandle, secondHandle)
+	}
+}
+
 func TestCleanupChainsKeepsForeignTableChains(t *testing.T) {
 	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
 	defer nftest.CleanupSystemConn(t, newNS, DEBUG)

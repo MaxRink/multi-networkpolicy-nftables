@@ -1743,29 +1743,13 @@ func (n *nftState) findRule(rule *nftables.Rule) (*nftables.Rule, error) {
 		return nil, fmt.Errorf("failed to list rules in table %q, chain %q: %w", rule.Table.Name, rule.Chain.Name, err)
 	}
 
-	var existing *nftables.Rule
-	cnt := 0
 	for _, r := range rules {
 		if ruleEqual(rule, r) {
-			existing = r
-			cnt++
+			return r, nil
 		}
 	}
 
-	if cnt == 0 {
-		return nil, nil
-	}
-
-	if cnt > 1 {
-		comment, ok := userdata.GetString(rule.UserData, userdata.TypeComment)
-		if !ok {
-			klog.Warningf("failed to get comment for rule %d in table %q, chain %q", rule.Handle, rule.Table.Name, rule.Chain.Name)
-		} else {
-			klog.Warningf("too many rules (%d) for rule %q in table %q, chain %q", cnt, comment, rule.Table.Name, rule.Chain.Name)
-		}
-	}
-
-	return existing, nil
+	return nil, nil
 }
 
 func (n *nftState) getInetSet(chain *nftables.Chain, portsName, suffix string) *nftables.Set {
