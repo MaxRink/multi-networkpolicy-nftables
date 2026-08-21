@@ -54,9 +54,9 @@ test-nftables:
 		uid=$$(id -u); gid=$$(id -g); \
 		status=0; \
 		if [ -n "$${KUBEBUILDER_ASSETS:-}" ]; then \
-			sudo env "KUBEBUILDER_ASSETS=$$KUBEBUILDER_ASSETS" go test -v -coverprofile="$(TEST_PROFILE)" $(TEST_NFTABLES_PKGS) || status=$$?; \
+			sudo env "KUBEBUILDER_ASSETS=$$KUBEBUILDER_ASSETS" "NFTEST_SKIP_IF_UNAVAILABLE=$${NFTEST_SKIP_IF_UNAVAILABLE:-}" go test -v -coverprofile="$(TEST_PROFILE)" $(TEST_NFTABLES_PKGS) || status=$$?; \
 		else \
-			sudo go test -v -coverprofile="$(TEST_PROFILE)" $(TEST_NFTABLES_PKGS) || status=$$?; \
+			sudo env "NFTEST_SKIP_IF_UNAVAILABLE=$${NFTEST_SKIP_IF_UNAVAILABLE:-}" go test -v -coverprofile="$(TEST_PROFILE)" $(TEST_NFTABLES_PKGS) || status=$$?; \
 		fi; \
 		if [ -f "$(TEST_PROFILE)" ]; then sudo chown "$$uid:$$gid" "$(TEST_PROFILE)"; fi; \
 		exit $$status; \
