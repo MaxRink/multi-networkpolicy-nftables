@@ -37,6 +37,27 @@ spec:
           args:
             - --host-prefix=/host
             - --container-runtime-endpoint=/run/crio/crio.sock
+            - --health-port=8081
+            - --health-bind-address=127.0.0.1
+          ports:
+            - name: health
+              containerPort: 8081
+              hostPort: 8081
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+              host: 127.0.0.1
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+              host: 127.0.0.1
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             requests:
               cpu: 100m

@@ -25,12 +25,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
+	multiv1beta1 "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/apis/k8s.cni.cncf.io/v1beta1"
+	netdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	"github.com/spf13/cobra"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controller"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/server"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -44,6 +48,45 @@ import (
 
 type managerStarter interface {
 	Start(context.Context) error
+}
+
+// healthSyncRunnable populates the daemon's readiness state (the
+// policySynced/netdefSynced/nsSynced flags backing /readyz) once the shared
+// informer caches for policies, network attachment definitions, and
+// namespaces have synced. It is added to the manager as a non-leader-election
+// runnable so it starts right after the initial cache sync, whether or not
+// leader election is enabled.
+//
+// GetInformer blocks until the specific informer's HasSynced() is true, so
+// this is correct even if it races with controller-runtime's own internal
+// cache-sync bookkeeping.
+type healthSyncRunnable struct {
+	cache cache.Cache
+	state *server.Server
+}
+
+// NeedLeaderElection implements manager.LeaderElectionRunnable so this
+// runnable is started unconditionally rather than only on the leader (the
+// daemon does not use leader election, but being explicit avoids surprises
+// if that ever changes).
+func (h *healthSyncRunnable) NeedLeaderElection() bool { return false }
+
+func (h *healthSyncRunnable) Start(ctx context.Context) error {
+	targets := []struct {
+		obj  client.Object
+		mark func()
+	}{
+		{&multiv1beta1.MultiNetworkPolicy{}, h.state.MarkPolicySynced},
+		{&netdefv1.NetworkAttachmentDefinition{}, h.state.MarkNetDefSynced},
+		{&corev1.Namespace{}, h.state.MarkNSSynced},
+	}
+	for _, t := range targets {
+		if _, err := h.cache.GetInformer(ctx, t.obj); err != nil {
+			return fmt.Errorf("wait for informer sync (%T): %w", t.obj, err)
+		}
+		t.mark()
+	}
+	return nil
 }
 
 func run(opts *server.Options) error {
@@ -91,6 +134,49 @@ func run(opts *server.Options) error {
 	ctx := ctrl.SetupSignalHandler()
 	if err := controller.SetupIndexes(ctx, mgr); err != nil {
 		return fmt.Errorf("setup indexes: %w", err)
+	}
+
+	// healthState backs the /healthz and /readyz endpoints served by the
+	// health HTTP server below. It starts out "not ready"; healthSyncRunnable
+	// flips each Synced flag once the corresponding informer's cache has
+	// synced, and the shutdown handler below flips shuttingDown once the
+	// daemon starts tearing down.
+	healthState := server.NewServer()
+	if err := mgr.Add(&healthSyncRunnable{cache: mgr.GetCache(), state: healthState}); err != nil {
+		return fmt.Errorf("add health sync runnable: %w", err)
+	}
+
+	var healthServer *server.HealthServer
+	var shutdownWatcherWG sync.WaitGroup
+	if opts.HealthEnabled() {
+		healthServer = server.NewHealthServer(opts.HealthAddr(), healthState)
+		if err := healthServer.Start(); err != nil {
+			return fmt.Errorf("start health server: %w", err)
+		}
+		defer healthServer.Stop()
+
+		// watcherCtx is canceled either when ctx is (a real shutdown signal)
+		// or when run() returns for any other reason, so the watcher
+		// goroutine below always exits and shutdownWatcherWG.Wait() below
+		// can't deadlock on an error path that never triggers ctx.Done().
+		// Defers run LIFO, so cancelWatcher (registered last) runs first,
+		// unblocking the goroutine before Wait is reached.
+		watcherCtx, cancelWatcher := context.WithCancel(ctx)
+		defer shutdownWatcherWG.Wait()
+		defer cancelWatcher()
+
+		// SetupSignalHandler cancels ctx as soon as a shutdown signal is
+		// received (before the manager's graceful shutdown completes), so
+		// this is the earliest point at which /readyz should start
+		// reporting 503.
+		shutdownWatcherWG.Add(1)
+		go func() {
+			defer shutdownWatcherWG.Done()
+			<-watcherCtx.Done()
+			if ctx.Err() != nil {
+				healthState.MarkShuttingDown()
+			}
+		}()
 	}
 
 	reconciler := &controller.NodeReconciler{

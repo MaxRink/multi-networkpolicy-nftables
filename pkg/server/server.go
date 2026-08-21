@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	multiv1beta1 "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/apis/k8s.cni.cncf.io/v1beta1"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
@@ -31,6 +32,54 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/klog/v2"
 )
+
+// Server holds the daemon's shared state that drives health and readiness checks.
+//
+// All fields are accessed concurrently: the HTTP handlers in HealthServer read
+// them on every /readyz request while the informer sync goroutines and the
+// shutdown signal handler write them from the daemon's main goroutine tree.
+// They must therefore be atomics rather than plain bools.
+type Server struct {
+	policySynced atomic.Bool
+	netdefSynced atomic.Bool
+	nsSynced     atomic.Bool
+	shuttingDown atomic.Bool
+}
+
+// NewServer creates a new Server with all sync state unset (not ready) and not
+// shutting down.
+func NewServer() *Server {
+	return &Server{}
+}
+
+// AllSynced reports whether all informer caches have been synced.
+func (s *Server) AllSynced() bool {
+	return s.policySynced.Load() && s.netdefSynced.Load() && s.nsSynced.Load()
+}
+
+// MarkPolicySynced records that the MultiNetworkPolicy informer has completed
+// its initial sync.
+func (s *Server) MarkPolicySynced() {
+	s.policySynced.Store(true)
+}
+
+// MarkNetDefSynced records that the NetworkAttachmentDefinition informer has
+// completed its initial sync.
+func (s *Server) MarkNetDefSynced() {
+	s.netdefSynced.Store(true)
+}
+
+// MarkNSSynced records that the Namespace informer has completed its initial
+// sync.
+func (s *Server) MarkNSSynced() {
+	s.nsSynced.Store(true)
+}
+
+// MarkShuttingDown records that the daemon has begun its shutdown sequence so
+// that /readyz starts reporting 503 immediately.
+func (s *Server) MarkShuttingDown() {
+	s.shuttingDown.Store(true)
+}
 
 type internalPolicy struct {
 	policy         *multiv1beta1.MultiNetworkPolicy
