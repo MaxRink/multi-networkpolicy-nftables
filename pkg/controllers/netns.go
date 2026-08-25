@@ -85,6 +85,13 @@ func selectContainerID(statuses []corev1.ContainerStatus) string {
 	return ""
 }
 
+func networkStatusForPod(pod *corev1.Pod, networks []*netdefv1.NetworkSelectionElement) ([]netdefv1.NetworkStatus, error) {
+	if len(networks) == 0 {
+		return nil, nil
+	}
+	return netdefutils.GetNetworkStatus(pod)
+}
+
 // NewPodInfoFromPod builds PodInfo for a pod using CRI and network definitions.
 func NewPodInfoFromPod(ctx context.Context, pod *corev1.Pod, criClient pb.RuntimeServiceClient, hostname string, networkPlugins []string, netdefResolver NetDefResolver) (*PodInfo, error) {
 	var statuses []netdefv1.NetworkStatus
@@ -99,7 +106,7 @@ func NewPodInfoFromPod(ctx context.Context, pod *corev1.Pod, criClient pb.Runtim
 			}
 		}
 		// parse networkStatus
-		statuses, err = netdefutils.GetNetworkStatus(pod)
+		statuses, err = networkStatusForPod(pod, networks)
 		if err != nil {
 			klog.Errorf("failed to get pod(%s/%s) network status: %v", pod.Namespace, pod.Name, err)
 		}
