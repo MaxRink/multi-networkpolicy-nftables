@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	netdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
@@ -166,6 +167,45 @@ func TestNewPodInfoFromPodPropagatesNetNSError(t *testing.T) {
 	_, err := NewPodInfoFromPod(context.Background(), pod, pb.NewRuntimeServiceClient(&fakeRuntimeConn{t: t, err: wantErr}), "node-a", []string{"bridge"}, &mockNetDefResolver{pluginType: "bridge"})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("NewPodInfoFromPod() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestNetworkStatusForPod(t *testing.T) {
+	t.Parallel()
+
+	pod := &corev1.Pod{}
+	tests := []struct {
+		name     string
+		networks []*netdefv1.NetworkSelectionElement
+		wantErr  bool
+	}{
+		{
+			name: "skips status lookup without additional networks",
+		},
+		{
+			name: "requires status for additional networks",
+			networks: []*netdefv1.NetworkSelectionElement{{
+				Name: "net-a",
+			}},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			statuses, err := networkStatusForPod(pod, tt.networks)
+			if tt.wantErr && err == nil {
+				t.Fatal("networkStatusForPod() error = nil, want error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("networkStatusForPod() error = %v", err)
+			}
+			if len(statuses) != 0 {
+				t.Fatalf("networkStatusForPod() statuses = %#v, want empty", statuses)
+			}
+		})
 	}
 }
 
