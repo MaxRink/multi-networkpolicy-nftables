@@ -170,6 +170,30 @@ func TestNewPodInfoFromPodPropagatesNetNSError(t *testing.T) {
 	}
 }
 
+func TestNewPodInfoFromPodUsesSecondaryStatusWithoutNetworksAnnotation(t *testing.T) {
+	t.Parallel()
+
+	pod := podWithContainerStatuses(nil)
+	pod.Annotations = map[string]string{
+		"k8s.v1.cni.cncf.io/network-status": `[{
+			"name": "net-a",
+			"interface": "net1",
+			"ips": ["10.0.0.2"]
+		}]`,
+	}
+
+	podInfo, err := NewPodInfoFromPod(context.Background(), pod, nil, "other-node", []string{"bridge"}, &mockNetDefResolver{pluginType: "bridge"})
+	if err != nil {
+		t.Fatalf("NewPodInfoFromPod() error = %v", err)
+	}
+	if len(podInfo.Interfaces) != 1 {
+		t.Fatalf("interfaces length = %d, want 1 (%#v)", len(podInfo.Interfaces), podInfo.Interfaces)
+	}
+	if got := podInfo.Interfaces[0]; got.NetattachName != "net-a" || got.InterfaceName != "net1" {
+		t.Fatalf("interface = %#v, want net-a/net1", got)
+	}
+}
+
 func TestNetworkStatusForPod(t *testing.T) {
 	t.Parallel()
 
@@ -206,6 +230,22 @@ func TestNetworkStatusForPod(t *testing.T) {
 				t.Fatalf("networkStatusForPod() statuses = %#v, want empty", statuses)
 			}
 		})
+	}
+}
+
+func TestNetworkStatusForPodRetainsLookupForUnparsedNetworkAnnotation(t *testing.T) {
+	t.Parallel()
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				"k8s.v1.cni.cncf.io/networks": `{"name":"net-a","interface":"net1"}`,
+			},
+		},
+	}
+
+	if _, err := networkStatusForPod(pod, nil); err == nil {
+		t.Fatal("networkStatusForPod() error = nil, want missing network status error")
 	}
 }
 
