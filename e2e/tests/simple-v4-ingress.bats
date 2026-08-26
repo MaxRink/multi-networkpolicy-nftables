@@ -52,6 +52,15 @@ teardown_file() {
 	[ "$status" -eq  "0" ]
 }
 
+@test "secondary interface allow and deny behavior" {
+	# Validate the policy against the Multus secondary interface using the same
+	# allow and deny flow as the persistent validator.
+	run retry_until_success 10 kubectl -n test-simple-v4-ingress exec pod-client-a -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	[ "$status" -eq "0" ]
+	run retry_until_deny 30 kubectl -n test-simple-v4-ingress exec pod-client-b -- sh -c "echo x | nc -w 1 ${server_net1} 5555"
+	[ "$status" -eq "0" ]
+}
+
 @test "status-only secondary interface still enforces ingress policy" {
 	# Model validators that observe the Multus network-status annotation without
 	# the original network selection annotation.
@@ -94,4 +103,3 @@ teardown_file() {
 	kubectl -n kube-system wait --for=condition=ready -l app=multi-networkpolicy pod --timeout=${kubewait_timeout}
 	wait_for_nft_rules "test-simple-v4-ingress" "pod-server" "test-multinetwork-policy-simple-1"
 }
-
