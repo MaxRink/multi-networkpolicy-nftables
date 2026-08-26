@@ -63,8 +63,21 @@ teardown_file() {
 
 @test "status-only secondary interface still enforces ingress policy" {
 	# Model validators that observe the Multus network-status annotation without
-	# the original network selection annotation.
+	# the original network selection annotation. Restart the daemon first so
+	# pre-existing rules cannot make this lifecycle test pass spuriously.
+	run kubectl -n kube-system patch daemonsets multi-networkpolicy-ds-amd64 -p '{"spec": {"template": {"spec": {"nodeSelector": {"non-existing": "true"}}}}}'
+	[ "$status" -eq "0" ]
+	run kubectl -n kube-system wait --for=delete -l app=multi-networkpolicy pod --timeout=${kubewait_timeout}
+	[ "$status" -eq "0" ]
+
 	run kubectl -n test-simple-v4-ingress annotate pod --all k8s.v1.cni.cncf.io/networks-
+	[ "$status" -eq "0" ]
+
+	run kubectl -n kube-system patch daemonsets multi-networkpolicy-ds-amd64 --type json -p='[{"op": "remove", "path": "/spec/template/spec/nodeSelector/non-existing"}]'
+	[ "$status" -eq "0" ]
+	run kubectl -n kube-system rollout status daemonset/multi-networkpolicy-ds-amd64 --timeout=${kubewait_timeout}
+	[ "$status" -eq "0" ]
+	run kubectl -n kube-system wait --for=condition=ready -l app=multi-networkpolicy pod --timeout=${kubewait_timeout}
 	[ "$status" -eq "0" ]
 	run wait_for_nft_rules test-simple-v4-ingress pod-server test-multinetwork-policy-simple-1
 	[ "$status" -eq "0" ]
