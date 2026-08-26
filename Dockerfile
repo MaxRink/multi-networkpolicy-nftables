@@ -1,5 +1,5 @@
 # This Dockerfile is used to build the image available on DockerHub
-FROM golang:1.25 AS build
+FROM golang:1.25.13 AS build
 
 WORKDIR /usr/src/multi-networkpolicy-nftables
 

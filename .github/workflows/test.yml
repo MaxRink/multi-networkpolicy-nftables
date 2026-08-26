@@ -12,7 +12,7 @@ jobs:
   test:
     strategy:
       matrix:
-        go-version: ["1.25.5"]
+        go-version: ["1.25.13"]
         os: [ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
@@ -36,6 +36,18 @@ jobs:
     - name: Run go vet
       run: make vet
 
+    # Same gate change as in govulncheck.yml. A vulnerability report must not
+    # stop the fmt, vet and test steps that follow it in this job.
+    - name: Run govulncheck
+      id: govulncheck
+      continue-on-error: true
+      run: make govulncheck
+
+    - name: Report govulncheck outcome
+      if: steps.govulncheck.outcome == 'failure'
+      run: |
+        echo "::warning::govulncheck reported findings. Read the 'Run govulncheck' step for the details. This does not fail CI."
+
     - name: Run go env toolchain
       run: go env -w GOTOOLCHAIN=go${{ matrix.go-version }}+auto
 
@@ -48,7 +60,10 @@ jobs:
     - name: Load kernel modules
       run: sudo modprobe nft_ct
 
-    - name: Test
+    - name: Test unprivileged packages
+      run: make test-unprivileged
+
+    - name: Test all packages with nftables
       run: make test
 
     - name: Send coverage
