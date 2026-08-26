@@ -249,6 +249,33 @@ func TestNetworkStatusForPodRetainsLookupForUnparsedNetworkAnnotation(t *testing
 	}
 }
 
+func TestNetworkStatusForPodUsesStatusWithoutNetworksAnnotation(t *testing.T) {
+	t.Parallel()
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				"k8s.v1.cni.cncf.io/network-status": `[{
+					"name": "net-a",
+					"interface": "net1",
+					"ips": ["10.0.0.2"]
+				}]`,
+			},
+		},
+	}
+
+	statuses, err := networkStatusForPod(pod, nil)
+	if err != nil {
+		t.Fatalf("networkStatusForPod() error = %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("networkStatusForPod() statuses = %#v, want one status", statuses)
+	}
+	if got := statuses[0]; got.Name != "net-a" || got.Interface != "net1" {
+		t.Fatalf("networkStatusForPod() status = %#v, want net-a/net1", got)
+	}
+}
+
 func podWithContainerStatuses(statuses []corev1.ContainerStatus) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "pod-a", Namespace: "ns-a"},
