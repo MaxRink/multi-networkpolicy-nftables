@@ -14,14 +14,18 @@ code, even if a consumer adoption PR has not merged. Use this order:
 3. Flux packages under `github.com/fluxcd/pkg`.
 4. Other well-known, maintained libraries already compatible with this repo.
 5. Relevant merged packages in
-   [`telekom/t-caas-go-library`](https://github.com/telekom/t-caas-go-library/blob/main/docs/upstream-libraries.md).
+   [`telekom/t-caas-go-library`](https://github.com/telekom/t-caas-go-library/blob/main/docs/upstream-libraries.md);
+   use the copied package notes below if you cannot access that repository.
 6. Custom code only when no suitable upstream API fits the required semantics.
 
 The library repository is currently private and is planned to become public;
-this guidance is useful without access to it. Check Go/Kubernetes version
-compatibility, licensing, dependency cost, and behavioral differences before
-adopting a package. The paths below are specific imports, not instructions to
-add every package as a dependency.
+access to it is not a prerequisite for this check. The package notes below are
+a usable snapshot for contributors without access. Do not assume an inaccessible
+package can be imported: use an accessible upstream API or, if none fits, the
+smallest local implementation; recheck the library when it becomes public.
+Check Go/Kubernetes version compatibility, licensing, dependency cost, and
+behavioral differences before adopting a package. The paths below are specific
+imports, not instructions to add every package as a dependency.
 
 | Concern | Prefer this upstream API | Keep these project semantics local |
 | --- | --- | --- |
@@ -49,7 +53,10 @@ prefix subdivision is needed; this repo already uses `net/netip` and
 `pkg/patch`, `pkg/remoteclient`, and `pkg/namespaceselector` do not currently
 match a demonstrated need here. Convenience wrappers are acceptable only when
 the same glue repeats across multiple repositories; contribute that shared
-glue to `telekom/t-caas-go-library` rather than duplicating it.
+glue to `telekom/t-caas-go-library` rather than duplicating it. If you cannot
+access the private library, coordinate the shared contribution with its
+maintainers; do not block work on access, and keep any necessary local solution
+limited to this consumer until the shared package is available.
 
 Migration candidates to evaluate separately (no code changes in this docs
 change): `pkg/controller/predicates.go:60`'s node-name filter can use
