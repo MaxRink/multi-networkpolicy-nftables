@@ -4,27 +4,31 @@
 ### How to test e2e
 
 This requires [Bats](https://github.com/bats-core/bats-core) for test runner. Please install bats (e.g. dnf, apt and so on).
+Use a disposable Linux/amd64 kind environment; the current installation manifests
+are amd64-only.
 
 ```
-$ git clone https://github.com/k8snetworkplumbingwg/multi-networkpolicy-nftables
+$ git clone --branch nftables https://github.com/telekom/multi-networkpolicy-nftables
 $ cd multi-networkpolicy-nftables/e2e
 $ ./get_tools.sh
 $ ./setup_cluster.sh
-$ ./tests/simple-v4-ingress.bats
+$ ./run_all_tests.sh
 ```
 
 ### How to teardown cluster
 
 ```
-$ kind delete cluster
-$ docker kill kind-registry
-$ docker rm kind-registry
+$ ./bin/kind delete cluster
 ```
 
 ### How to deploy server image with new changes
 
-After making changes to the code, it is possible to update the server Daemonset image with the script:
+After making changes to the code, recreate the disposable test cluster.
+`setup_cluster.sh` rebuilds and loads the local images before installing the
+DaemonSet:
 
 ```
-./update_image_on_cluster.sh
+./bin/kind delete cluster
+./setup_cluster.sh
+./run_all_tests.sh
 ```
