@@ -18,11 +18,8 @@ code, even if a consumer adoption PR has not merged. Use this order:
    use the copied package notes below if you cannot access that repository.
 6. Custom code only when no suitable upstream API fits the required semantics.
 
-The library repository is currently private and is planned to become public;
-access to it is not a prerequisite for this check. The package notes below are
-a usable snapshot for contributors without access. Do not assume an inaccessible
-package can be imported: use an accessible upstream API or, if none fits, the
-smallest local implementation; recheck the library when it becomes public.
+The library repository is public. The package notes below are a snapshot, not a
+claim that this repository imports the library: it currently does not.
 Check Go/Kubernetes version compatibility, licensing, dependency cost, and
 behavioral differences before adopting a package. The paths below are specific
 imports, not instructions to add every package as a dependency.
@@ -51,17 +48,25 @@ The merged `pkg/netutil` may help if checked address arithmetic or budgeted
 prefix subdivision is needed; this repo already uses `net/netip` and
 `go4.org/netipx` for its current address and set operations. The library's
 `pkg/patch`, `pkg/remoteclient`, and `pkg/namespaceselector` do not currently
-match a demonstrated need here. Convenience wrappers are acceptable only when
-the same glue repeats across multiple repositories; contribute that shared
-glue to `telekom/t-caas-go-library` rather than duplicating it. If you cannot
-access the private library, coordinate the shared contribution with its
-maintainers; do not block work on access, and keep any necessary local solution
-limited to this consumer until the shared package is available.
+match a demonstrated need here. Namespace selectors currently use cached
+Kubernetes labels, not the live, request-local reads supplied by
+`pkg/namespaceselector`; dynamic namespace cache filtering would omit peers
+needed for cross-namespace network policy evaluation.
 
-Migration candidates to evaluate separately (no code changes in this docs
-change): `pkg/controller/predicates.go:60`'s node-name filter can use
-`predicate.NewPredicateFuncs`; keep the typed Pod comparison in that file
-domain-specific. `pkg/controller/indexes.go` and `pkg/controller/mappers.go`
-already use native index and mapping APIs. The informer readiness and bounded
+The library's root module at `v0.1.0` requires Go 1.26.6, Kubernetes modules
+0.37.1, and controller-runtime 0.25.2. This repository uses Go 1.25.13 and
+Kubernetes 0.35.1; its controller-runtime alignment targets 0.23.3. Importing
+even a non-Kubernetes library package would raise the module graph's version
+requirements. Do not force a stack upgrade merely to adopt a helper that
+existing dependencies already supply.
+
+Convenience wrappers are acceptable only when
+the same glue repeats across multiple repositories; contribute that shared
+glue to `telekom/t-caas-go-library` rather than duplicating it.
+
+Prefer `predicate.NewPredicateFuncs` for constant node-name filtering; keep
+the typed Pod state and network-annotation comparisons domain-specific.
+`pkg/controller/indexes.go` and `pkg/controller/mappers.go` use native index
+and mapping APIs. The informer readiness and bounded
 shutdown cleanup in `cmd/multi-networkpolicy-nftables/main.go` also encode
 local lifecycle policy; no shared wrapper is justified.
