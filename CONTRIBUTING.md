@@ -14,7 +14,7 @@ Thank you for your interest in contributing! This document provides guidelines f
 
 ### Prerequisites
 
-- Go 1.24+ (see go.mod for exact version requirements)
+- Go version specified in [go.mod](go.mod)
 - Linux with nftables support
 - Docker
 - [kind](https://kind.sigs.k8s.io/) (for e2e tests)
