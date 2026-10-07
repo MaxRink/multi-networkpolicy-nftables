@@ -11,6 +11,15 @@ $ ./multi-networkpolicy-nftables --help
 
 ### Advanced Options
 
+#### Node identity
+
+The configured hostname must match the Kubernetes Node name exactly, including
+any domain suffix. Set `--hostname-override` to that name when the operating
+system hostname differs.
+Nodes with the same short hostname in different domains are distinct.
+Only pods scheduled to the exact local node are resolved through the local CRI
+socket; remote pod interfaces remain available for peer selection.
+
 #### Host paths used by the DaemonSet
 
 The sample DaemonSet mounts the host filesystem at `/host`. Keep the

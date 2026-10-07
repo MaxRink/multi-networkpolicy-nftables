@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	multiv1beta1 "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/apis/k8s.cni.cncf.io/v1beta1"
+	netdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -165,6 +166,29 @@ func TestReconcile_NoPodsOnNode(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
 	if err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
+	}
+}
+
+func TestGetPodInfoDoesNotResolveRemoteNodeWithSameShortName(t *testing.T) {
+	namespace, _ := testScope(t)
+	nad := &netdefv1.NetworkAttachmentDefinition{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "net1"},
+		Spec:       netdefv1.NetworkAttachmentDefinitionSpec{Config: `{"cniVersion":"0.3.1","type":"bridge"}`},
+	}
+	seedObjects(t, newNamespace(namespace, nil), nad)
+	pod := newPod(namespace, "remote-pod", "node.other.com", nil)
+	pod.Status.Phase = corev1.PodRunning
+	pod.Annotations = map[string]string{
+		netdefv1.NetworkAttachmentAnnot: "net1",
+		netdefv1.NetworkStatusAnnot:     fmt.Sprintf(`[{"name":"%s/net1","interface":"net1","ips":["10.0.0.2"]}]`, namespace),
+	}
+	r := &NodeReconciler{NodeName: "node.example.com", Client: testClient, NetworkPlugins: []string{"bridge"}}
+	info, err := r.GetPodInfo(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Interfaces) != 1 || info.NetNSPath != "" {
+		t.Fatalf("remote peer metadata = %#v; want one interface without a local netns", info)
 	}
 }
 
