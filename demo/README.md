@@ -20,7 +20,7 @@ kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multi-ne
 
 Deploy the multi-networkpolicy implementation with nftables:
 ```
-kubectl apply -f https://raw.githubusercontent.com/telekom/multi-networkpolicy-nftables/master/deploy.yml
+kubectl apply -f https://raw.githubusercontent.com/telekom/multi-networkpolicy-nftables/nftables/deploy.yml
 ```
 
 Copy macvlan cni to the control plane node:
@@ -30,18 +30,17 @@ curl -sSf -L --retry 5 https://github.com/containernetworking/plugins/releases/d
 docker cp macvlan kind-control-plane:/opt/cni/bin/
 ```
 
-Deploy a sample [network attachment definition](demo/net.yml), its
-[policy](demo/policy.yml) and [pod](demo/alpine.yml) that attaches to that
+Deploy a sample [network attachment definition](net.yml), its
+[policy](policy.yml) and [pod](alpine.yml) that attaches to that
 network:
 ```
-kubectl apply -f https://raw.githubusercontent.com/telekom/multi-networkpolicy-nftables/master/demo/net.yml
-kubectl apply -f https://raw.githubusercontent.com/telekom/multi-networkpolicy-nftables/master/demo/policy.yml
-kubectl apply -f https://raw.githubusercontent.com/telekom/multi-networkpolicy-nftables/master/demo/alpine.yml
+kubectl apply -f https://raw.githubusercontent.com/telekom/multi-networkpolicy-nftables/nftables/demo/net.yml
+kubectl apply -f https://raw.githubusercontent.com/telekom/multi-networkpolicy-nftables/nftables/demo/policy.yml
+kubectl apply -f https://raw.githubusercontent.com/telekom/multi-networkpolicy-nftables/nftables/demo/alpine.yml
 ```
 
-You can the log in to the alpine pod and check the
-[nftables rules](demo/nftables.log) that are enforcing the policy:
-(note: this rule might be different from yours because we may change iptable generation rules...)
+You can then log in to the alpine pod and check the nftables rules enforcing
+the policy. The exact rules may change as nftables rule generation evolves.
 
 ```
 kubectl exec -ti alpine -- /bin/sh
