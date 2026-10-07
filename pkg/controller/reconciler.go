@@ -13,7 +13,6 @@ import (
 	netdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	netdefutils "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/utils"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
-	multiutils "github.com/telekom/multi-networkpolicy-nftables/pkg/utils"
 	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -162,7 +161,7 @@ func (r *NodeReconciler) GetPodInfo(ctx context.Context, pod *corev1.Pod) (*cont
 	if err != nil {
 		return nil, fmt.Errorf("build pod info for %s/%s: %w", pod.Namespace, pod.Name, err)
 	}
-	if podInfo == nil || len(podInfo.Interfaces) == 0 || !multiutils.CheckNodeNameIdentical(r.NodeName, pod.Spec.NodeName) {
+	if podInfo == nil || len(podInfo.Interfaces) == 0 || r.NodeName == "" || r.NodeName != pod.Spec.NodeName {
 		return podInfo, nil
 	}
 

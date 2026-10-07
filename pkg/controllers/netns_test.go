@@ -169,6 +169,36 @@ func TestNewPodInfoFromPodPropagatesNetNSError(t *testing.T) {
 	}
 }
 
+func TestNewPodInfoFromPodResolvesOnlyExactLocalNode(t *testing.T) {
+	for _, tt := range []struct {
+		name, hostname, nodeName string
+		wantCalls                int
+	}{
+		{"local", "node-a.example.com", "node-a.example.com", 1},
+		{"different domain", "node-a.example.com", "node-a.other.com", 0},
+		{"short name", "node-a", "node-a.example.com", 0},
+		{"unscheduled", "node-a", "", 0},
+		{"empty names", "", "", 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			conn := &fakeRuntimeConn{t: t, response: containerStatusWithInfo(`{"pid":1234}`)}
+			pod := podWithNetworkAnnotations()
+			pod.Spec.NodeName = tt.nodeName
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "app", ContainerID: "cri-o://container-a"}}
+			info, err := NewPodInfoFromPod(context.Background(), pod, pb.NewRuntimeServiceClient(conn), tt.hostname, []string{"bridge"}, &mockNetDefResolver{pluginType: "bridge"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(info.Interfaces) != 1 || conn.statusCallCount != tt.wantCalls {
+				t.Fatalf("interfaces=%d, CRI calls=%d; want one interface and %d calls", len(info.Interfaces), conn.statusCallCount, tt.wantCalls)
+			}
+			if (info.NetNSPath != "") != (tt.wantCalls == 1) {
+				t.Fatalf("unexpected netns path %q for node %q", info.NetNSPath, tt.nodeName)
+			}
+		})
+	}
+}
+
 func podWithContainerStatuses(statuses []corev1.ContainerStatus) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "pod-a", Namespace: "ns-a"},
