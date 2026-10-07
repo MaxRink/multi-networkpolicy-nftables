@@ -7,16 +7,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	multiv1beta1 "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/apis/k8s.cni.cncf.io/v1beta1"
+	netdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -101,20 +105,57 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func TestSetupWithManager(t *testing.T) {
+func TestDependencyWatchesReconcileLocalNode(t *testing.T) {
+	ns := newNamespace("", map[string]string{"marker": "old"})
+	ns.GenerateName = "dependency-watches-"
+	seedObjects(t, ns)
+	namespace, nodeName := ns.Name, ns.Name+"-node"
+	pod := newPod(namespace, "watched-pod", nodeName, nil)
+	policy := newPolicy(namespace, "watched-policy", nil, nil)
+	policy.Annotations = map[string]string{policyNetworkAnnotation: "old"}
+	nad := &netdefv1.NetworkAttachmentDefinition{ObjectMeta: metav1.ObjectMeta{
+		Namespace: namespace, Name: "watched-network", Labels: map[string]string{"marker": "old"},
+	}}
+	seedObjects(t, newNode(nodeName), pod, policy, nad)
+	setPodRunning(t, pod)
+
 	mgr, err := ctrl.NewManager(testEnv.Config, ctrl.Options{
 		Scheme:                 testScheme,
 		LeaderElection:         false,
 		Metrics:                metricsserver.Options{BindAddress: "0"},
 		HealthProbeBindAddress: "0",
+		Controller:             config.Controller{SkipNameValidation: ptr.To(true)},
 	})
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
 	}
 
 	r := &NodeReconciler{
-		NodeName: "test-node",
+		NodeName: nodeName,
 		Client:   mgr.GetClient(),
+		PolicyDeps: &mockPolicyDeps{getPodInfoFunc: func(*corev1.Pod) (*controllers.PodInfo, error) {
+			return &controllers.PodInfo{Interfaces: []controllers.InterfaceInfo{testInterface()}}, nil
+		}},
+	}
+	applied := make(chan [3]string, 100)
+	r.ApplyRulesForPodFunc = func(ctx context.Context, _ controllers.PolicyDeps, _ controllers.CommonRuleConfig, policies controllers.PolicyMap, _ *corev1.Pod, _ *controllers.PodInfo, _ string) error {
+		var currentNS corev1.Namespace
+		var currentNAD netdefv1.NetworkAttachmentDefinition
+		if err := mgr.GetClient().Get(ctx, client.ObjectKeyFromObject(ns), &currentNS); err != nil {
+			return err
+		}
+		if err := mgr.GetClient().Get(ctx, client.ObjectKeyFromObject(nad), &currentNAD); err != nil {
+			return err
+		}
+		currentPolicy := policies[client.ObjectKeyFromObject(policy)]
+		if currentPolicy == nil {
+			return fmt.Errorf("watched policy is not cached")
+		}
+		select {
+		case applied <- [3]string{currentNS.Labels["marker"], currentPolicy.Annotations[policyNetworkAnnotation], currentNAD.Labels["marker"]}:
+		case <-ctx.Done():
+		}
+		return nil
 	}
 
 	if err := SetupIndexes(context.Background(), mgr); err != nil {
@@ -123,6 +164,58 @@ func TestSetupWithManager(t *testing.T) {
 	if err := r.SetupWithManager(mgr); err != nil {
 		t.Fatalf("SetupWithManager() error = %v", err)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan error, 1)
+	go func() { stopped <- mgr.Start(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-stopped:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Error("manager did not stop")
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		for _, obj := range []client.Object{policy, nad, pod, newNode(nodeName), ns} {
+			if err := testClient.Delete(cleanupCtx, obj); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	await := func(want [3]string) {
+		t.Helper()
+		deadline := time.NewTimer(10 * time.Second)
+		defer deadline.Stop()
+		for {
+			select {
+			case got := <-applied:
+				if got == want {
+					return
+				}
+			case <-deadline.C:
+				t.Fatalf("no reconciliation applied dependency state %v", want)
+			}
+		}
+	}
+	await([3]string{"old", "old", "old"})
+	ns.Labels["marker"] = "new"
+	if err := testClient.Update(ctx, ns); err != nil {
+		t.Fatal(err)
+	}
+	await([3]string{"new", "old", "old"})
+	policy.Annotations[policyNetworkAnnotation] = "new"
+	if err := testClient.Update(ctx, policy); err != nil {
+		t.Fatal(err)
+	}
+	await([3]string{"new", "new", "old"})
+	nad.Labels["marker"] = "new"
+	if err := testClient.Update(ctx, nad); err != nil {
+		t.Fatal(err)
+	}
+	await([3]string{"new", "new", "new"})
 }
 
 func resolveEnvtestAssetsDir() (string, error) {
