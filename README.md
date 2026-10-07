@@ -116,7 +116,7 @@ go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.24.1
 export KUBEBUILDER_ASSETS="$(setup-envtest use 1.35.0 --bin-dir testbin/k8s -p path)"
 ```
 
-Run unprivileged unit tests (controller/utils packages) with:
+Run unprivileged unit tests with:
 
 ```bash
 make test-unprivileged
