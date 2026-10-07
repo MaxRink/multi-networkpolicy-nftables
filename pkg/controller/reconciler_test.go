@@ -138,16 +138,19 @@ func TestDependencyWatchesReconcileLocalNode(t *testing.T) {
 		}},
 	}
 	applied := make(chan [3]string, 100)
+	namespaceKey := client.ObjectKeyFromObject(ns)
+	networkKey := client.ObjectKeyFromObject(nad)
+	policyKey := client.ObjectKeyFromObject(policy)
 	r.ApplyRulesForPodFunc = func(ctx context.Context, _ controllers.PolicyDeps, _ controllers.CommonRuleConfig, policies controllers.PolicyMap, _ *corev1.Pod, _ *controllers.PodInfo, _ string) error {
 		var currentNS corev1.Namespace
 		var currentNAD netdefv1.NetworkAttachmentDefinition
-		if err := mgr.GetClient().Get(ctx, client.ObjectKeyFromObject(ns), &currentNS); err != nil {
+		if err := mgr.GetClient().Get(ctx, namespaceKey, &currentNS); err != nil {
 			return err
 		}
-		if err := mgr.GetClient().Get(ctx, client.ObjectKeyFromObject(nad), &currentNAD); err != nil {
+		if err := mgr.GetClient().Get(ctx, networkKey, &currentNAD); err != nil {
 			return err
 		}
-		currentPolicy := policies[client.ObjectKeyFromObject(policy)]
+		currentPolicy := policies[policyKey]
 		if currentPolicy == nil {
 			return fmt.Errorf("watched policy is not cached")
 		}
