@@ -1,6 +1,9 @@
 package controller
 
 import (
+	"maps"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -13,8 +16,6 @@ const policyNetworkAnnotation = "k8s.v1.cni.cncf.io/policy-for"
 // pod phase, labels, container IDs, or network-related annotations changed.
 func PodPredicate() predicate.Predicate {
 	return predicate.Funcs{
-		CreateFunc: func(event.CreateEvent) bool { return true },
-		DeleteFunc: func(event.DeleteEvent) bool { return true },
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			oldPod, okOld := e.ObjectOld.(*corev1.Pod)
 			newPod, okNew := e.ObjectNew.(*corev1.Pod)
@@ -28,7 +29,7 @@ func PodPredicate() predicate.Predicate {
 			if oldPod.Spec.NodeName != newPod.Spec.NodeName {
 				return true
 			}
-			if labelsChanged(oldPod.Labels, newPod.Labels) {
+			if !maps.Equal(oldPod.Labels, newPod.Labels) {
 				return true
 			}
 			if containerStatusesChanged(oldPod.Status.ContainerStatuses, newPod.Status.ContainerStatuses) {
@@ -44,13 +45,11 @@ func PodPredicate() predicate.Predicate {
 // spec generation or network-selection annotation changed.
 func PolicyPredicate() predicate.Predicate {
 	return predicate.Funcs{
-		CreateFunc: func(event.CreateEvent) bool { return true },
-		DeleteFunc: func(event.DeleteEvent) bool { return true },
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			if e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() {
 				return true
 			}
-			return policyNetworkAnnotationChanged(e.ObjectOld.GetAnnotations(), e.ObjectNew.GetAnnotations())
+			return e.ObjectOld.GetAnnotations()[policyNetworkAnnotation] != e.ObjectNew.GetAnnotations()[policyNetworkAnnotation]
 		},
 		GenericFunc: func(event.GenericEvent) bool { return false },
 	}
@@ -58,26 +57,9 @@ func PolicyPredicate() predicate.Predicate {
 
 // NodePredicate filters node events to only the named node.
 func NodePredicate(nodeName string) predicate.Predicate {
-	return predicate.Funcs{
-		CreateFunc:  func(e event.CreateEvent) bool { return e.Object.GetName() == nodeName },
-		DeleteFunc:  func(e event.DeleteEvent) bool { return e.Object.GetName() == nodeName },
-		UpdateFunc:  func(e event.UpdateEvent) bool { return e.ObjectNew.GetName() == nodeName },
-		GenericFunc: func(e event.GenericEvent) bool { return e.Object.GetName() == nodeName },
-	}
-}
-
-func labelsChanged(oldLabels, newLabels map[string]string) bool {
-	if len(oldLabels) != len(newLabels) {
-		return true
-	}
-
-	for key, oldVal := range oldLabels {
-		if newVal, ok := newLabels[key]; !ok || newVal != oldVal {
-			return true
-		}
-	}
-
-	return false
+	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
+		return obj.GetName() == nodeName
+	})
 }
 
 func containerStatusesChanged(oldStatuses, newStatuses []corev1.ContainerStatus) bool {
@@ -111,8 +93,4 @@ func networkAnnotationsChanged(oldAnnotations, newAnnotations map[string]string)
 		}
 	}
 	return false
-}
-
-func policyNetworkAnnotationChanged(oldAnnotations, newAnnotations map[string]string) bool {
-	return oldAnnotations[policyNetworkAnnotation] != newAnnotations[policyNetworkAnnotation]
 }

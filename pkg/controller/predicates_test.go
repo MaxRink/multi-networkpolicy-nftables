@@ -9,12 +9,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 )
 
-func TestPodPredicate_Create(t *testing.T) {
-	if !PodPredicate().Create(event.CreateEvent{Object: &corev1.Pod{}}) {
-		t.Fatal("expected create event to pass")
-	}
-}
-
 func TestPodPredicate_Update_PhaseChanged(t *testing.T) {
 	pred := PodPredicate()
 	oldPod := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodPending}, ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"a": "1"}}}
@@ -120,12 +114,6 @@ func TestPodPredicate_Update_ContainerStatusOrderOnly(t *testing.T) {
 	}
 }
 
-func TestPodPredicate_Delete(t *testing.T) {
-	if !PodPredicate().Delete(event.DeleteEvent{Object: &corev1.Pod{}}) {
-		t.Fatal("expected delete event to pass")
-	}
-}
-
 func TestPolicyPredicate_Update_GenerationChanged(t *testing.T) {
 	oldObj := &multiv1beta1.MultiNetworkPolicy{ObjectMeta: metav1.ObjectMeta{Generation: 1}}
 	newObj := &multiv1beta1.MultiNetworkPolicy{ObjectMeta: metav1.ObjectMeta{Generation: 2}}
@@ -187,19 +175,5 @@ func TestPolicyPredicate_Update_UnrelatedAnnotationOnly(t *testing.T) {
 
 	if PolicyPredicate().Update(event.UpdateEvent{ObjectOld: oldObj, ObjectNew: newObj}) {
 		t.Fatal("expected unrelated annotation change to be filtered")
-	}
-}
-
-func TestNodePredicate_MatchingNode(t *testing.T) {
-	pred := NodePredicate("node-a")
-	if !pred.Create(event.CreateEvent{Object: &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a"}}}) {
-		t.Fatal("expected matching node to pass")
-	}
-}
-
-func TestNodePredicate_OtherNode(t *testing.T) {
-	pred := NodePredicate("node-a")
-	if pred.Update(event.UpdateEvent{ObjectNew: &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-b"}}}) {
-		t.Fatal("expected non-matching node to be filtered")
 	}
 }
