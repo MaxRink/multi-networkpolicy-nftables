@@ -25,14 +25,15 @@ multi-networkpolicy-nftables runs as a DaemonSet on each Kubernetes node. It wat
 
 ### Components
 
-- **Controllers** (`pkg/controllers/`): Watch Kubernetes resources (Pods, Namespaces, MultiNetworkPolicies, NetworkAttachmentDefinitions) using client-go informers.
-- **Server** (`pkg/server/`): Core orchestration and sync loop that coordinates controllers and triggers rule generation.
+- **Controller** (`pkg/controller/`): Uses controller-runtime watches for Nodes, Pods, Namespaces, MultiNetworkPolicies, and NetworkAttachmentDefinitions. Pod events enqueue their scheduled node; policy, namespace, and network-definition events enqueue the local node.
+- **Policy helpers** (`pkg/controllers/`): Resolve pod interfaces, network namespaces, and network-definition metadata.
+- **Server** (`pkg/server/`): Renders and applies the policies selected by the node reconciler.
 - **Rule Generator** (`pkg/server/netfilterrules.go`): Translates MultiNetworkPolicy specs into nftables rule sets using the google/nftables library.
 
 ### How It Works
 
 1. The daemon watches for changes to MultiNetworkPolicy resources and related objects (Pods, Namespaces, NetworkAttachmentDefinitions).
-2. On each sync cycle, it determines which pods are affected by which policies.
+2. On each node reconciliation, it determines which local pods are affected by which policies.
 3. For each affected pod, it enters the pod's network namespace and applies nftables rules that enforce the specified ingress/egress policies.
 4. When policies are removed, the corresponding nftables rules are cleaned up automatically.
 

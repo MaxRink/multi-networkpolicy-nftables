@@ -54,15 +54,15 @@ func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}, builder.WithPredicates(NodePredicate(r.NodeName))).
 		Watches(&corev1.Pod{},
-			handler.EnqueueRequestsFromMapFunc(mapPodToNode(r.NodeName)),
+			handler.EnqueueRequestsFromMapFunc(mapPodToNode()),
 			builder.WithPredicates(PodPredicate())).
 		Watches(&multiv1beta1.MultiNetworkPolicy{},
-			handler.EnqueueRequestsFromMapFunc(mapPolicyToNode(r.NodeName)),
+			handler.EnqueueRequestsFromMapFunc(mapToNode(r.NodeName)),
 			builder.WithPredicates(PolicyPredicate())).
 		Watches(&netdefv1.NetworkAttachmentDefinition{},
-			handler.EnqueueRequestsFromMapFunc(mapNetDefToNode(r.NodeName))).
+			handler.EnqueueRequestsFromMapFunc(mapToNode(r.NodeName))).
 		Watches(&corev1.Namespace{},
-			handler.EnqueueRequestsFromMapFunc(mapNamespaceToNode(r.NodeName))).
+			handler.EnqueueRequestsFromMapFunc(mapToNode(r.NodeName))).
 		Complete(r)
 }
 
@@ -94,7 +94,6 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		podInfo, err := deps.GetPodInfo(ctx, pod)
 		if err != nil {
 			klog.Errorf("failed to get pod info for %s/%s: %v", pod.Namespace, pod.Name, err)
-			retryNeeded = true
 			retryErrs = append(retryErrs, fmt.Errorf("get pod info for %s/%s: %w", pod.Namespace, pod.Name, err))
 			continue
 		}
@@ -108,13 +107,12 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 		if err := r.applyRulesForPod(ctx, deps, r.CommonCfg, policyMap, pod, podInfo, r.HostPrefix); err != nil {
 			klog.Errorf("failed to apply rules for %s/%s: %v", pod.Namespace, pod.Name, err)
-			retryNeeded = true
 			retryErrs = append(retryErrs, fmt.Errorf("apply rules for %s/%s: %w", pod.Namespace, pod.Name, err))
 		}
 	}
 
-	if len(retryErrs) > 0 {
-		return ctrl.Result{}, errors.Join(retryErrs...)
+	if err := errors.Join(retryErrs...); err != nil {
+		return ctrl.Result{}, err
 	}
 	if retryNeeded {
 		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
