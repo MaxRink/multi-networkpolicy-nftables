@@ -18,9 +18,12 @@ Deploy the MultiNetworkPolicy CRD:
 kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multi-networkpolicy/master/scheme.yml
 ```
 
-Deploy the multi-networkpolicy implementation with nftables:
+Deploy the multi-networkpolicy implementation with nftables. The manifests
+and CNI archive below target amd64 nodes. The generated deployment defaults
+to CRI-O; override its runtime endpoint for kind's containerd:
 ```
 kubectl apply -f https://raw.githubusercontent.com/telekom/multi-networkpolicy-nftables/nftables/deploy.yml
+kubectl -n kube-system patch daemonset multi-networkpolicy-ds-amd64 --type=json -p='[{"op":"replace","path":"/spec/template/spec/containers/0/args/1","value":"--container-runtime-endpoint=/run/containerd/containerd.sock"}]'
 ```
 
 Copy macvlan cni to the control plane node:
