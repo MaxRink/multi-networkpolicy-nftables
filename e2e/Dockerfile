@@ -1,4 +1,4 @@
-FROM docker.io/fedora:38
+FROM docker.io/fedora:44
 
 LABEL org.opencontainers.image.source=https://github.com/k8snetworkplumbingwg/multi-networkpolicy-nftables
 LABEL org.opencontainers.image.base.name=localhost:5000/multi-networkpolicy-nftables:e2e-test
