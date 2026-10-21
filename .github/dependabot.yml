@@ -28,3 +28,15 @@ updates:
     labels:
       - "dependencies"
       - "docker"
+  - package-ecosystem: docker
+    directory: /e2e
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      routine-updates:
+        patterns:
+        - '*'
+        update-types:
+        - minor
+        - patch
