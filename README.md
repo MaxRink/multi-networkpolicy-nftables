@@ -93,11 +93,17 @@ mode. RBAC and shared mounts stay aligned with the normal deploy manifest.
 
 ### Prerequisites
 
-- Go 1.24+ (see go.mod for exact version requirements)
+- Go 1.25.13+ (see go.mod for exact version requirements)
 - Linux with nftables support (for tests)
 - Docker (for container image builds)
 - [kind](https://kind.sigs.k8s.io/) (for e2e tests)
 - [Bats](https://bats-core.readthedocs.io/) (for e2e tests; install via `brew install bats-core` or your package manager)
+
+The Kubernetes modules use the 0.35 release line, paired with controller-runtime
+0.23. Keep these minor versions aligned when updating dependencies instead of
+forcing a newer client-go underneath an older controller-runtime release.
+After changing `go.mod`, run `go mod tidy` and `go mod vendor`; builds and CI use
+the checked-in vendor directory.
 
 ### Build
 
