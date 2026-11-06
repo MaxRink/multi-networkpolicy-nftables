@@ -92,16 +92,11 @@ func networkStatusForPod(pod *corev1.Pod, networks []*netdefv1.NetworkSelectionE
 }
 
 func podNeedsNetworkStatus(pod *corev1.Pod, networks []*netdefv1.NetworkSelectionElement) bool {
-	if len(networks) > 0 {
+	if len(networks) > 0 || RequestsSecondaryNetworks(pod) {
 		return true
 	}
-	if pod == nil || pod.Annotations == nil {
+	if pod == nil {
 		return false
-	}
-
-	networkAnnotation := strings.TrimSpace(pod.Annotations[netdefv1.NetworkAttachmentAnnot])
-	if networkAnnotation != "" && networkAnnotation != "[]" && networkAnnotation != "null" {
-		return true
 	}
 
 	var statuses []netdefv1.NetworkStatus
@@ -109,10 +104,22 @@ func podNeedsNetworkStatus(pod *corev1.Pod, networks []*netdefv1.NetworkSelectio
 	if statusAnnotation == "" || json.Unmarshal([]byte(statusAnnotation), &statuses) != nil {
 		return false
 	}
-	return hasSecondaryNetworkStatus(statuses)
+	return HasSecondaryNetworkStatus(statuses)
 }
 
-func hasSecondaryNetworkStatus(statuses []netdefv1.NetworkStatus) bool {
+// RequestsSecondaryNetworks reports whether the pod's networks annotation
+// selects at least one secondary network.
+func RequestsSecondaryNetworks(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	networkAnnotation := strings.TrimSpace(pod.Annotations[netdefv1.NetworkAttachmentAnnot])
+	return networkAnnotation != "" && networkAnnotation != "[]" && networkAnnotation != "null"
+}
+
+// HasSecondaryNetworkStatus reports whether statuses contain an entry for a
+// secondary (non-default) interface.
+func HasSecondaryNetworkStatus(statuses []netdefv1.NetworkStatus) bool {
 	for _, status := range statuses {
 		if status.Interface != "" && status.Interface != "eth0" && !status.Default {
 			return true
@@ -128,7 +135,7 @@ func networkSelectionsFromStatus(pod *corev1.Pod, statuses []netdefv1.NetworkSta
 
 	networks := make([]*netdefv1.NetworkSelectionElement, 0, len(statuses))
 	for _, status := range statuses {
-		if !hasSecondaryNetworkStatus([]netdefv1.NetworkStatus{status}) {
+		if !HasSecondaryNetworkStatus([]netdefv1.NetworkStatus{status}) {
 			continue
 		}
 
