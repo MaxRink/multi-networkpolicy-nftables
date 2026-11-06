@@ -116,7 +116,10 @@ func TestDependencyWatchesReconcileLocalNode(t *testing.T) {
 	nad := &netdefv1.NetworkAttachmentDefinition{ObjectMeta: metav1.ObjectMeta{
 		Namespace: namespace, Name: "watched-network", Labels: map[string]string{"marker": "old"},
 	}}
-	seedObjects(t, newNode(nodeName), pod, policy, nad)
+	// remotePod runs on another node; its labels decide peer membership for
+	// the local node's policies, so its changes must reconcile the local node.
+	remotePod := newPod(namespace, "remote-peer-pod", nodeName+"-remote", map[string]string{"marker": "old"})
+	seedObjects(t, newNode(nodeName), pod, policy, nad, remotePod)
 	setPodRunning(t, pod)
 
 	mgr, err := ctrl.NewManager(testEnv.Config, ctrl.Options{
@@ -137,10 +140,11 @@ func TestDependencyWatchesReconcileLocalNode(t *testing.T) {
 			return &controllers.PodInfo{Interfaces: []controllers.InterfaceInfo{testInterface()}}, nil
 		}},
 	}
-	applied := make(chan [3]string, 100)
+	applied := make(chan [4]string, 100)
 	namespaceKey := client.ObjectKeyFromObject(ns)
 	networkKey := client.ObjectKeyFromObject(nad)
 	policyKey := client.ObjectKeyFromObject(policy)
+	remotePodKey := client.ObjectKeyFromObject(remotePod)
 	r.ApplyRulesForPodFunc = func(ctx context.Context, _ controllers.PolicyDeps, _ controllers.CommonRuleConfig, policies controllers.PolicyMap, _ *corev1.Pod, _ *controllers.PodInfo, _ string) error {
 		var currentNS corev1.Namespace
 		var currentNAD netdefv1.NetworkAttachmentDefinition
@@ -150,12 +154,16 @@ func TestDependencyWatchesReconcileLocalNode(t *testing.T) {
 		if err := mgr.GetClient().Get(ctx, networkKey, &currentNAD); err != nil {
 			return err
 		}
+		var currentRemotePod corev1.Pod
+		if err := mgr.GetClient().Get(ctx, remotePodKey, &currentRemotePod); err != nil {
+			return err
+		}
 		currentPolicy := policies[policyKey]
 		if currentPolicy == nil {
 			return fmt.Errorf("watched policy is not cached")
 		}
 		select {
-		case applied <- [3]string{currentNS.Labels["marker"], currentPolicy.Annotations[policyNetworkAnnotation], currentNAD.Labels["marker"]}:
+		case applied <- [4]string{currentNS.Labels["marker"], currentPolicy.Annotations[policyNetworkAnnotation], currentNAD.Labels["marker"], currentRemotePod.Labels["marker"]}:
 		case <-ctx.Done():
 		}
 		return nil
@@ -182,13 +190,13 @@ func TestDependencyWatchesReconcileLocalNode(t *testing.T) {
 		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
-		for _, obj := range []client.Object{policy, nad, pod, newNode(nodeName), ns} {
+		for _, obj := range []client.Object{policy, nad, pod, remotePod, newNode(nodeName), ns} {
 			if err := testClient.Delete(cleanupCtx, obj); err != nil {
 				t.Error(err)
 			}
 		}
 	})
-	await := func(want [3]string) {
+	await := func(want [4]string) {
 		t.Helper()
 		deadline := time.NewTimer(10 * time.Second)
 		defer deadline.Stop()
@@ -203,22 +211,27 @@ func TestDependencyWatchesReconcileLocalNode(t *testing.T) {
 			}
 		}
 	}
-	await([3]string{"old", "old", "old"})
+	await([4]string{"old", "old", "old", "old"})
 	ns.Labels["marker"] = "new"
 	if err := testClient.Update(ctx, ns); err != nil {
 		t.Fatal(err)
 	}
-	await([3]string{"new", "old", "old"})
+	await([4]string{"new", "old", "old", "old"})
 	policy.Annotations[policyNetworkAnnotation] = "new"
 	if err := testClient.Update(ctx, policy); err != nil {
 		t.Fatal(err)
 	}
-	await([3]string{"new", "new", "old"})
+	await([4]string{"new", "new", "old", "old"})
 	nad.Labels["marker"] = "new"
 	if err := testClient.Update(ctx, nad); err != nil {
 		t.Fatal(err)
 	}
-	await([3]string{"new", "new", "new"})
+	await([4]string{"new", "new", "new", "old"})
+	remotePod.Labels["marker"] = "new"
+	if err := testClient.Update(ctx, remotePod); err != nil {
+		t.Fatal(err)
+	}
+	await([4]string{"new", "new", "new", "new"})
 }
 
 func resolveEnvtestAssetsDir() (string, error) {
