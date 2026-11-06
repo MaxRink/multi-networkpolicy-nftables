@@ -10,7 +10,6 @@ import (
 
 	netdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	netdefutils "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/utils"
-	multiutils "github.com/telekom/multi-networkpolicy-nftables/pkg/utils"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -156,7 +155,7 @@ func NewPodInfoFromPod(ctx context.Context, pod *corev1.Pod, criClient pb.Runtim
 			}
 		}
 
-		if len(netifs) > 0 && multiutils.CheckNodeNameIdentical(hostname, pod.Spec.NodeName) && criClient != nil {
+		if len(netifs) > 0 && hostname != "" && hostname == pod.Spec.NodeName && criClient != nil {
 			netnsPath, err = GetPodNetNSPathWithContext(ctx, criClient, pod)
 			if err != nil {
 				return nil, fmt.Errorf("resolve pod network namespace: %w", err)

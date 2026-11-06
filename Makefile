@@ -11,7 +11,7 @@ GOVULNCHECK_VERSION ?= v1.1.4
 GOVULNCHECK ?= $(shell go env GOPATH)/bin/govulncheck
 TEST_PROFILE ?= profile.cov
 TEST_ALL_PKGS ?= ./...
-TEST_UNPRIVILEGED_PKGS ?= ./pkg/controller ./pkg/controllers ./pkg/utils
+TEST_UNPRIVILEGED_PKGS ?= ./pkg/controller ./pkg/controllers
 TEST_NFTABLES_PKGS ?= ./pkg/server
 
 .PHONY: all build test lint vet govulncheck fmt fmt-fix clean e2e image manifests verify-manifests help
