@@ -308,6 +308,46 @@ func TestReconcile_PendingSecondaryInterfaceRequeues(t *testing.T) {
 	}
 }
 
+// A pod whose secondary network is reported in network-status but handled by
+// a plugin this controller does not manage never gains interfaces, so it must
+// not requeue forever.
+func TestReconcile_UnmanagedSecondaryInterfaceDoesNotRequeue(t *testing.T) {
+	namespace, nodeName := testScope(t)
+	pod := newPod(namespace, "pod-unmanaged-interface", nodeName, map[string]string{"app": "demo"})
+	pod.Annotations = map[string]string{
+		netdefv1.NetworkAttachmentAnnot: "default/secondary",
+	}
+	seedObjects(t,
+		newNamespace(namespace, nil),
+		newNode(nodeName),
+		pod,
+	)
+	setPodRunning(t, pod)
+
+	r := &NodeReconciler{
+		NodeName: nodeName,
+		Client:   testClient,
+		PolicyDeps: &mockPolicyDeps{
+			getPodInfoFunc: func(*corev1.Pod) (*controllers.PodInfo, error) {
+				return &controllers.PodInfo{
+					Name:          pod.Name,
+					Namespace:     pod.Namespace,
+					NodeName:      nodeName,
+					NetworkStatus: []netdefv1.NetworkStatus{{Name: "default/secondary", Interface: "net1"}},
+				}, nil
+			},
+		},
+	}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if result.RequeueAfter != 0 {
+		t.Fatalf("Reconcile() RequeueAfter = %s, want no requeue", result.RequeueAfter)
+	}
+}
+
 func TestReconcile_PodWithMatchingPolicy(t *testing.T) {
 	namespace, nodeName := testScope(t)
 	pod := newPod(namespace, "pod-with-policy", nodeName, map[string]string{"app": "selected"})

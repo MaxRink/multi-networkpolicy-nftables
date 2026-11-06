@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -123,16 +122,15 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	return ctrl.Result{}, nil
 }
 
+// podNeedsInterfaceRetry reports whether the pod selects secondary networks
+// whose network-status has not been published yet. Once a secondary status is
+// reported, a pod without usable interfaces is attached only to networks this
+// controller does not handle, and requeueing it would loop forever.
 func podNeedsInterfaceRetry(pod *corev1.Pod, podInfo *controllers.PodInfo) bool {
-	if podInfo != nil && len(podInfo.NetworkStatus) > 0 {
-		return true
-	}
-	if pod == nil || pod.Annotations == nil {
+	if podInfo != nil && controllers.HasSecondaryNetworkStatus(podInfo.NetworkStatus) {
 		return false
 	}
-
-	networkAnnotation := strings.TrimSpace(pod.Annotations[netdefv1.NetworkAttachmentAnnot])
-	return networkAnnotation != "" && networkAnnotation != "[]" && networkAnnotation != "null"
+	return controllers.RequestsSecondaryNetworks(pod)
 }
 
 func (r *NodeReconciler) policyDeps() controllers.PolicyDeps {
