@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"maps"
 	"math"
 	"net"
 	"net/netip"
@@ -1539,12 +1540,8 @@ func (n *nftState) applyPolicyPeersRulesSelector(ctx context.Context, deps contr
 		}
 	}
 
-	var podIntfIPs []string
-	for ip := range globalPeerIPs {
-		podIntfIPs = append(podIntfIPs, ip)
-	}
-
-	if err := n.addIPRules(chainName, podIntfIPs, chain, policyName, peer, peerIndex); err != nil {
+	// Sorted so the generated set elements are deterministic across reconciles.
+	if err := n.addIPRules(chainName, slices.Sorted(maps.Keys(globalPeerIPs)), chain, policyName, peer, peerIndex); err != nil {
 		return fmt.Errorf("add selector IP rules: %w", err)
 	}
 
