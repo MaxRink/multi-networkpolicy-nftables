@@ -1,4 +1,3 @@
-//go:build linux
 /*
 Package xt implements dedicated types for (some) of the "Info" payload in Match
 and Target expressions that bridge between the nftables and xtables worlds.
