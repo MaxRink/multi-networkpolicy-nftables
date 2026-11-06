@@ -54,7 +54,7 @@ func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}, builder.WithPredicates(NodePredicate(r.NodeName))).
 		Watches(&corev1.Pod{},
-			handler.EnqueueRequestsFromMapFunc(mapPodToNode()),
+			handler.EnqueueRequestsFromMapFunc(mapToNode(r.NodeName)),
 			builder.WithPredicates(PodPredicate())).
 		Watches(&multiv1beta1.MultiNetworkPolicy{},
 			handler.EnqueueRequestsFromMapFunc(mapToNode(r.NodeName)),
