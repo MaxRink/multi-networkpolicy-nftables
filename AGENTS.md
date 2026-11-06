@@ -55,7 +55,7 @@ needed for cross-namespace network policy evaluation.
 
 The library's root module at `v0.1.0` requires Go 1.26.6, Kubernetes modules
 0.37.1, and controller-runtime 0.25.2. This repository uses Go 1.25.13 and
-Kubernetes 0.35.1; its controller-runtime alignment targets 0.23.3. Importing
+Kubernetes 0.35.1 with controller-runtime 0.23.3. Importing
 even a non-Kubernetes library package would raise the module graph's version
 requirements. Do not force a stack upgrade merely to adopt a helper that
 existing dependencies already supply.
