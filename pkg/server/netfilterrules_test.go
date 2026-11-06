@@ -1145,7 +1145,6 @@ func TestApplyPodRulesNamespaceSelectorOnlyPeer(t *testing.T) {
 // plus protocol/suffix/index) exceeds that limit in realistic topologies, so
 // asserting on a "peer_ipblock_except" substring in the registered set name
 // does not actually hold once the real chain-naming scheme is exercised.
-
 func TestApplyPolicyPeersRulesIPBlockExceptPreservesORSemantics(t *testing.T) {
 	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
 	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
