@@ -51,6 +51,10 @@ var (
 	// ErrNoRepresentor indicates no VF representor netdev could be resolved for
 	// the interface.
 	ErrNoRepresentor = errors.New("no vf representor found")
+	// ErrCTOffloadUnavailable indicates --tc-ct-mode=require but hardware
+	// conntrack offload is not confirmed for the representor (steering mode is
+	// not smfs, or cannot be read). See CheckEnforceable.
+	ErrCTOffloadUnavailable = errors.New("conntrack offload required but not confirmed")
 )
 
 // RepresentorInfo is the resolved host-side enforcement point for a pod VF.

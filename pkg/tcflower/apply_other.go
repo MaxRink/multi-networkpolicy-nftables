@@ -35,6 +35,12 @@ func Apply(_ context.Context, _ controllers.PolicyDeps, _ controllers.CommonRule
 	return fmt.Errorf("tc flower Apply is unsupported on GOOS=%s", runtime.GOOS)
 }
 
+// CheckEnforceable always reports the tc backend unusable off Linux, so the
+// reconciler routes SR-IOV interfaces to nftables.
+func CheckEnforceable(_ string, _ controllers.CommonRuleConfig, _ controllers.InterfaceInfo) error {
+	return fmt.Errorf("tc flower is unsupported on GOOS=%s: %w", runtime.GOOS, ErrNoRepresentor)
+}
+
 // Flush is unsupported on non-Linux platforms.
 func Flush(_ context.Context, _ *controllers.PodInfo, _ string) error {
 	return fmt.Errorf("tc flower Flush is unsupported on GOOS=%s", runtime.GOOS)

@@ -108,7 +108,8 @@ func LogHostOffloadConfig(hostPrefix, offloadModeText, ctModeText string) {
 // carry skip_sw (so hw-tc-offload being off is fatal rather than merely
 // degrading). ctMode tunes the steering-mode message: under CTModeAuto a
 // non-SMFS PF is a graceful DEGRADE-to-stateless (info), under CTModeRequire it
-// is a hard offload-blocking WARNING, and under CTModeOff steering is irrelevant.
+// is a WARNING that the PF's VFs fall back to nftables, and under CTModeOff
+// steering is irrelevant.
 func logPFOffloadConfig(pf pfOffloadInfo, hardwareMode bool, ctMode CTMode) {
 	model := pf.Model
 	if model == "" {
@@ -119,7 +120,8 @@ func logPFOffloadConfig(pf pfOffloadInfo, hardwareMode bool, ctMode CTMode) {
 
 	if !pf.Switchdev {
 		klog.Warningf("tcflower startup: PF %s (%s) is NOT in switchdev mode; its VFs have no representors "+
-			"and CANNOT be enforced by the tc-flower backend. Enable with: "+
+			"and CANNOT be enforced by the tc-flower backend, so they FALL BACK to the nftables backend in "+
+			"the pod netns (software). For eSwitch enforcement enable switchdev with: "+
 			"devlink dev eswitch set pci/%s mode switchdev", pf.PCI, model, pf.PCI)
 		return
 	}
@@ -150,7 +152,8 @@ func logPFOffloadConfig(pf pfOffloadInfo, hardwareMode bool, ctMode CTMode) {
 	// conntrack offload; DMFS (the default) cannot offload the CT pipeline.
 	// Whether a non-SMFS mode is a hard problem or a graceful degrade depends on
 	// --tc-ct-mode: 'off' ignores CT entirely, 'auto' degrades to stateless (and
-	// still fully enforces stateless allow/deny), 'require' fails closed.
+	// still fully enforces stateless allow/deny), 'require' (default) falls back
+	// to the nftables backend.
 	handle := "pci/" + pf.PCI
 	ctRelevant := ctMode != CTModeOff
 	steering, steeringKnown := devlinkParamValue(handle, "flow_steering_mode")
@@ -160,10 +163,11 @@ func logPFOffloadConfig(pf pfOffloadInfo, hardwareMode bool, ctMode CTMode) {
 			switch ctMode {
 			case CTModeRequire:
 				klog.Warningf("tcflower startup: --tc-ct-mode=require but PF %s steering mode is %q (need smfs); "+
-					"the stateful CT filters will be REJECTED at insertion and this PF's VFs left UNENFORCED "+
-					"(fail-closed). Switch with: devlink dev param set %s name flow_steering_mode value smfs "+
-					"cmode runtime (BEFORE switchdev), or use --tc-ct-mode=auto to degrade to stateless.",
-					pf.PCI, steering, handle)
+					"hardware conntrack offload is unavailable, so this PF's VFs FALL BACK to the nftables "+
+					"backend in the pod netns (stateful, software; not eSwitch-offloaded). For stateful eSwitch "+
+					"enforcement switch with: devlink dev param set %s name flow_steering_mode value smfs "+
+					"cmode runtime (BEFORE switchdev); or opt in to stateless eSwitch enforcement with "+
+					"--tc-ct-mode=auto.", pf.PCI, steering, handle)
 			default: // CTModeAuto
 				klog.Infof("tcflower startup: PF %s steering mode is %q (not smfs); conntrack offload is NOT "+
 					"available, so --tc-ct-mode=auto DEGRADES this PF to STATELESS enforcement (stateless "+
@@ -174,8 +178,9 @@ func logPFOffloadConfig(pf pfOffloadInfo, hardwareMode bool, ctMode CTMode) {
 		}
 	} else if ctRelevant {
 		klog.Warningf("tcflower startup: could not read flow_steering_mode for PF %s (devlink unavailable or "+
-			"unprivileged). Conntrack offload needs SMFS; --tc-ct-mode=auto will DEGRADE to stateless when it "+
-			"cannot confirm SMFS. Verify manually with: devlink dev param show %s name flow_steering_mode",
+			"unprivileged). Conntrack offload needs SMFS and cannot be confirmed: under --tc-ct-mode=require "+
+			"this PF's VFs FALL BACK to the nftables backend; under --tc-ct-mode=auto they DEGRADE to "+
+			"stateless tc. Verify manually with: devlink dev param show %s name flow_steering_mode",
 			pf.PCI, handle)
 	}
 

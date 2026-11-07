@@ -19,6 +19,7 @@ limitations under the License.
 package tcflower
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
@@ -101,5 +102,88 @@ func TestResolveCTForRep_SMFSEnablesCT(t *testing.T) {
 	t.Cleanup(func() { ctCapCache.Delete(pciD) })
 	if got := resolveCTForRep(cfg, "", "rep-dmfs", pciD); got.CTEnabled {
 		t.Fatal("DMFS + auto should degrade to stateless, got CTEnabled=true")
+	}
+}
+
+// TestCheckEnforceable covers the tc-vs-nftables routing decision against a
+// fake sysfs: a switchdev VF keeps tc, a legacy-mode VF or missing representor
+// falls back, and --tc-ct-mode=require falls back unless SMFS is confirmed.
+func TestCheckEnforceable(t *testing.T) {
+	const (
+		vfpci = "0000:04:00.2"
+		pfpci = "0000:04:00.0"
+	)
+	switchdev := func(f *fakeSysfs) {
+		f.vf(vfpci, pfpci, 1)
+		f.pfNet(pfpci, "enp4s0f0", "112233445566")
+		f.netdev("enp4s0f0_1", "112233445566", "pf0vf1", "77")
+	}
+	tests := []struct {
+		name    string
+		setup   func(*fakeSysfs)
+		cfg     controllers.CommonRuleConfig
+		cap     *ctCapability // seeded into ctCapCache for vfpci; nil = unknown (no devlink)
+		wantErr error
+		reason  string
+	}{
+		{name: "switchdev VF, auto keeps tc", setup: switchdev, cfg: controllers.CommonRuleConfig{CTMode: "auto"}},
+		{
+			name: "legacy-mode VF (no phys_switch_id) falls back",
+			setup: func(f *fakeSysfs) {
+				f.vf(vfpci, pfpci, 1)
+				f.pfNet(pfpci, "enp4s0f0", "")
+			},
+			cfg: controllers.CommonRuleConfig{CTMode: "auto"}, wantErr: ErrNotSwitchdev, reason: "not_switchdev",
+		},
+		{
+			name: "switchdev PF but no representor for this VF falls back",
+			setup: func(f *fakeSysfs) {
+				f.vf(vfpci, pfpci, 1)
+				f.pfNet(pfpci, "enp4s0f0", "112233445566")
+			},
+			cfg: controllers.CommonRuleConfig{CTMode: "auto"}, wantErr: ErrNoRepresentor, reason: "not_found",
+		},
+		{
+			name: "require + smfs keeps tc", setup: switchdev, cfg: controllers.CommonRuleConfig{CTMode: "require"},
+			cap: &ctCapability{SteeringMode: "smfs", SteeringKnown: true, CTOffloadable: true},
+		},
+		{
+			name: "require + dmfs falls back", setup: switchdev, cfg: controllers.CommonRuleConfig{CTMode: "require"},
+			cap:     &ctCapability{SteeringMode: "dmfs", SteeringKnown: true},
+			wantErr: ErrCTOffloadUnavailable, reason: "ct_offload_unavailable",
+		},
+		{
+			name: "require + unknown steering falls back", setup: switchdev, cfg: controllers.CommonRuleConfig{CTMode: "require"},
+			cap:     &ctCapability{},
+			wantErr: ErrCTOffloadUnavailable, reason: "ct_offload_unavailable",
+		},
+		{
+			name: "require + software offload keeps tc (kernel CT)", setup: switchdev,
+			cfg: controllers.CommonRuleConfig{CTMode: "require", TCOffloadMode: "software"},
+			cap: &ctCapability{SteeringMode: "dmfs", SteeringKnown: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFakeSysfs(t)
+			tt.setup(f)
+			if tt.cap != nil {
+				ctCapCache.Store(vfpci, *tt.cap)
+				t.Cleanup(func() { ctCapCache.Delete(vfpci) })
+			}
+			err := CheckEnforceable(f.root, tt.cfg, controllers.InterfaceInfo{PCIAddress: vfpci})
+			if tt.wantErr == nil {
+				if err != nil {
+					t.Fatalf("CheckEnforceable() = %v, want nil (tc)", err)
+				}
+				return
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("CheckEnforceable() = %v, want %v", err, tt.wantErr)
+			}
+			if got := FallbackReason(err); got != tt.reason {
+				t.Fatalf("FallbackReason() = %q, want %q", got, tt.reason)
+			}
+		})
 	}
 }

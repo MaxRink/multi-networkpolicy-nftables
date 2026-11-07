@@ -42,14 +42,16 @@ type NodeReconciler struct {
 
 	// TCBackendDisabled turns off the SR-IOV tc-flower backend. The zero value
 	// (false) keeps it ENABLED, matching the --enable-tc-backend=true default;
-	// main.go sets this from that flag. When true, SR-IOV VF interfaces are not
-	// enforced by this daemon (only the nftables backend runs).
+	// main.go sets this from that flag. When true, SR-IOV VF interfaces fall
+	// back to the nftables backend (see selectBackend).
 	TCBackendDisabled bool
 
 	criMu sync.Mutex
 
 	ApplyRulesForPodFunc   func(context.Context, controllers.PolicyDeps, controllers.CommonRuleConfig, controllers.PolicyMap, *corev1.Pod, *controllers.PodInfo, string) error
 	ApplyTCRulesForPodFunc func(context.Context, controllers.PolicyDeps, controllers.CommonRuleConfig, controllers.PolicyMap, *corev1.Pod, *controllers.PodInfo, string) error
+	// TCCheckEnforceableFunc overrides tcflower.CheckEnforceable in tests.
+	TCCheckEnforceableFunc func(string, controllers.CommonRuleConfig, controllers.InterfaceInfo) error
 }
 
 // CleanupOnShutdown removes policy rules for pods on the local node.
@@ -115,15 +117,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		// the pod netns for veth-style CNIs, tc flower on the host representor
 		// for SR-IOV VFs). Group by backend and apply each independently so a
 		// failure in one does not abort the others.
-		for kind, backendPodInfo := range partitionByBackend(podInfo) {
-			// The SR-IOV tc-flower backend can be disabled (--enable-tc-backend=false).
-			// When off, skip its interfaces entirely: they are simply not enforced
-			// by this daemon.
-			if kind == backendTC && r.TCBackendDisabled {
-				klog.V(2).Infof("tc backend disabled; not enforcing %d SR-IOV interface(s) on pod %s/%s",
-					len(backendPodInfo.Interfaces), pod.Namespace, pod.Name)
-				continue
-			}
+		for kind, backendPodInfo := range partitionByBackend(podInfo, r.selectBackend) {
 			if err := r.applyBackend(ctx, kind, deps, r.CommonCfg, policyMap, pod, backendPodInfo, r.HostPrefix); err != nil {
 				klog.Errorf("failed to apply %s rules for %s/%s: %v", kind, pod.Namespace, pod.Name, err)
 				retryNeeded = true

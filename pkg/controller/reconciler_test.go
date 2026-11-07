@@ -461,8 +461,9 @@ func TestReconcile_MixedInterfacesDispatchToBothBackends(t *testing.T) {
 	nftIfaces := 0
 	tcIfaces := 0
 	r := &NodeReconciler{
-		NodeName: nodeName,
-		Client:   testClient,
+		NodeName:               nodeName,
+		Client:                 testClient,
+		TCCheckEnforceableFunc: func(string, controllers.CommonRuleConfig, controllers.InterfaceInfo) error { return nil },
 		PolicyDeps: &mockPolicyDeps{
 			listPodsFunc: func(labels.Selector) ([]*corev1.Pod, error) {
 				return []*corev1.Pod{pod}, nil
@@ -511,7 +512,7 @@ func TestReconcile_MixedInterfacesDispatchToBothBackends(t *testing.T) {
 	}
 }
 
-func TestReconcile_TCBackendDisabledSkipsSRIOV(t *testing.T) {
+func TestReconcile_TCBackendDisabledFallsBackToNFT(t *testing.T) {
 	namespace, nodeName := testScope(t)
 	pod := newPod(namespace, "pod-mixed-tcoff", nodeName, map[string]string{"app": "demo"})
 	seedObjects(t,
@@ -521,7 +522,7 @@ func TestReconcile_TCBackendDisabledSkipsSRIOV(t *testing.T) {
 	)
 	setPodRunning(t, pod)
 
-	nftCalled := false
+	var nftIfaces []controllers.InterfaceInfo
 	tcCalled := false
 	r := &NodeReconciler{
 		NodeName:          nodeName,
@@ -543,8 +544,8 @@ func TestReconcile_TCBackendDisabledSkipsSRIOV(t *testing.T) {
 				}, nil
 			},
 		},
-		ApplyRulesForPodFunc: func(context.Context, controllers.PolicyDeps, controllers.CommonRuleConfig, controllers.PolicyMap, *corev1.Pod, *controllers.PodInfo, string) error {
-			nftCalled = true
+		ApplyRulesForPodFunc: func(_ context.Context, _ controllers.PolicyDeps, _ controllers.CommonRuleConfig, _ controllers.PolicyMap, _ *corev1.Pod, podInfo *controllers.PodInfo, _ string) error {
+			nftIfaces = podInfo.Interfaces
 			return nil
 		},
 		ApplyTCRulesForPodFunc: func(context.Context, controllers.PolicyDeps, controllers.CommonRuleConfig, controllers.PolicyMap, *corev1.Pod, *controllers.PodInfo, string) error {
@@ -559,8 +560,10 @@ func TestReconcile_TCBackendDisabledSkipsSRIOV(t *testing.T) {
 	if tcCalled {
 		t.Fatal("tc backend must NOT be invoked when TCBackendDisabled is set")
 	}
-	if !nftCalled {
-		t.Fatal("nft backend must still run for the pod's veth-style interface")
+	// Base-branch behavior: with tc off, the SR-IOV VF is enforced by nftables
+	// in the pod netns alongside the veth-style interface, not left unenforced.
+	if len(nftIfaces) != 2 {
+		t.Fatalf("nft backend got %d interfaces, want 2 (macvlan + SR-IOV fallback): %+v", len(nftIfaces), nftIfaces)
 	}
 }
 
@@ -576,8 +579,9 @@ func TestReconcile_TCBackendErrorDoesNotAbortNFT(t *testing.T) {
 
 	nftCalled := false
 	r := &NodeReconciler{
-		NodeName: nodeName,
-		Client:   testClient,
+		NodeName:               nodeName,
+		Client:                 testClient,
+		TCCheckEnforceableFunc: func(string, controllers.CommonRuleConfig, controllers.InterfaceInfo) error { return nil },
 		PolicyDeps: &mockPolicyDeps{
 			listPodsFunc: func(labels.Selector) ([]*corev1.Pod, error) {
 				return []*corev1.Pod{pod}, nil

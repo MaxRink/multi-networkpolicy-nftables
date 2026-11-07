@@ -18,9 +18,12 @@ package controller
 
 import (
 	"context"
+	"sync"
 
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
+	"github.com/telekom/multi-networkpolicy-nftables/pkg/tcflower"
 	corev1 "k8s.io/api/core/v1"
+	klog "k8s.io/klog/v2"
 )
 
 // Backend applies MultiNetworkPolicy for a single pod's interfaces using a
@@ -60,21 +63,62 @@ func (k backendKind) String() string {
 
 // selectBackend chooses the dataplane for a single interface. SR-IOV VF
 // interfaces (which carry PCI/representor device info from the Multus
-// network-status annotation) are enforced on the host via tc flower; every
-// other interface uses the in-netns nftables path.
-func selectBackend(iface controllers.InterfaceInfo) backendKind {
-	if iface.IsSRIOV() {
-		return backendTC
+// network-status annotation) are enforced on the host via tc flower when the
+// tc backend can actually enforce them; every other interface uses the in-netns
+// nftables path.
+//
+// An SR-IOV interface FALLS BACK to nftables (as on the base branch, before the
+// tc backend existed) when --enable-tc-backend=false, or when
+// tcflower.CheckEnforceable fails: legacy (non-switchdev) eSwitch, no
+// representor, not a VF, or --tc-ct-mode=require without confirmed CT offload.
+// Each fallback is counted in multinetworkpolicy_tc_backend_fallback_total and
+// logged once per VF and reason.
+func (r *NodeReconciler) selectBackend(iface controllers.InterfaceInfo) backendKind {
+	if !iface.IsSRIOV() {
+		return backendNFT
 	}
-	return backendNFT
+	if r.TCBackendDisabled {
+		tcflower.IncBackendFallback(tcflower.FallbackReasonTCDisabled)
+		logFallbackOnce(iface, tcflower.FallbackReasonTCDisabled, "--enable-tc-backend=false")
+		return backendNFT
+	}
+	check := tcflower.CheckEnforceable
+	if r.TCCheckEnforceableFunc != nil {
+		check = r.TCCheckEnforceableFunc
+	}
+	if err := check(r.HostPrefix, r.CommonCfg, iface); err != nil {
+		reason := tcflower.FallbackReason(err)
+		tcflower.IncBackendFallback(reason)
+		logFallbackOnce(iface, reason, err.Error())
+		return backendNFT
+	}
+	return backendTC
+}
+
+// fallbackLogged dedupes fallback logs by VF + reason. Keyed by node-local
+// hardware identity (PCI / representor), so it is bounded by the VF count.
+var fallbackLogged sync.Map
+
+func logFallbackOnce(iface controllers.InterfaceInfo, reason, detail string) {
+	key := iface.PCIAddress + "\x00" + iface.RepresentorDevice + "\x00" + reason
+	if _, loaded := fallbackLogged.LoadOrStore(key, struct{}{}); loaded {
+		return
+	}
+	msg := "SR-IOV interface %q (pci=%q representor=%q) enforced by the nftables backend in the pod netns " +
+		"instead of tc flower (reason=%s): %s"
+	if reason == tcflower.FallbackReasonTCDisabled {
+		klog.Infof(msg, iface.InterfaceName, iface.PCIAddress, iface.RepresentorDevice, reason, detail)
+		return
+	}
+	klog.Warningf(msg, iface.InterfaceName, iface.PCIAddress, iface.RepresentorDevice, reason, detail)
 }
 
 // partitionByBackend groups a pod's interfaces by the dataplane that must
-// enforce them, returning one narrowed PodInfo per backend that has at least
-// one interface. The returned PodInfos share the scalar PodInfo fields (name,
-// namespace, netns, node) and carry only their own subset of Interfaces. The
-// map is empty when podInfo has no interfaces.
-func partitionByBackend(podInfo *controllers.PodInfo) map[backendKind]*controllers.PodInfo {
+// enforce them (as chosen by selectBackend), returning one narrowed PodInfo per
+// backend that has at least one interface. The returned PodInfos share the
+// scalar PodInfo fields (name, namespace, netns, node) and carry only their own
+// subset of Interfaces. The map is empty when podInfo has no interfaces.
+func partitionByBackend(podInfo *controllers.PodInfo, selectBackend func(controllers.InterfaceInfo) backendKind) map[backendKind]*controllers.PodInfo {
 	if podInfo == nil || len(podInfo.Interfaces) == 0 {
 		return nil
 	}

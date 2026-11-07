@@ -19,6 +19,7 @@ limitations under the License.
 package tcflower
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"sync"
@@ -125,6 +126,39 @@ func probeCTCapabilityUncached(hostPrefix, repName, pci string) ctCapability {
 	return cap
 }
 
+// CheckEnforceable reports whether the tc backend can enforce iface. A nil
+// error means the representor resolves (PF in switchdev mode) and, under
+// --tc-ct-mode=require with hardware offload, the eSwitch is confirmed
+// CT-offload capable (smfs). Otherwise it returns an error wrapping
+// ErrNotVF / ErrNotSwitchdev / ErrNoRepresentor / ErrCTOffloadUnavailable, and
+// the reconciler enforces the interface with the nftables backend in the pod
+// netns instead (see FallbackReason for the metric label).
+//
+// require deliberately falls back on an UNKNOWN steering mode too: emitting
+// skip_sw CT filters the NIC might reject would leave the VF unenforced, while
+// nftables gives the same stateful semantics in software.
+func CheckEnforceable(hostPrefix string, cfg controllers.CommonRuleConfig, iface controllers.InterfaceInfo) error {
+	rep, err := ResolveRepresentor(hostPrefix, iface)
+	if err != nil {
+		return err
+	}
+	if mode, _ := parseCTMode(cfg.CTMode); mode != CTModeRequire {
+		return nil
+	}
+	if off, _ := parseOffloadMode(cfg.TCOffloadMode); off == OffloadSoftware {
+		return nil // kernel datapath: CT always works
+	}
+	if ctCap := probeCTCapability(hostPrefix, rep.Name, iface.PCIAddress); !ctCap.CTOffloadable {
+		steering := ctCap.SteeringMode
+		if !ctCap.SteeringKnown {
+			steering = "unknown (devlink unreadable)"
+		}
+		return fmt.Errorf("--tc-ct-mode=require but representor %q has steering mode %s, not smfs: %w",
+			rep.Name, steering, ErrCTOffloadUnavailable)
+	}
+	return nil
+}
+
 // resolveCTForRep decides, per representor, whether the stateful conntrack (CT)
 // pipeline should be emitted, honoring --tc-ct-mode and the hardware's actual
 // CT-offload capability. It returns a COPY of cfg with CTEnabled set
@@ -133,9 +167,9 @@ func probeCTCapabilityUncached(hostPrefix, repName, pci string) ctCapability {
 //
 // Behavior by mode:
 //   - CTModeOff:     never CT. Stateless pipeline. (Logged once as info.)
-//   - CTModeRequire: always CT, even on DMFS. If the NIC cannot offload it the
-//     skip_sw filters are rejected at insertion (fail-closed) — the operator
-//     asked for stateful-or-nothing.
+//   - CTModeRequire: always CT. The reconciler only routes an interface here
+//     when CheckEnforceable confirmed SMFS; non-SMFS / unknown steering falls
+//     back to the nftables backend before Apply is reached.
 //   - CTModeAuto:    CT only when hardware CT offload is confirmed (SMFS). On
 //     DMFS / HMFS / unknown, DEGRADE to the stateless pipeline and WARN with the
 //     exact remediation (switch to SMFS), so the maximum offloadable subset is
@@ -174,10 +208,10 @@ func resolveCTForRep(cfg controllers.CommonRuleConfig, hostPrefix, repName, pci 
 	case CTModeRequire:
 		out.CTEnabled = true
 		if cap.SteeringKnown && !cap.CTOffloadable {
+			// Only reachable when Apply is called without CheckEnforceable.
 			klog.Warningf("tcflower: --tc-ct-mode=require on representor %q but steering mode %q cannot hardware-offload "+
-				"conntrack (needs smfs); the stateful CT filters will be REJECTED at insertion and this interface "+
-				"left UNENFORCED (fail-closed). Switch to SMFS (before switchdev) or use --tc-ct-mode=auto to degrade "+
-				"to stateless enforcement.", repName, cap.SteeringMode)
+				"conntrack (needs smfs); the stateful CT filters will be REJECTED at insertion. Switch to SMFS "+
+				"(before switchdev) or use --tc-ct-mode=auto to degrade to stateless enforcement.", repName, cap.SteeringMode)
 		}
 		return out
 

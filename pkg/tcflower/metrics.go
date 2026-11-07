@@ -30,6 +30,7 @@ package tcflower
 // than once (e.g. across test binaries) cannot panic on duplicate collectors.
 
 import (
+	"errors"
 	"sync"
 	"time"
 
@@ -69,6 +70,16 @@ const (
 	// resolveReasonOffloadNotReady: the representor exists but TC hardware offload
 	// is not enabled on it (VerifyOffloadReady failed).
 	resolveReasonOffloadNotReady = "offload_not_ready"
+)
+
+// Fallback reasons for multinetworkpolicy_tc_backend_fallback_total: why an
+// SR-IOV interface is enforced by the nftables backend instead of tc.
+const (
+	// FallbackReasonTCDisabled: --enable-tc-backend=false.
+	FallbackReasonTCDisabled = "tc_disabled"
+	// fallbackReasonCTUnavailable: --tc-ct-mode=require but CT offload is not
+	// confirmed for the representor.
+	fallbackReasonCTUnavailable = "ct_offload_unavailable"
 )
 
 func boolToFloat(b bool) float64 {
@@ -147,6 +158,15 @@ var (
 	// reconcileDuration observes how long enforcing one representor's filters
 	// takes inside Apply (build + ensure-qdisc + reconcile), labeled by
 	// representor.
+	// backendFallback counts reconcile decisions that routed an SR-IOV interface
+	// to the nftables backend instead of tc, by reason. A non-zero rate means
+	// VFs on this node are enforced in the pod netns (software), not on the
+	// eSwitch.
+	backendFallback = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "multinetworkpolicy_tc_backend_fallback_total",
+		Help: "Total SR-IOV interface backend decisions that fell back from tc to nftables, by reason (tc_disabled|not_switchdev|not_vf|not_found|ct_offload_unavailable).",
+	}, []string{"reason"})
+
 	reconcileDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "multinetworkpolicy_tc_reconcile_duration_seconds",
 		Help:    "Duration of enforcing tc flower filters on a single VF representor within Apply.",
@@ -170,6 +190,7 @@ func registerMetrics() {
 			ctOffloadReady,
 			ctMaxOffloadedConns,
 			reconcileDuration,
+			backendFallback,
 		)
 	})
 }
@@ -219,4 +240,30 @@ func setCTMaxOffloadedConns(rep string, n int) {
 // observeReconcileDuration records the time spent enforcing one representor.
 func observeReconcileDuration(rep string, since time.Time) {
 	reconcileDuration.WithLabelValues(rep).Observe(time.Since(since).Seconds())
+}
+
+// IncBackendFallback counts one SR-IOV interface routed to nftables instead of
+// tc. reason is FallbackReasonTCDisabled or FallbackReason(err).
+func IncBackendFallback(reason string) {
+	backendFallback.WithLabelValues(reason).Inc()
+}
+
+// FallbackReason maps a CheckEnforceable error to a fallback metric label.
+func FallbackReason(err error) string {
+	if errors.Is(err, ErrCTOffloadUnavailable) {
+		return fallbackReasonCTUnavailable
+	}
+	return resolutionErrorReason(err)
+}
+
+// resolutionErrorReason maps a ResolveRepresentor error to a metric reason label.
+func resolutionErrorReason(err error) string {
+	switch {
+	case errors.Is(err, ErrNotSwitchdev):
+		return resolveReasonNotSwitchdev
+	case errors.Is(err, ErrNotVF):
+		return resolveReasonNotVF
+	default:
+		return resolveReasonNotFound
+	}
 }

@@ -335,18 +335,6 @@ func publishHWState(drv Driver, rep string, ifindex int) {
 	}
 }
 
-// resolutionErrorReason maps a ResolveRepresentor error to a metric reason label.
-func resolutionErrorReason(err error) string {
-	switch {
-	case errors.Is(err, ErrNotSwitchdev):
-		return resolveReasonNotSwitchdev
-	case errors.Is(err, ErrNotVF):
-		return resolveReasonNotVF
-	default:
-		return resolveReasonNotFound
-	}
-}
-
 // addErrorReason classifies an AddFilter failure for the apply-error counter.
 // A hardware-only (skip_sw) filter that the NIC cannot offload is rejected by
 // the kernel rather than falling back to software; that rejection surfaces as

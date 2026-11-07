@@ -53,7 +53,7 @@ func cleanupAllPods(ctx context.Context, r *NodeReconciler, directClient client.
 			debugLog(r.HostPrefix, "cleanup: pod %s/%s: no relevant interfaces (err=%v), skipping", pod.Namespace, pod.Name, err)
 			continue
 		}
-		byBackend := partitionByBackend(podInfo)
+		byBackend := partitionByBackend(podInfo, r.selectBackend)
 
 		// tc backend: delete flower filters on the host VF representors. This
 		// needs no pod netns, so it runs even if the pod's netns is already gone.
