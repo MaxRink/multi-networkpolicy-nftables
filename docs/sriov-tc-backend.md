@@ -35,9 +35,19 @@ way every interface was enforced before the tc backend existed:
 | PCI device is not a VF (no `physfn`) | `not_vf` |
 | `--tc-ct-mode=require` (default) and SMFS not confirmed via devlink | `ct_offload_unavailable` |
 
-Each fallback increments
-`multinetworkpolicy_tc_backend_fallback_total{reason}` and is logged once per VF
-and reason (a warning, or info for `tc_disabled`). The nftables fallback only
+Every fallback is observable. It increments
+`multinetworkpolicy_tc_backend_fallback_total{reason}` on each reconcile, and it
+logs once per VF and reason: a warning, or info for `tc_disabled`. The log line
+is `SR-IOV interface "<if>" (pci=… representor=…) enforced by the nftables
+backend in the pod netns instead of tc flower (reason=…)`.
+
+Opt-outs:
+
+- `--enable-tc-backend=false` turns off the tc backend and per-VF selection
+  entirely, which restores the exact base-branch behaviour.
+- `--tc-ct-mode=auto` is a transitional escape hatch back to the previous
+  default. It keeps DMFS VFs on stateless tc instead of falling back to
+  nftables. The nftables fallback only
 sees traffic on a kernel netdev in the pod. A DPDK/vfio-bound VF has no such
 netdev, so the fallback cannot enforce it. Such VFs need a working switchdev
 and tc setup.
@@ -69,9 +79,9 @@ and is reported via metrics/logs. The traffic is never silently allowed.
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `--enable-tc-backend` | `true` | Master switch for the whole SR-IOV tc backend. When `false`, SR-IOV VFs fall back to the nftables backend in the pod netns (`reason="tc_disabled"`), as before the tc backend existed. |
+| `--enable-tc-backend` | `true` | Master switch for the whole SR-IOV tc backend. When `false`, the base-branch behaviour is restored exactly. Every SR-IOV VF is enforced by the nftables backend in the pod netns, and the tc backend is never probed (`reason="tc_disabled"`, info log). |
 | `--tc-offload-mode` | `hardware` | `hardware` = `skip_sw` (hardware-only, fail-closed on insertion; production default). `software` = `skip_hw` (in-kernel software enforcement; for debugging/emulation without offload-capable HW). Ignored by the nftables backend. |
-| `--tc-ct-mode` | `require` | Stateful conntrack (CT) offload policy. `require` (default): enforce on the eSwitch only with the CT pipeline, which needs SMFS steering confirmed via devlink. On DMFS/HMFS, or when the steering mode cannot be read, the VF **falls back to the stateful nftables backend** (`reason="ct_offload_unavailable"`, warning log). `auto` (opt-in): emit CT where SMFS is confirmed, otherwise **degrade to the stateless tc pipeline** and log the lost stateful tracking. `off`: never use CT (always stateless tc). Ignored by the nftables backend. |
+| `--tc-ct-mode` | `require` | Stateful conntrack (CT) offload policy. `require` (default): enforce on the eSwitch only with the CT pipeline, which needs SMFS steering confirmed via devlink. On DMFS/HMFS, or when the steering mode cannot be read, the VF **falls back to the stateful nftables backend** (`reason="ct_offload_unavailable"`, warning log). `auto` is a **transitional escape hatch** that restores the previous default and may be removed later. It emits CT where SMFS is confirmed, and otherwise **degrades to the stateless tc pipeline** and logs the lost stateful tracking. `off`: never use CT (always stateless tc). Ignored by the nftables backend. |
 
 ### Graceful degradation — always enforce the maximum the hardware allows
 
@@ -83,9 +93,9 @@ largest offloadable subset of the policy for the current NIC/steering config and
   any switchdev NIC with `hw-tc-offload on`, regardless of steering mode.
 - **Stateful CT** (established/related auto-accept) needs SMFS. Under the
   default `--tc-ct-mode=require`, a DMFS/HMFS/unknown NIC keeps stateful
-  semantics by falling back to nftables in the pod netns. Under the opt-in
-  `--tc-ct-mode=auto` it degrades to stateless tc and logs an info-level
-  "improvement available: switch to SMFS" line.
+  semantics by falling back to nftables in the pod netns. Under the
+  transitional `--tc-ct-mode=auto` escape hatch, it degrades to stateless tc
+  and logs an info-level "improvement available: switch to SMFS" line.
 - If even the stateless filters cannot be offloaded (e.g. `hw-tc-offload off` in
   hardware mode) insertion fails **fail-closed** and the error is surfaced (log +
   `multinetworkpolicy_tc_filter_apply_errors_total{reason="skip_sw"}`), never

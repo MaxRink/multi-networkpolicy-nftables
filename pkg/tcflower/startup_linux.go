@@ -166,8 +166,8 @@ func logPFOffloadConfig(pf pfOffloadInfo, hardwareMode bool, ctMode CTMode) {
 					"hardware conntrack offload is unavailable, so this PF's VFs FALL BACK to the nftables "+
 					"backend in the pod netns (stateful, software; not eSwitch-offloaded). For stateful eSwitch "+
 					"enforcement switch with: devlink dev param set %s name flow_steering_mode value smfs "+
-					"cmode runtime (BEFORE switchdev); or opt in to stateless eSwitch enforcement with "+
-					"--tc-ct-mode=auto.", pf.PCI, steering, handle)
+					"cmode runtime (BEFORE switchdev); or use the transitional --tc-ct-mode=auto escape hatch "+
+					"for stateless eSwitch enforcement.", pf.PCI, steering, handle)
 			default: // CTModeAuto
 				klog.Infof("tcflower startup: PF %s steering mode is %q (not smfs); conntrack offload is NOT "+
 					"available, so --tc-ct-mode=auto DEGRADES this PF to STATELESS enforcement (stateless "+

@@ -38,8 +38,9 @@ type CommonRuleConfig struct {
 	//   - "require" (the --tc-ct-mode default): emit CT; the reconciler routes
 	//     the interface to the nftables backend instead unless SMFS is
 	//     confirmed (see pkg/tcflower.CheckEnforceable).
-	//   - "" / "auto": emit CT only where SMFS is confirmed; elsewhere DEGRADE
-	//     to the stateless pipeline and log the lost capability.
+	//   - "" / "auto": transitional escape hatch (the previous default). Emit CT
+	//     only where SMFS is confirmed; elsewhere DEGRADE to the stateless
+	//     pipeline and log the lost capability.
 	//   - "off": never emit CT; always stateless.
 	// Consumed only by the tc flower backend; validated/normalized in
 	// pkg/tcflower (see parseCTMode). The zero value ("") is auto, for

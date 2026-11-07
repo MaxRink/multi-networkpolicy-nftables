@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -522,30 +523,36 @@ func TestReconcile_TCBackendDisabledFallsBackToNFT(t *testing.T) {
 	)
 	setPodRunning(t, pod)
 
-	var nftIfaces []controllers.InterfaceInfo
+	original := &controllers.PodInfo{
+		Name:      pod.Name,
+		Namespace: pod.Namespace,
+		NodeName:  nodeName,
+		Interfaces: []controllers.InterfaceInfo{
+			{NetattachName: "sriov-a", InterfaceName: "net1", PCIAddress: "0000:04:00.2", RepresentorDevice: "enp4s0f0_3"},
+			{NetattachName: "macvlan-net", InterfaceName: "net2", InterfaceType: "macvlan", IPs: []netip.Addr{netip.MustParseAddr("10.0.0.1")}},
+			{NetattachName: "sriov-b", InterfaceName: "net3", PCIAddress: "0000:04:00.3"},
+		},
+	}
+	var nftCalls []*controllers.PodInfo
 	tcCalled := false
 	r := &NodeReconciler{
 		NodeName:          nodeName,
 		Client:            testClient,
 		TCBackendDisabled: true, // <-- --enable-tc-backend=false
+		TCCheckEnforceableFunc: func(string, controllers.CommonRuleConfig, controllers.InterfaceInfo) error {
+			t.Error("tc eligibility must not be probed when the tc backend is disabled")
+			return nil
+		},
 		PolicyDeps: &mockPolicyDeps{
 			listPodsFunc: func(labels.Selector) ([]*corev1.Pod, error) {
 				return []*corev1.Pod{pod}, nil
 			},
 			getPodInfoFunc: func(*corev1.Pod) (*controllers.PodInfo, error) {
-				return &controllers.PodInfo{
-					Name:      pod.Name,
-					Namespace: pod.Namespace,
-					NodeName:  nodeName,
-					Interfaces: []controllers.InterfaceInfo{
-						{NetattachName: "macvlan-net", InterfaceName: "net1", InterfaceType: "macvlan", IPs: []netip.Addr{netip.MustParseAddr("10.0.0.1")}},
-						{NetattachName: "sriov-net", InterfaceName: "net2", PCIAddress: "0000:04:00.2", RepresentorDevice: "enp4s0f0_3"},
-					},
-				}, nil
+				return original, nil
 			},
 		},
 		ApplyRulesForPodFunc: func(_ context.Context, _ controllers.PolicyDeps, _ controllers.CommonRuleConfig, _ controllers.PolicyMap, _ *corev1.Pod, podInfo *controllers.PodInfo, _ string) error {
-			nftIfaces = podInfo.Interfaces
+			nftCalls = append(nftCalls, podInfo)
 			return nil
 		},
 		ApplyTCRulesForPodFunc: func(context.Context, controllers.PolicyDeps, controllers.CommonRuleConfig, controllers.PolicyMap, *corev1.Pod, *controllers.PodInfo, string) error {
@@ -560,10 +567,13 @@ func TestReconcile_TCBackendDisabledFallsBackToNFT(t *testing.T) {
 	if tcCalled {
 		t.Fatal("tc backend must NOT be invoked when TCBackendDisabled is set")
 	}
-	// Base-branch behavior: with tc off, the SR-IOV VF is enforced by nftables
-	// in the pod netns alongside the veth-style interface, not left unenforced.
-	if len(nftIfaces) != 2 {
-		t.Fatalf("nft backend got %d interfaces, want 2 (macvlan + SR-IOV fallback): %+v", len(nftIfaces), nftIfaces)
+	// Exact base-branch behavior: one nftables apply for the pod with the
+	// unmodified PodInfo (every interface, SR-IOV included, original order).
+	if len(nftCalls) != 1 {
+		t.Fatalf("nft backend called %d times, want 1", len(nftCalls))
+	}
+	if !reflect.DeepEqual(nftCalls[0], original) {
+		t.Fatalf("nft backend got %+v, want the unmodified PodInfo %+v", nftCalls[0], original)
 	}
 }
 

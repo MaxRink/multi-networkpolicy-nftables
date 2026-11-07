@@ -37,7 +37,7 @@ not gated on steering mode — **[unconfirmed]** as a hard requirement].
 | Mode | Behaviour on SMFS | Behaviour on DMFS / HMFS / unknown | Use when |
 |------|-------------------|------------------------------------|----------|
 | `require` (default) | Stateful CT pipeline | **Fall back to the nftables backend** in the pod netns (stateful, software). Warning log plus `backend_fallback_total{reason="ct_offload_unavailable"}`. | Default: stateful semantics everywhere, with eSwitch offload where SMFS is confirmed. |
-| `auto` | Stateful CT pipeline | **Degrade to stateless tc** + log improvement. Stateless allow/deny still fully enforced on the eSwitch. | Opt-in: you prefer eSwitch enforcement over stateful tracking on DMFS. |
+| `auto` | Stateful CT pipeline | **Degrade to stateless tc** + log improvement. Stateless allow/deny still fully enforced on the eSwitch. | **Transitional escape hatch** to the previous default; may be removed. Use it only if you need eSwitch enforcement over stateful tracking on DMFS. |
 | `off` | Stateless | Stateless | You never want CT (e.g. pure allow/deny policies). |
 
 **What "stateless" loses vs "stateful":** with a stateless pipeline you must
@@ -80,7 +80,7 @@ Warning lines you must act on:
 | `no Mellanox/NVIDIA SR-IOV physical function found` | No mlx5 SR-IOV NIC visible in sysfs | Expected on non-SR-IOV nodes → set `--enable-tc-backend=false`. Otherwise check `/sys` is mounted and `--host-prefix`. |
 | `is NOT in switchdev mode` | PF eSwitch is in legacy mode; VFs have no representors and fall back to nftables | `devlink dev eswitch set pci/<pf> mode switchdev` (during provisioning) if you want eSwitch enforcement. |
 | `hw-tc-offload is OFF` | tc offload disabled on the uplink | `ethtool -K <uplink> hw-tc-offload on`. In hardware mode this is fatal (filters rejected). |
-| `--tc-ct-mode=require but PF … steering mode is "dmfs"` | CT required but cannot offload → VFs fall back to nftables | Switch to SMFS **before** switchdev, or opt in to stateless tc with `--tc-ct-mode=auto`. |
+| `--tc-ct-mode=require but PF … steering mode is "dmfs"` | CT required but cannot offload → VFs fall back to nftables | Switch to SMFS **before** switchdev, or use the transitional `--tc-ct-mode=auto` escape hatch for stateless tc. |
 | `could not read flow_steering_mode` | devlink unavailable/unprivileged | Ensure the pod is privileged and `devlink` is in the image; else `require` falls back to nftables and `auto` degrades to stateless tc. |
 | `enforced by the nftables backend in the pod netns instead of tc flower (reason=…)` | Per-VF fallback (once per VF and reason) | See the reason table in [sriov-tc-backend.md](sriov-tc-backend.md#backend-selection-zero-config-per-interface). |
 
