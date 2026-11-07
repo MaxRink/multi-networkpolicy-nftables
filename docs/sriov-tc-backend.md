@@ -20,7 +20,27 @@ flower on the representor; neither backend touches the other's interfaces.
 
 Selection is data-driven off the Multus `k8s.v1.cni.cncf.io/network-status`
 annotation. If an interface carries a `DeviceInfo.Pci` block (VF PCI address /
-representor), it is routed to the tc backend; otherwise to the nftables backend.
+representor), it is a tc-backend candidate; otherwise it goes to the nftables
+backend.
+
+A candidate is routed to tc only if the tc backend can actually enforce it.
+Otherwise it **falls back to the nftables backend in the pod netns**, the same
+way every interface was enforced before the tc backend existed:
+
+| Condition | Fallback `reason` |
+|-----------|-------------------|
+| `--enable-tc-backend=false` | `tc_disabled` |
+| PF eSwitch in legacy mode (no `phys_switch_id`) | `not_switchdev` |
+| No VF representor resolvable (annotated rep absent, no matching `phys_port_name`) | `not_found` |
+| PCI device is not a VF (no `physfn`) | `not_vf` |
+| `--tc-ct-mode=require` (default) and SMFS not confirmed via devlink | `ct_offload_unavailable` |
+
+Each fallback increments
+`multinetworkpolicy_tc_backend_fallback_total{reason}` and is logged once per VF
+and reason (a warning, or info for `tc_disabled`). The nftables fallback only
+sees traffic on a kernel netdev in the pod. A DPDK/vfio-bound VF has no such
+netdev, so the fallback cannot enforce it. Such VFs need a working switchdev
+and tc setup.
 
 Operators must add the SR-IOV plugin name(s) to `--network-plugins` so SR-IOV
 net-attach-defs pass the plugin-type filter (the default list is unchanged):
@@ -32,8 +52,9 @@ net-attach-defs pass the plugin-type filter (the default list is unchanged):
 ## Prerequisites (out-of-band, not this daemon's job)
 
 The tc backend requires the NIC to already be in switchdev mode with hardware
-tc offload enabled. This is a node-provisioning concern; the daemon **detects**
-its absence and errors loudly rather than silently leaving traffic unenforced.
+tc offload enabled. This is a node-provisioning concern. The daemon **detects**
+a missing switchdev mode or representor and falls back to nftables (see above)
+rather than silently leaving traffic unenforced.
 
 - NIC: NVIDIA/Mellanox ConnectX-5 or newer (mlx5).
 - eSwitch in switchdev mode: `devlink dev eswitch set pci/<pf> mode switchdev`.
@@ -41,17 +62,16 @@ its absence and errors loudly rather than silently leaving traffic unenforced.
 - The DaemonSet mounts host `/sys` and `/proc` (already privileged, per node)
   and honours `--host-prefix` for all sysfs reads.
 
-If the representor cannot be resolved or offload is off, the interface is
-treated as **fail-closed** and reported via metrics/logs — never silently
-allowed.
+If the representor resolves but offload is off, insertion fails **fail-closed**
+and is reported via metrics/logs. The traffic is never silently allowed.
 
 ## Flags
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `--enable-tc-backend` | `true` | Master switch for the whole SR-IOV tc backend. When `false`, every interface that would route to the tc backend is skipped — SR-IOV VFs are **not enforced** by this daemon and only the nftables backend runs. Use to opt out entirely on nodes/clusters where SR-IOV enforcement is not wanted. |
+| `--enable-tc-backend` | `true` | Master switch for the whole SR-IOV tc backend. When `false`, SR-IOV VFs fall back to the nftables backend in the pod netns (`reason="tc_disabled"`), as before the tc backend existed. |
 | `--tc-offload-mode` | `hardware` | `hardware` = `skip_sw` (hardware-only, fail-closed on insertion; production default). `software` = `skip_hw` (in-kernel software enforcement; for debugging/emulation without offload-capable HW). Ignored by the nftables backend. |
-| `--tc-ct-mode` | `auto` | Stateful conntrack (CT) offload policy. `auto`: emit the CT pipeline where the NIC can hardware-offload it (SMFS steering), otherwise **degrade to the stateless pipeline** and log the lost stateful tracking (DMFS cannot offload CT). `require`: always emit CT; if the NIC cannot offload it the filters are rejected and the interface is left unenforced (fail-closed, stateful-or-nothing). `off`: never use CT (always stateless). Ignored by the nftables backend. |
+| `--tc-ct-mode` | `require` | Stateful conntrack (CT) offload policy. `require` (default): enforce on the eSwitch only with the CT pipeline, which needs SMFS steering confirmed via devlink. On DMFS/HMFS, or when the steering mode cannot be read, the VF **falls back to the stateful nftables backend** (`reason="ct_offload_unavailable"`, warning log). `auto` (opt-in): emit CT where SMFS is confirmed, otherwise **degrade to the stateless tc pipeline** and log the lost stateful tracking. `off`: never use CT (always stateless tc). Ignored by the nftables backend. |
 
 ### Graceful degradation — always enforce the maximum the hardware allows
 
@@ -61,9 +81,11 @@ largest offloadable subset of the policy for the current NIC/steering config and
 
 - **Stateless allow/deny** (5-tuple, CIDR, ports, both IPv4 and IPv6) offloads on
   any switchdev NIC with `hw-tc-offload on`, regardless of steering mode.
-- **Stateful CT** (established/related auto-accept) needs SMFS; under
-  `--tc-ct-mode=auto` a DMFS/HMFS/unknown NIC degrades to stateless and logs an
-  info-level "improvement available: switch to SMFS" line.
+- **Stateful CT** (established/related auto-accept) needs SMFS. Under the
+  default `--tc-ct-mode=require`, a DMFS/HMFS/unknown NIC keeps stateful
+  semantics by falling back to nftables in the pod netns. Under the opt-in
+  `--tc-ct-mode=auto` it degrades to stateless tc and logs an info-level
+  "improvement available: switch to SMFS" line.
 - If even the stateless filters cannot be offloaded (e.g. `hw-tc-offload off` in
   hardware mode) insertion fails **fail-closed** and the error is surfaced (log +
   `multinetworkpolicy_tc_filter_apply_errors_total{reason="skip_sw"}`), never

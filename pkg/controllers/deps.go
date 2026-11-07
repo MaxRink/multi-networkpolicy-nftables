@@ -35,14 +35,15 @@ type CommonRuleConfig struct {
 	// CTMode governs how the tc flower backend decides whether to emit the
 	// stateful conntrack pipeline, given that hardware CT offload requires SMFS
 	// steering (the default DMFS cannot offload it):
+	//   - "require" (the --tc-ct-mode default): emit CT; the reconciler routes
+	//     the interface to the nftables backend instead unless SMFS is
+	//     confirmed (see pkg/tcflower.CheckEnforceable).
 	//   - "" / "auto": emit CT only where SMFS is confirmed; elsewhere DEGRADE
-	//     to the stateless pipeline and log the lost capability (maximizes
-	//     successfully-offloaded enforcement instead of failing closed on DMFS).
-	//   - "require": always emit CT; if the NIC cannot offload it the filters are
-	//     rejected and the interface is left unenforced (stateful-or-nothing).
+	//     to the stateless pipeline and log the lost capability.
 	//   - "off": never emit CT; always stateless.
 	// Consumed only by the tc flower backend; validated/normalized in
-	// pkg/tcflower (see parseCTMode). The zero value ("") is auto.
+	// pkg/tcflower (see parseCTMode). The zero value ("") is auto, for
+	// programmatic callers; the daemon always sets it from the flag.
 	CTMode string
 
 	// TCOffloadMode selects how the tc flower backend stamps a filter's

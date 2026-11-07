@@ -36,8 +36,8 @@ not gated on steering mode — **[unconfirmed]** as a hard requirement].
 
 | Mode | Behaviour on SMFS | Behaviour on DMFS / HMFS / unknown | Use when |
 |------|-------------------|------------------------------------|----------|
-| `auto` (default) | Stateful CT pipeline | **Degrade to stateless** + log improvement. Stateless allow/deny still fully enforced. | You want the best available everywhere without per-node tuning. |
-| `require` | Stateful CT pipeline | **Fail-closed**: CT filters rejected, interface unenforced. | SMFS fleet that must be stateful-or-error. |
+| `require` (default) | Stateful CT pipeline | **Fall back to the nftables backend** in the pod netns (stateful, software). Warning log plus `backend_fallback_total{reason="ct_offload_unavailable"}`. | Default: stateful semantics everywhere, with eSwitch offload where SMFS is confirmed. |
+| `auto` | Stateful CT pipeline | **Degrade to stateless tc** + log improvement. Stateless allow/deny still fully enforced on the eSwitch. | Opt-in: you prefer eSwitch enforcement over stateful tracking on DMFS. |
 | `off` | Stateless | Stateless | You never want CT (e.g. pure allow/deny policies). |
 
 **What "stateless" loses vs "stateful":** with a stateless pipeline you must
@@ -67,10 +67,10 @@ startup (`tcflower startup: …`). It enumerates each Mellanox/NVIDIA SR-IOV PF 
 reports every offload-relevant limit. Expected lines and their meaning:
 
 ```
-tcflower startup: SR-IOV tc-flower backend ENABLED (offload-mode=hardware, ct-mode=auto); found 2 Mellanox/NVIDIA SR-IOV PF(s) under /host/sys
+tcflower startup: SR-IOV tc-flower backend ENABLED (offload-mode=hardware, ct-mode=require); found 2 Mellanox/NVIDIA SR-IOV PF(s) under /host/sys
 tcflower startup: PF 0000:03:00.0 [ConnectX-6 Lx, driver=mlx5_core] switchdev=true vfs=8/16
 tcflower startup: PF 0000:03:00.0 flow_steering_mode=dmfs
-tcflower startup: PF 0000:03:00.0 steering mode is "dmfs" (not smfs); conntrack offload is NOT available, so --tc-ct-mode=auto DEGRADES this PF to STATELESS enforcement ... IMPROVEMENT: switch to SMFS ...
+tcflower startup: --tc-ct-mode=require but PF 0000:03:00.0 steering mode is "dmfs" (need smfs); hardware conntrack offload is unavailable, so this PF's VFs FALL BACK to the nftables backend ...
 ```
 
 Warning lines you must act on:
@@ -78,10 +78,11 @@ Warning lines you must act on:
 | Log fragment | Meaning | Fix |
 |--------------|---------|-----|
 | `no Mellanox/NVIDIA SR-IOV physical function found` | No mlx5 SR-IOV NIC visible in sysfs | Expected on non-SR-IOV nodes → set `--enable-tc-backend=false`. Otherwise check `/sys` is mounted and `--host-prefix`. |
-| `is NOT in switchdev mode` | PF eSwitch is in legacy mode; VFs have no representors | `devlink dev eswitch set pci/<pf> mode switchdev` (during provisioning). |
+| `is NOT in switchdev mode` | PF eSwitch is in legacy mode; VFs have no representors and fall back to nftables | `devlink dev eswitch set pci/<pf> mode switchdev` (during provisioning) if you want eSwitch enforcement. |
 | `hw-tc-offload is OFF` | tc offload disabled on the uplink | `ethtool -K <uplink> hw-tc-offload on`. In hardware mode this is fatal (filters rejected). |
-| `--tc-ct-mode=require but PF … steering mode is "dmfs"` | CT required but cannot offload → interface unenforced | Switch to SMFS **before** switchdev, or use `--tc-ct-mode=auto`. |
-| `could not read flow_steering_mode` | devlink unavailable/unprivileged | Ensure the pod is privileged and `devlink` is in the image; else CT auto-degrades. |
+| `--tc-ct-mode=require but PF … steering mode is "dmfs"` | CT required but cannot offload → VFs fall back to nftables | Switch to SMFS **before** switchdev, or opt in to stateless tc with `--tc-ct-mode=auto`. |
+| `could not read flow_steering_mode` | devlink unavailable/unprivileged | Ensure the pod is privileged and `devlink` is in the image; else `require` falls back to nftables and `auto` degrades to stateless tc. |
+| `enforced by the nftables backend in the pod netns instead of tc flower (reason=…)` | Per-VF fallback (once per VF and reason) | See the reason table in [sriov-tc-backend.md](sriov-tc-backend.md#backend-selection-zero-config-per-interface). |
 
 ## 3. Metrics
 
@@ -94,13 +95,15 @@ All exported on the controller-runtime `/metrics` endpoint (Prometheus). Prefix
 | `filters_in_hw` | gauge | representor, direction | Filters confirmed offloaded to the eSwitch (`in_hw`). |
 | `filters_not_in_hw` | gauge | representor, direction | Filters present but NOT offloaded. **Alert if > 0**: policy is not enforced in hardware. |
 | `filter_apply_errors_total` | counter | representor, reason (`add`/`delete`/`skip_sw`) | **`reason="skip_sw"` is the fail-closed offload-rejection signal — alert on any increase.** |
-| `representor_resolution_errors_total` | counter | reason | A pod VF could not be mapped to a representor (interface left unenforced). |
+| `representor_resolution_errors_total` | counter | reason | A pod VF routed to tc could not be mapped to a representor at apply time (interface left unenforced). |
+| `backend_fallback_total` | counter | reason (`tc_disabled`/`not_switchdev`/`not_found`/`not_vf`/`ct_offload_unavailable`) | SR-IOV interface routing decisions that went to nftables instead of tc (counted per reconcile). A non-zero rate means those VFs are enforced in software in the pod netns. |
 | `offload_ready` | gauge | representor | 1 if the representor is present and offload-ready. |
 | `ct_offload_ready` | gauge | representor | 1 if the eSwitch is SMFS (CT-offload capable), 0 if not. **0 ⇒ running degraded/stateless under auto.** |
 | `ct_max_offloaded_conns` | gauge | representor | Hardware CT table capacity (mlx5 `ct_max_offloaded_conns`). The effective flow ceiling is `2 ×` this (two entries/connection) [secondary: MLNX_OFED `tc_ct.c`]. |
 | `reconcile_duration_seconds` | histogram | representor | Time to enforce one representor. |
 
 Recommended alerts: `filters_not_in_hw > 0`, `increase(filter_apply_errors_total{reason="skip_sw"}[5m]) > 0`,
+`rate(backend_fallback_total[10m]) > 0` (if you expect eSwitch enforcement everywhere),
 `ct_offload_ready == 0` (if you expect stateful), and CT utilisation approaching
 `ct_max_offloaded_conns × 2`.
 
@@ -113,6 +116,9 @@ Work top-down; each step narrows the failure to a layer.
 - The pod's Multus `network-status` annotation must carry a `device-info`/`pci`
   block for the VF. Without it the interface is handled by the **nftables**
   backend, not tc.
+- Even with it, the VF falls back to nftables when tc cannot enforce it. Grep
+  the daemon log for `enforced by the nftables backend` and check
+  `multinetworkpolicy_tc_backend_fallback_total` for the reason.
 - Operators must include the SR-IOV plugin name in `--network-plugins`
   (e.g. `sriov`, `accelerated-bridge`). Check the daemon flags.
 
@@ -216,10 +222,10 @@ harness and what remains hardware-gated.
 - **software mode on real switchdev NICs** does not see eSwitch-switched
   VF-to-VF traffic **[unconfirmed]** — software mode is for emulation/veth and
   non-offload NICs, not a fallback for production inter-VF policy.
-- **HMFS + CT**: HMFS CT-offload support is **[unconfirmed]**; `auto` treats HMFS
-  as non-CT-offloadable and degrades to stateless rather than emit filters that
-  might be rejected. Use `--tc-ct-mode=require` to force an attempt if you have
-  verified HMFS CT on your firmware.
+- **HMFS + CT**: HMFS CT-offload support is **[unconfirmed]**. Both modes treat
+  HMFS as non-CT-offloadable: `auto` degrades to stateless tc, and `require`
+  falls back to nftables. Neither emits CT filters that might be rejected. There
+  is currently no switch to force a CT attempt on HMFS.
 - **ct_max_offloaded_conns** default is **[unconfirmed]** for adapters (the
   BlueField provisioning default is 1,000,000 [secondary]); read the live value
   with `devlink dev param show`.

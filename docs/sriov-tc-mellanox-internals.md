@@ -134,7 +134,8 @@ When rejected, the daemon surfaces `EOPNOTSUPP`/`ENOTSUPP` and counts
   steering mode is not enabled"). **So CT is supported in DMFS, SMFS AND HMFS in
   the code.** "CT requires SMFS" is a **vendor/operational recommendation**
   **[secondary/unconfirmed]** (NVIDIA ASAP² pages 404'd), not a code gate — but
-  the daemon still probes for SMFS and degrades on non-SMFS because that is the
+  the daemon still probes for SMFS and, on non-SMFS, falls back to nftables
+  (`require`, default) or degrades to stateless tc (`auto`) because SMFS is the
   documented-working configuration; verify DMFS CT offload empirically on your
   firmware before relying on it.
 - **`post_ct` = the post_act table [primary]**, not a separately-named object.
