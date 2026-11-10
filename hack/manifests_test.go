@@ -140,7 +140,9 @@ func TestClusterRoleGrantsWatchedResources(t *testing.T) {
 
 func grants(rules []rbacv1.PolicyRule, group, resource, verb string) bool {
 	for _, r := range rules {
-		if (slices.Contains(r.APIGroups, group) || slices.Contains(r.APIGroups, "*")) &&
+		// resourceNames-restricted rules cannot satisfy cluster-wide list/watch.
+		if len(r.ResourceNames) == 0 &&
+			(slices.Contains(r.APIGroups, group) || slices.Contains(r.APIGroups, "*")) &&
 			(slices.Contains(r.Resources, resource) || slices.Contains(r.Resources, "*")) &&
 			(slices.Contains(r.Verbs, verb) || slices.Contains(r.Verbs, "*")) {
 			return true
