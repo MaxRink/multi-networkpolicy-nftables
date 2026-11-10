@@ -50,9 +50,8 @@ func CleanupOnShutdown(ctx context.Context, r *NodeReconciler, cl client.Client)
 }
 
 // SetupWithManager wires node, pod, policy, namespace, and NAD watches.
-// SetupWithManager registers the watches. Keep watchedResources in
-// hack/manifests_test.go in sync: every resource watched here needs
-// get/list/watch in all shipped ClusterRoles.
+// Keep watchedResources in hack/manifests_test.go in sync: every resource
+// watched here needs get/list/watch in all shipped ClusterRoles.
 func (r *NodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Node{}, builder.WithPredicates(NodePredicate(r.NodeName))).
