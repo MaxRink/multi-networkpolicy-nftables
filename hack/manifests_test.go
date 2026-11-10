@@ -21,9 +21,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	runtimeutil "k8s.io/apimachinery/pkg/runtime"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 )
 
@@ -41,7 +44,7 @@ func TestHealthPortDeclaredInManifests(t *testing.T) {
 	}
 	for _, manifest := range manifests {
 		t.Run(manifest, func(t *testing.T) {
-			daemonSet := readDaemonSet(t, filepath.Join(root, manifest))
+			daemonSet := readObject(t, filepath.Join(root, manifest), "DaemonSet", "multi-networkpolicy-ds-amd64")
 			containers, found, err := unstructured.NestedSlice(daemonSet.Object, "spec", "template", "spec", "containers")
 			if err != nil {
 				t.Fatalf("read containers: %v", err)
@@ -66,7 +69,7 @@ func TestHealthPortDeclaredInManifests(t *testing.T) {
 	}
 }
 
-func readDaemonSet(t *testing.T, path string) *unstructured.Unstructured {
+func readObject(t *testing.T, path, kind, name string) *unstructured.Unstructured {
 	t.Helper()
 
 	file, err := os.Open(path)
@@ -84,12 +87,66 @@ func readDaemonSet(t *testing.T, path string) *unstructured.Unstructured {
 			}
 			t.Fatalf("decode manifest: %v", err)
 		}
-		if object.GetKind() == "DaemonSet" && object.GetName() == "multi-networkpolicy-ds-amd64" {
+		if object.GetKind() == kind && object.GetName() == name {
 			return &object
 		}
 	}
-	t.Fatalf("DaemonSet multi-networkpolicy-ds-amd64 not found")
+	t.Fatalf("%s %s not found", kind, name)
 	return nil
+}
+
+// watchedResources lists every resource the manager opens an informer for
+// (see NodeReconciler.SetupWithManager and healthSyncRunnable). A missing
+// get/list/watch grant makes controller-runtime's cache sync time out at
+// startup, so every shipped ClusterRole must grant all of them.
+var watchedResources = []struct{ group, resource string }{
+	{"", "nodes"},
+	{"", "pods"},
+	{"", "namespaces"},
+	{"k8s.cni.cncf.io", "multi-networkpolicies"},
+	{"k8s.cni.cncf.io", "network-attachment-definitions"},
+}
+
+func TestClusterRoleGrantsWatchedResources(t *testing.T) {
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller() failed")
+	}
+	root := filepath.Dir(filepath.Dir(testFile))
+
+	manifests := []string{
+		"config/manager/base/rbac.yaml",
+		"deploy.yml",
+		"demo/deploy.yml",
+		"e2e/multi-network-policy-nftables-e2e.yml",
+	}
+	for _, manifest := range manifests {
+		t.Run(manifest, func(t *testing.T) {
+			var role rbacv1.ClusterRole
+			obj := readObject(t, filepath.Join(root, manifest), "ClusterRole", "multi-networkpolicy")
+			if err := runtimeutil.DefaultUnstructuredConverter.FromUnstructured(obj.Object, &role); err != nil {
+				t.Fatalf("convert ClusterRole: %v", err)
+			}
+			for _, w := range watchedResources {
+				for _, verb := range []string{"get", "list", "watch"} {
+					if !grants(role.Rules, w.group, w.resource, verb) {
+						t.Errorf("ClusterRole does not grant %q on %q (group %q)", verb, w.resource, w.group)
+					}
+				}
+			}
+		})
+	}
+}
+
+func grants(rules []rbacv1.PolicyRule, group, resource, verb string) bool {
+	for _, r := range rules {
+		if (slices.Contains(r.APIGroups, group) || slices.Contains(r.APIGroups, "*")) &&
+			(slices.Contains(r.Resources, resource) || slices.Contains(r.Resources, "*")) &&
+			(slices.Contains(r.Verbs, verb) || slices.Contains(r.Verbs, "*")) {
+			return true
+		}
+	}
+	return false
 }
 
 func assertHealthPort(t *testing.T, container map[string]interface{}) {

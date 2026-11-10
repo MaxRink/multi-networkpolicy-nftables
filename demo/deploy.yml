@@ -21,6 +21,15 @@ rules:
       - list
       - watch
       - get
+  # The controller reconciles its own Node object.
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
   # Watch for changes to Kubernetes NetworkPolicies.
   - apiGroups: ["networking.k8s.io"]
     resources:
