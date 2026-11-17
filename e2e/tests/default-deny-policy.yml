@@ -1,0 +1,17 @@
+# Opens port 5555 of pod-server; applied by default-deny.bats.
+apiVersion: k8s.cni.cncf.io/v1beta1
+kind: MultiNetworkPolicy
+metadata:
+  name: test-default-deny-allow-5555
+  namespace: test-default-deny
+  annotations:
+    k8s.v1.cni.cncf.io/policy-for: default/macvlan1-default-deny
+spec:
+  podSelector:
+    matchLabels:
+      name: pod-server
+  policyTypes:
+  - Ingress
+  ingress:
+  - ports:
+    - port: 5555

@@ -155,7 +155,9 @@ func ApplyPolicyRulesForPodAndFamily(ctx context.Context, deps controllers.Polic
 	slices.SortStableFunc(ingressPolicies, CompareInternalPolicy)
 	slices.SortStableFunc(egressPolicies, CompareInternalPolicy)
 
-	if len(ingressPolicies) > 0 {
+	// With default deny, a pod no ingress policy selects gets the same drop rule
+	// as a pod selected by a policy without ingress rules.
+	if len(ingressPolicies) > 0 || cfg.DefaultDenyIngress {
 		forceUpdate := false
 		for _, policy := range ingressPolicies {
 			newRules, err := nftState.applyPodRules(ctx, deps, cfg, nftState.ingressChain, podInfo, policy.policy, policy.policyNetworks)
@@ -174,7 +176,9 @@ func ApplyPolicyRulesForPodAndFamily(ctx context.Context, deps controllers.Polic
 		}
 	}
 
-	if len(egressPolicies) > 0 {
+	// With default deny, a pod no egress policy selects gets the same drop rule
+	// as a pod selected by a policy without egress rules.
+	if len(egressPolicies) > 0 || cfg.DefaultDenyEgress {
 		forceUpdate := false
 		for _, policy := range egressPolicies {
 			newRules, err := nftState.applyPodRules(ctx, deps, cfg, nftState.egressChain, podInfo, policy.policy, policy.policyNetworks)

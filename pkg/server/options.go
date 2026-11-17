@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -49,6 +50,8 @@ type Options struct {
 	acceptICMP               bool
 	allowSrcPrefixText       string
 	allowDstPrefixText       string
+	// defaultDeny is the --default-deny mode: none, ingress, egress or all.
+	defaultDeny string
 	// healthPort is the TCP port the health HTTP server listens on (0 = disabled).
 	healthPort int
 	// healthBindAddress is the IP address the health HTTP server binds to.
@@ -95,6 +98,7 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&o.acceptICMPv6, "accept-icmpv6", false, "accept all ICMPv6 traffic")
 	fs.StringVar(&o.allowSrcPrefixText, "allow-src-prefix", "", "Accept source IP prefix list, comma separated CIDRs (e.g. \"fe80::/10\")")
 	fs.StringVar(&o.allowDstPrefixText, "allow-dst-prefix", "", "Accept destination IP prefix list, comma separated CIDRs (e.g. \"fe80::/10,ff00::/8\")")
+	fs.StringVar(&o.defaultDeny, "default-deny", o.defaultDeny, "Deny traffic on managed pod interfaces that no MultiNetworkPolicy selects. Possible values: 'none', 'ingress', 'egress', 'all'.")
 	fs.IntVar(&o.healthPort, "health-port", 0, "TCP port for the health HTTP server (0 to disable, 1-65535 to enable).")
 	fs.StringVar(&o.healthBindAddress, "health-bind-address", "", "IP address the health HTTP server binds to (empty = all interfaces, 127.0.0.1 = loopback only).")
 	fs.StringVar(&o.logLevel, "log-level", "", "Log level: debug, info, warn or error (klog -v=4, 2, 0, 0). Overrides -v. If empty, -v applies.")
@@ -119,7 +123,10 @@ func parseIPPrefixText(prefixText string, prefixList *[]string) error {
 
 // Validate checks several options and fill processed value
 func (o *Options) Validate() error {
-
+	// An empty value, as in an Options literal, means none.
+	if !slices.Contains([]string{"", "none", "ingress", "egress", "all"}, o.defaultDeny) {
+		return fmt.Errorf("default-deny %q is invalid, must be one of none, ingress, egress or all", o.defaultDeny)
+	}
 	if o.healthPort < 0 || o.healthPort > 65535 {
 		return fmt.Errorf("health-port %d is out of range [0, 65535]", o.healthPort)
 	}
@@ -178,10 +185,12 @@ func (o *Options) BuildReconcilerConfig() (*ReconcilerConfig, error) {
 		NetworkPlugins:           o.networkPlugins,
 		SyncPeriodSeconds:        o.syncPeriod,
 		CommonRuleConfig: controllers.CommonRuleConfig{
-			AcceptICMP:     o.acceptICMP,
-			AcceptICMPv6:   o.acceptICMPv6,
-			AllowSrcPrefix: o.allowSrcPrefix,
-			AllowDstPrefix: o.allowDstPrefix,
+			AcceptICMP:         o.acceptICMP,
+			AcceptICMPv6:       o.acceptICMPv6,
+			AllowSrcPrefix:     o.allowSrcPrefix,
+			AllowDstPrefix:     o.allowDstPrefix,
+			DefaultDenyIngress: o.defaultDeny == "ingress" || o.defaultDeny == "all",
+			DefaultDenyEgress:  o.defaultDeny == "egress" || o.defaultDeny == "all",
 		},
 	}, nil
 }
@@ -190,6 +199,7 @@ func (o *Options) BuildReconcilerConfig() (*ReconcilerConfig, error) {
 func NewOptions() *Options {
 	return &Options{
 		containerRuntime: controllers.Cri,
+		defaultDeny:      "none",
 	}
 }
 
