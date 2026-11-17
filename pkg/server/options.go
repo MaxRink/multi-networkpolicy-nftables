@@ -54,6 +54,9 @@ type Options struct {
 	// healthBindAddress is the IP address the health HTTP server binds to.
 	// Defaults to "" (all interfaces); set to "127.0.0.1" to restrict to loopback.
 	healthBindAddress string
+	// logLevel and logFormat set the klog verbosity and output format, see logging.go.
+	logLevel  string
+	logFormat string
 
 	// updated by command line parsing
 	allowSrcPrefix []string
@@ -94,6 +97,8 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.allowDstPrefixText, "allow-dst-prefix", "", "Accept destination IP prefix list, comma separated CIDRs (e.g. \"fe80::/10,ff00::/8\")")
 	fs.IntVar(&o.healthPort, "health-port", 0, "TCP port for the health HTTP server (0 to disable, 1-65535 to enable).")
 	fs.StringVar(&o.healthBindAddress, "health-bind-address", "", "IP address the health HTTP server binds to (empty = all interfaces, 127.0.0.1 = loopback only).")
+	fs.StringVar(&o.logLevel, "log-level", "", "Log level: debug, info, warn or error (klog -v=4, 2, 0, 0). Overrides -v. If empty, -v applies.")
+	fs.StringVar(&o.logFormat, "log-format", "text", "Log format: text or json.")
 	fs.AddGoFlagSet(flag.CommandLine)
 }
 
@@ -124,6 +129,10 @@ func (o *Options) Validate() error {
 		}
 	}
 
+	if err := o.validateLogging(); err != nil {
+		return err
+	}
+
 	if err := parseIPPrefixText(o.allowSrcPrefixText, &o.allowSrcPrefix); err != nil {
 		return err
 	}
@@ -149,6 +158,9 @@ func (o *Options) Validate() error {
 func (o *Options) BuildReconcilerConfig() (*ReconcilerConfig, error) {
 	if err := o.Validate(); err != nil {
 		return nil, fmt.Errorf("options validation: %w", err)
+	}
+	if err := o.applyLogging(); err != nil {
+		return nil, err
 	}
 
 	hostname, err := nodeutil.GetHostname(o.hostnameOverride)
