@@ -30,11 +30,12 @@ func (o *Options) validateLogging() error {
 }
 
 // applyLogging sets the klog verbosity from --log-level, if given, and sends
-// klog output through a JSON handler for --log-format=json.
+// klog output through a JSON handler for --log-format=json. It tolerates
+// invalid values, so that the validation error is logged in the chosen format.
 func (o *Options) applyLogging() error {
-	if o.logLevel != "" {
+	if n, ok := logLevels[o.logLevel]; ok {
 		var v klog.Level
-		if err := v.Set(strconv.Itoa(logLevels[o.logLevel])); err != nil {
+		if err := v.Set(strconv.Itoa(n)); err != nil {
 			return fmt.Errorf("set klog verbosity: %w", err)
 		}
 	}
