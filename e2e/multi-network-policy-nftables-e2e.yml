@@ -91,6 +91,7 @@ spec:
         - --container-runtime-endpoint=/run/containerd/containerd.sock
         - --sync-period=1
         - --network-plugins=macvlan,bond,ipvlan
+        - --default-deny=none
         - -v=10
         - --health-port=8081
         - --health-bind-address=127.0.0.1

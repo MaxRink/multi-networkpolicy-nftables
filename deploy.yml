@@ -89,6 +89,7 @@ spec:
       - args:
         - --host-prefix=/host
         - --container-runtime-endpoint=/run/crio/crio.sock
+        - --default-deny=none
         - --health-port=8081
         - --health-bind-address=127.0.0.1
         command:

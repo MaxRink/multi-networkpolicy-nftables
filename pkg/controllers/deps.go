@@ -21,6 +21,10 @@ type CommonRuleConfig struct {
 	AcceptICMP     bool
 	AllowSrcPrefix []string
 	AllowDstPrefix []string
+	// DefaultDenyIngress and DefaultDenyEgress drop traffic in that direction
+	// on managed interfaces of pods that no policy selects (--default-deny).
+	DefaultDenyIngress bool
+	DefaultDenyEgress  bool
 }
 
 // NetDefResolver resolves CNI plugin metadata for network attachments.
