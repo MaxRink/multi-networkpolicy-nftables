@@ -1,6 +1,6 @@
 # Logging reference
 
-This page lists what `multi-networkpolicy-nftables` logs: the binary, the flags that set the level and the format, every log message with its arguments, and which messages can hold personal data. `TestLoggingReference` in `docs/logging_test.go` fails when the message catalogue and the log calls in `cmd/` and `pkg/` differ.
+This page lists what `multi-networkpolicy-nftables` logs: the binary, the flags that set the level and the format, every log message with its arguments, and which messages can hold personal data. `TestLoggingReference` in `docs/logging_test.go` fails when the message catalog and the log calls in `cmd/` and `pkg/` differ.
 
 ## Binaries
 
@@ -14,7 +14,7 @@ The repository builds no other binary.
 
 `--log-level` (`debug`, `info`, `warn`, `error`) maps onto klog verbosity: `debug` is `-v=4`, `info` is `-v=2`, `warn` and `error` are `-v=0`. Without it, `-v` applies (default `0`). `--log-format` is `text` (klog, default) or `json` (standard library `log/slog`). [configurations.md](configurations.md#logging) describes both flags.
 
-| Catalogue level | Shown at |
+| Catalog level | Shown at |
 |---|---|
 | `error`, `warning`, `info` | always |
 | `V(1)`, `V(2)` | `--log-level=info` or `debug`, or `-v=1`/`-v=2` |
@@ -43,7 +43,7 @@ The calls are printf-style, so the arguments are part of `msg`, not separate fie
 
 ## Lines of libraries
 
-controller-runtime logs through `klog.NewKlogr()` and so follows `-v` and the format. Its reconcile lines are structured and carry `controller`, `controllerGroup`, `controllerKind`, `Node`, `namespace`, `name` and `reconcileID`, and `Reconciler error` lines carry `error`. The reconciled object is the local Node. client-go logs through klog at the same verbosity. These lines are not in the catalogue.
+controller-runtime logs through `klog.NewKlogr()` and so follows `-v` and the format. Its reconcile lines are structured and carry `controller`, `controllerGroup`, `controllerKind`, `Node`, `namespace`, `name` and `reconcileID`, and `Reconciler error` lines carry `error`. The reconciled object is the local Node. client-go logs through klog at the same verbosity. These lines are not in the catalog.
 
 ## Personal data
 
@@ -68,11 +68,11 @@ A message that can hold several kinds lists the one with the highest need for pr
 - **`-v=6` and higher** add pod interfaces and network status with IP and MAC addresses (`customer-data`, `end-customer`), and policy, chain and selector names.
 - **Never logged**: Secrets, kubeconfig contents, packet payloads.
 
-## Message catalogue
+## Message catalog
 
 Every log call of `cmd/` and `pkg/`, by level, with the meaning of its format arguments and its personal-data class and data subject. A message used by several calls has one row.
 
-<!-- BEGIN MESSAGE CATALOGUE -->
+<!-- BEGIN MESSAGE CATALOG -->
 | Level | Message | Arguments | Personal data | Data subject |
 |---|---|---|---|---|
 | error | `bad label selector for policy [%s]: %v` | policy namespace/name, parse error | tenant-pii | tenant-user |
@@ -146,10 +146,10 @@ Every log call of `cmd/` and `pkg/`, by level, with the meaning of its format ar
 | V(8) | `networkPlugins[%s], %v` | NetworkAttachmentDefinition namespace/name, plugin type | tenant-pii | tenant-user |
 | V(8) | `updating set %q, table %q` | set, table | tenant-pii | tenant-user |
 | V(10) | `found rule comment:%q chain:%s` | rule comment, chain | tenant-pii | tenant-user |
-<!-- END MESSAGE CATALOGUE -->
+<!-- END MESSAGE CATALOG -->
 
 ## Keeping this document current
 
-- A change that adds, removes or changes a log call updates the catalogue in the same pull request, with the personal-data class and data subject of the new row. `TestLoggingReference` runs in `make test` (`./...`) in the `test` workflow and fails otherwise. It also fails for a call without a literal message or V level, and for a row without a valid class and data subject.
+- A change that adds, removes or changes a log call updates the catalog in the same pull request, with the personal-data class and data subject of the new row. `TestLoggingReference` runs in `make test` (`./...`) in the `test` workflow and fails otherwise. It also fails for a call without a literal message or V level, and for a row without a valid class and data subject.
 - A new function that wraps klog with a format argument is added to `wrappers` in `docs/logging_test.go`.
 - The prose sections are not checked. A change of a flag, a default or a library that logs updates them in the same pull request.
