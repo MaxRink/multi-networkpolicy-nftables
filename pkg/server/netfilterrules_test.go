@@ -1156,6 +1156,111 @@ func TestApplyPodRulesNamespaceSelectorOnlyPeer(t *testing.T) {
 	}
 }
 
+// TestApplyPodRulesPodSelectorOnlyPeerOwnNamespace checks the namespace scope
+// of selector peers, like Kubernetes NetworkPolicy: a peer with only a
+// podSelector selects pods in the policy's own namespace, and a peer with a
+// namespaceSelector and a podSelector selects matching pods in the selected
+// namespaces. Both pods carry the same label and sit on the policy network, so
+// only the namespace tells them apart. It covers ingress from and egress to.
+func TestApplyPodRulesPodSelectorOnlyPeerOwnNamespace(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.CloseLasting()
+	c.FlushRuleset()
+	defer c.FlushRuleset()
+
+	nftState, testNs, mockServer, podMockInfo, err := prepareEnv(c, true)
+	if err != nil {
+		t.Fatalf("failed to prepare test env: %s", err.Error())
+	}
+
+	policyNet := fmt.Sprintf("%s/policy-net-1", testNs)
+	podMockInfo.Interfaces = append(podMockInfo.Interfaces, controllers.InterfaceInfo{
+		NetattachName: policyNet,
+		InterfaceType: "macvlan",
+		InterfaceName: "net1",
+		IPs:           []string{"10.1.1.1"},
+	})
+	policyNetworks := []string{policyNet}
+
+	otherNs := "otherns"
+	addNamespace(mockServer, otherNs)
+	web := map[string]string{"app": "web"}
+	addPod(mockServer, NewFakePodWithNetAnnotation(testNs, "web-own", policyNet,
+		NewFakeNetworkStatus(testNs, "policy-net-1", "192.168.20.1", "10.20.0.1"), web))
+	addPod(mockServer, NewFakePodWithNetAnnotation(otherNs, "web-other", policyNet,
+		NewFakeNetworkStatus(testNs, "policy-net-1", "192.168.20.2", "10.20.0.2"), web))
+
+	podOnly := []multiv1beta1.MultiNetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: web}}}
+	nsAndPod := []multiv1beta1.MultiNetworkPolicyPeer{{
+		NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"nsname": otherNs}},
+		PodSelector:       &metav1.LabelSelector{MatchLabels: web},
+	}}
+	policy := &multiv1beta1.MultiNetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: testNs},
+		Spec: multiv1beta1.MultiNetworkPolicySpec{
+			Ingress:     []multiv1beta1.MultiNetworkPolicyIngressRule{{From: podOnly}, {From: nsAndPod}},
+			Egress:      []multiv1beta1.MultiNetworkPolicyEgressRule{{To: podOnly}, {To: nsAndPod}},
+			PolicyTypes: []multiv1beta1.MultiPolicyType{multiv1beta1.PolicyTypeIngress, multiv1beta1.PolicyTypeEgress},
+		},
+	}
+	for _, chain := range []*nftables.Chain{nftState.ingressChain, nftState.egressChain} {
+		if _, err := nftState.applyPodRules(context.Background(), mockServer, mockServer.cfg, chain, podMockInfo, policy, policyNetworks); err != nil {
+			t.Fatalf("applyPodRules(%s) failed: %v", chain.Name, err)
+		}
+	}
+	if err := nftState.nft.Flush(); err != nil {
+		t.Fatalf("nft flush failed: %v", err)
+	}
+
+	for _, direction := range []string{ingressChain, egressChain} {
+		for index, want := range []string{"10.20.0.1", "10.20.0.2"} {
+			chainName := fmt.Sprintf("%s-%s-%s-%d", direction, policyRuleNamespacedName(policy), peersChainSuffix, index)
+			if got := peerChainIPs(t, c, nftState.filter, chainName); !slices.Equal(got, []string{want}) {
+				t.Errorf("%s peer IPs = %v, want [%s]", chainName, got, want)
+			}
+		}
+	}
+}
+
+// peerChainIPs returns the sorted addresses in the sets that the rules of a
+// peers chain look up.
+func peerChainIPs(t *testing.T, c *nftables.Conn, table *nftables.Table, chainName string) []string {
+	t.Helper()
+	actual, err := getChainByNameInComment(c, table, chainName)
+	if err != nil {
+		t.Fatalf("failed to get peer chain %q: %v", chainName, err)
+	}
+	rules, err := c.GetRules(table, &nftables.Chain{Name: actual})
+	if err != nil {
+		t.Fatalf("GetRules(%q) failed: %v", actual, err)
+	}
+	var ips []string
+	for _, r := range rules {
+		for _, e := range r.Exprs {
+			lookup, ok := e.(*expr.Lookup)
+			if !ok {
+				continue
+			}
+			set, err := c.GetSetByName(table, lookup.SetName)
+			if err != nil {
+				t.Fatalf("GetSetByName(%q) failed: %v", lookup.SetName, err)
+			}
+			elems, err := c.GetSetElements(set)
+			if err != nil {
+				t.Fatalf("GetSetElements(%q) failed: %v", lookup.SetName, err)
+			}
+			for _, elem := range elems {
+				if ip, ok := netip.AddrFromSlice(elem.Key); ok {
+					ips = append(ips, ip.String())
+				}
+			}
+		}
+	}
+	slices.Sort(ips)
+	return ips
+}
+
 // TestApplyPolicyPeersRulesIPBlockExceptPreservesORSemantics verifies that an
 // ipBlock peer with an "except" CIDR is wrapped in its own per-entry subchain,
 // so that the except rule's VerdictReturn only exits that subchain back to the
@@ -1208,7 +1313,7 @@ func TestApplyPolicyPeersRulesIPBlockExceptPreservesORSemantics(t *testing.T) {
 	chainName := nftState.ingressChain.Name
 	chain := nftState.ingressChain
 
-	if err := nftState.applyPolicyPeersRules(context.Background(), mockServer, chainName, chain, "test-policy", peers, podMockInfo, []string{"net1", "net2"}, 0); err != nil {
+	if err := nftState.applyPolicyPeersRules(context.Background(), mockServer, chainName, chain, "test-policy", "testns1", peers, podMockInfo, []string{"net1", "net2"}, 0); err != nil {
 		t.Fatalf("applyPolicyPeersRules() failed: %v", err)
 	}
 

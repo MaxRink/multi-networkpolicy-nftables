@@ -49,12 +49,14 @@ teardown_file() {
 	run retry_until_deny 30 kubectl -n test-namespace-a exec pod-a-1 -- sh -c "echo x | nc -w 1 ${pod_a2_net1} 5555"
 	[ "$status" -eq  "0" ]
 	
+	# The podSelector-only egress peer for pod-b-1 is limited to test-namespace-a.
 	run retry_until_deny 30 kubectl -n test-namespace-a exec pod-a-1 -- sh -c "echo x | nc -w 1 ${pod_b1_net1} 5555"
 	[ "$status" -eq  "0" ]
 
-	run retry_until_deny 30 kubectl -n test-namespace-b exec pod-a-2 -- sh -c "echo x | nc -w 1 ${pod_a1_net1} 5555"
+	run retry_until_deny 30 kubectl -n test-namespace-a exec pod-a-2 -- sh -c "echo x | nc -w 1 ${pod_a1_net1} 5555"
 	[ "$status" -eq  "0" ]
 
+	# The podSelector-only ingress peer for pod-b-2 is limited to test-namespace-a.
 	run retry_until_deny 30 kubectl -n test-namespace-b exec pod-b-2 -- sh -c "echo x | nc -w 1 ${pod_a1_net1} 5555"
 	[ "$status" -eq  "0" ]
 }
