@@ -80,6 +80,9 @@ JSON (`Execute failed: ...`), without cobra's text usage. Only a flag that
 cannot be parsed at all, for example an unknown flag, is still reported by
 cobra as text with the usage, because it happens before the format is set.
 
+The lines of the shutdown cleanup (`cleanup:` and `flush-cleanup`) go through klog
+like all others, so they follow the format and the verbosity.
+
 #### Compatibility notes
 
 Pod iptables state is no longer persisted. The old `--pod-iptables` flag is
