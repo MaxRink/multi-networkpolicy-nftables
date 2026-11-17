@@ -18,6 +18,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -84,6 +85,9 @@ func (s *Server) MarkShuttingDown() {
 type internalPolicy struct {
 	policy         *multiv1beta1.MultiNetworkPolicy
 	policyNetworks []string
+	// invalid marks a policy whose rules cannot be built. It still selects
+	// the pod, so the pod gets the drop, but none of its rules.
+	invalid bool
 }
 
 // CompareInternalPolicy orders internal policies by namespace and name.
@@ -105,6 +109,7 @@ func ApplyPolicyRulesForPodAndFamily(ctx context.Context, deps controllers.Polic
 
 	var ingressPolicies []internalPolicy
 	var egressPolicies []internalPolicy
+	var invalidErrs []error
 
 	for _, policy := range policyMap {
 		if policy.GetNamespace() != pod.Namespace {
@@ -138,11 +143,18 @@ func ApplyPolicyRulesForPodAndFamily(ctx context.Context, deps controllers.Polic
 		slices.Sort(policyNetworks)
 
 		if podInfo.CheckPolicyNetwork(policyNetworks) {
+			ip := internalPolicy{policy: policy, policyNetworks: policyNetworks}
+			// Fail closed: an invalid policy would fail the whole batch and
+			// leave the pod without any rules, not even the drop.
+			if err := validatePolicy(policy); err != nil {
+				invalidErrs = append(invalidErrs, fmt.Errorf("invalid policy %q selects the pod but allows nothing: %w", policyNamespacedName(policy), err))
+				ip.invalid = true
+			}
 			if ingressEnable {
-				ingressPolicies = append(ingressPolicies, internalPolicy{policy: policy, policyNetworks: policyNetworks})
+				ingressPolicies = append(ingressPolicies, ip)
 			}
 			if egressEnable {
-				egressPolicies = append(egressPolicies, internalPolicy{policy: policy, policyNetworks: policyNetworks})
+				egressPolicies = append(egressPolicies, ip)
 			}
 		}
 	}
@@ -169,7 +181,7 @@ func ApplyPolicyRulesForPodAndFamily(ctx context.Context, deps controllers.Polic
 		return fmt.Errorf("failed to cleanup nft: %w", err)
 	}
 
-	return nil
+	return errors.Join(invalidErrs...)
 }
 
 // applyDirectionRules adds the rules of the policies of one direction to its
@@ -182,6 +194,9 @@ func (n *nftState) applyDirectionRules(ctx context.Context, deps controllers.Pol
 	}
 	forceUpdate := false
 	for _, policy := range policies {
+		if policy.invalid {
+			continue
+		}
 		newRules, err := n.applyPodRules(ctx, deps, cfg, chain, podInfo, policy.policy, policy.policyNetworks)
 		if err != nil {
 			return fmt.Errorf("failed to apply pod %s rules for policy %q: %w", direction, policyNamespacedName(policy.policy), err)
