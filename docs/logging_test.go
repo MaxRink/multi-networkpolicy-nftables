@@ -35,7 +35,7 @@ import (
 
 const docPath = "logging-reference.md"
 
-// klogLevels maps klog functions to the level column of the catalogue.
+// klogLevels maps klog functions to the level column of the catalog.
 var klogLevels = map[string]string{
 	"Info": "info", "Infof": "info", "Infoln": "info", "InfoS": "info",
 	"Warning": "warning", "Warningf": "warning", "Warningln": "warning",
@@ -59,7 +59,7 @@ var (
 )
 
 // TestLoggingReference fails when a klog call in cmd/ or pkg/ is missing from
-// the message catalogue of logging-reference.md, the catalogue lists a call
+// the message catalog of logging-reference.md, the catalog lists a call
 // the code no longer makes, a call has no literal message, or a row has no
 // valid personal-data class and data subject.
 func TestLoggingReference(t *testing.T) {
@@ -69,15 +69,15 @@ func TestLoggingReference(t *testing.T) {
 			code[c] = true
 		}
 	}
-	doc := catalogue(t)
+	doc := catalog(t)
 	for _, c := range sortedKeys(code) {
 		if _, ok := doc[c]; !ok {
-			t.Errorf("%s: catalogue lacks the log call %s; add a row", docPath, c)
+			t.Errorf("%s: catalog lacks the log call %s; add a row", docPath, c)
 		}
 	}
 	for _, c := range sortedKeys(doc) {
 		if !code[c] {
-			t.Errorf("%s: catalogue lists %s, which the code no longer logs; remove the row", docPath, c)
+			t.Errorf("%s: catalog lists %s, which the code no longer logs; remove the row", docPath, c)
 		}
 	}
 }
@@ -120,7 +120,7 @@ func scan(t *testing.T, dir string) []string {
 	return out
 }
 
-// logCall returns the catalogue key of call if it is a klog call.
+// logCall returns the catalog key of call if it is a klog call.
 func logCall(call *ast.CallExpr) (string, error) {
 	if id, ok := call.Fun.(*ast.Ident); ok {
 		if w, ok := wrappers[id.Name]; ok {
@@ -152,7 +152,7 @@ func logCall(call *ast.CallExpr) (string, error) {
 	return key("klog."+sel.Sel.Name, level, call.Args, msgIdx)
 }
 
-// key returns the catalogue key of a log call of fn at level with the message in args[msgIdx].
+// key returns the catalog key of a log call of fn at level with the message in args[msgIdx].
 func key(fn, level string, args []ast.Expr, msgIdx int) (string, error) {
 	if len(args) <= msgIdx {
 		return "", fmt.Errorf("%s has no message", fn)
@@ -168,20 +168,20 @@ func key(fn, level string, args []ast.Expr, msgIdx int) (string, error) {
 	return "| " + level + " | " + code(msg) + " |", nil
 }
 
-// code renders msg the way the catalogue writes it: in backticks, with | escaped and a trailing newline dropped.
+// code renders msg the way the catalog writes it: in backticks, with | escaped and a trailing newline dropped.
 func code(msg string) string {
 	return "`" + strings.ReplaceAll(strings.TrimSuffix(msg, "\n"), "|", `\|`) + "`"
 }
 
-// catalogue returns the rows of the message catalogue, keyed by their level and
+// catalog returns the rows of the message catalog, keyed by their level and
 // message columns, and checks the personal-data columns of each row.
-func catalogue(t *testing.T) map[string]bool {
+func catalog(t *testing.T) map[string]bool {
 	t.Helper()
 	raw, err := os.ReadFile(docPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const begin, end = "<!-- BEGIN MESSAGE CATALOGUE -->", "<!-- END MESSAGE CATALOGUE -->"
+	const begin, end = "<!-- BEGIN MESSAGE CATALOG -->", "<!-- END MESSAGE CATALOG -->"
 	doc := string(raw)
 	i, j := strings.Index(doc, begin), strings.Index(doc, end)
 	if i < 0 || j < i {
