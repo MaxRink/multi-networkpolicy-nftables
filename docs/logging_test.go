@@ -35,12 +35,28 @@ import (
 
 const docPath = "logging-reference.md"
 
-// klogLevels maps klog functions to the level column of the catalog.
-var klogLevels = map[string]string{
-	"Info": "info", "Infof": "info", "Infoln": "info", "InfoS": "info",
-	"Warning": "warning", "Warningf": "warning", "Warningln": "warning",
-	"Error": "error", "Errorf": "error", "Errorln": "error", "ErrorS": "error",
-	"Fatal": "fatal", "Fatalf": "fatal", "Fatalln": "fatal",
+// klogPrefixes maps the name prefixes of the klog functions that write a line
+// (Infof, InfoDepth, ErrorS, Exitf, ...) to the level column of the catalog.
+var klogPrefixes = map[string]string{
+	"Info": "info", "Warning": "warning", "Error": "error", "Fatal": "fatal", "Exit": "fatal",
+}
+
+// klogLevel returns the catalog level of the klog function name and the index
+// of its message argument; ok is false for functions that write no line, such
+// as Flush, V or Enabled.
+func klogLevel(name string) (level string, msgIdx int, ok bool) {
+	for prefix, l := range klogPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			level, ok = l, true
+		}
+	}
+	if strings.Contains(name, "Depth") {
+		msgIdx++ // depth comes first
+	}
+	if strings.HasPrefix(name, "ErrorS") {
+		msgIdx++ // err comes before the message
+	}
+	return level, msgIdx, ok
 }
 
 // wrappers are functions that log their format argument through klog: name to
@@ -132,22 +148,20 @@ func logCall(call *ast.CallExpr) (string, error) {
 	if !ok {
 		return "", nil
 	}
-	level, ok := klogLevels[sel.Sel.Name]
+	level, msgIdx, ok := klogLevel(sel.Sel.Name)
 	if !ok {
 		return "", nil
 	}
 	switch recv := types.ExprString(sel.X); {
 	case recv == "klog":
-	case vLevelRe.MatchString(recv) && level == "info":
-		level = "V(" + vLevelRe.FindStringSubmatch(recv)[1] + ")"
+	case vLevelRe.MatchString(recv):
+		if level == "info" {
+			level = "V(" + vLevelRe.FindStringSubmatch(recv)[1] + ")"
+		}
 	case strings.HasPrefix(recv, "klog.V("):
 		return "", fmt.Errorf("klog call %s.%s needs a literal V level", recv, sel.Sel.Name)
 	default:
 		return "", nil
-	}
-	msgIdx := 0
-	if sel.Sel.Name == "ErrorS" {
-		msgIdx = 1
 	}
 	return key("klog."+sel.Sel.Name, level, call.Args, msgIdx)
 }
@@ -248,14 +262,20 @@ func sortedKeys(m map[string]bool) []string {
 
 func TestLogCall(t *testing.T) {
 	for src, want := range map[string]string{
-		`klog.Errorf("failed: %v", err)`: "| error | `failed: %v` |",
-		`klog.V(8).Infof("x %s\n", a)`:   "| V(8) | `x %s` |",
-		`klog.Warning("a|b")`:            "| warning | `a\\|b` |",
-		`debugLog(p, "cleanup: %s", n)`:  "| info | `cleanup: %s` |",
-		`logger.Info("not klog")`:        "",
-		`klog.Infof(format, args...)`:    "error: non-literal message",
-		`klog.V(n).Info("dynamic")`:      "error: needs a literal V level",
-		`klog.V(lvl).Enabled()`:          "",
+		`klog.Errorf("failed: %v", err)`:        "| error | `failed: %v` |",
+		`klog.V(8).Infof("x %s\n", a)`:          "| V(8) | `x %s` |",
+		`klog.Warning("a|b")`:                   "| warning | `a\\|b` |",
+		`debugLog(p, "cleanup: %s", n)`:         "| info | `cleanup: %s` |",
+		`logger.Info("not klog")`:               "",
+		`klog.Infof(format, args...)`:           "error: non-literal message",
+		`klog.V(n).Info("dynamic")`:             "error: needs a literal V level",
+		`klog.V(lvl).Enabled()`:                 "",
+		`klog.Flush()`:                          "",
+		`klog.InfoDepth(1, "depth")`:            "| info | `depth` |",
+		`klog.ErrorSDepth(1, err, "s", "k", v)`: "| error | `s` |",
+		`klog.ErrorS(err, "structured")`:        "| error | `structured` |",
+		`klog.Exitf("exit %v", err)`:            "| fatal | `exit %v` |",
+		`klog.V(2).InfoS("vs", "k", v)`:         "| V(2) | `vs` |",
 	} {
 		expr, err := parser.ParseExpr(src)
 		if err != nil {

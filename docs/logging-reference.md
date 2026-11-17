@@ -39,11 +39,16 @@ I1117 19:39:11.950704    7565 main.go:204] Starting manager for node node-1
 
 The calls are printf-style, so the arguments are part of `msg`, not separate fields. A klog warning is written as `INFO` in JSON.
 
-**Shutdown cleanup lines** (`cleanup:` and `flush-cleanup`, from `debugLog` in `pkg/controller/cleanup_linux.go`) are written twice: once as plain text with an `HH:MM:SS.mmm` prefix straight to stderr, and once through klog. With `--log-format=json` the plain copy is not JSON.
+With `--log-format=json`, two kinds of output are still plain text:
+
+- **Shutdown cleanup lines** (`cleanup:` and `flush-cleanup`, from `debugLog` in `pkg/controller/cleanup_linux.go`) are written twice: once as plain text with an `HH:MM:SS.mmm` prefix straight to stderr, and once through klog as JSON.
+- **Flags that cannot be parsed** (an unknown flag, a value of the wrong type) are reported by cobra as text with the usage, followed by a klog text line `Execute failed: ...`, because parsing happens before the format is set. An invalid value of a parsed option (`--log-level=verbose`, a relative `--container-runtime-endpoint`) is logged once as JSON.
 
 ## Lines of libraries
 
 controller-runtime logs through `klog.NewKlogr()` and so follows `-v` and the format. Its reconcile lines are structured and carry `controller`, `controllerGroup`, `controllerKind`, `Node`, `namespace`, `name` and `reconcileID`, and `Reconciler error` lines carry `error`. The reconciled object is the local Node. client-go logs through klog at the same verbosity. These lines are not in the catalog.
+
+Personal data in these lines: `Node`, `namespace` and `name` hold the node name (`none`). The `error` of a `Reconciler error` line, written at the default level, repeats the errors of the reconciler: pod namespaces and names (`tenant-pii`, `tenant-user`), and from failed pod-info lookups and rule updates, network status, addresses and rule contents (`customer-data`, `end-customer`).
 
 ## Personal data
 
@@ -62,7 +67,7 @@ The classes and data subjects are those of the T-CaaS logging contract.
 
 A message that can hold several kinds lists the one with the highest need for protection.
 
-- **Default level** (`-v=0`): pod and namespace names in errors and in the shutdown cleanup lines (`tenant-pii`). Error text of failed rule updates and network status lookups can repeat addresses (`customer-data`, `end-customer`).
+- **Default level** (`-v=0`): pod and namespace names in errors, in `Execute failed` and in the shutdown cleanup lines (`tenant-pii`). Error text of failed rule updates and network status lookups, also in `Reconciler error`, can repeat addresses (`customer-data`, `end-customer`).
 - **`--log-level=info`** (`-v=2`) adds pod names on the node and legacy rule names (`tenant-pii`).
 - **`--log-level=debug`** (`-v=4`) adds the pods rules are generated for (`tenant-pii`).
 - **`-v=6` and higher** add pod interfaces and network status with IP and MAC addresses (`customer-data`, `end-customer`), and policy, chain and selector names.
@@ -103,7 +108,7 @@ Every log call of `cmd/` and `pkg/`, by level, with the meaning of its format ar
 | info | `cleanup: removing rules for %s/%s` | pod namespace, pod name | tenant-pii | tenant-user |
 | info | `cleanup: starting nftables cleanup for node %s` | node name | none | none |
 | info | `cleanup: SUCCESS removed rules for %s/%s` | pod namespace, pod name | tenant-pii | tenant-user |
-| info | `Execute failed: %v` | start-up error | none | none |
+| info | `Execute failed: %v` | error that ended the process: an invalid option, a start-up failure, or the errors of the shutdown cleanup, which name pods | tenant-pii | tenant-user |
 | info | `flush-cleanup %s/%s: %d tables remaining after flush` | pod namespace, pod name, count | tenant-pii | tenant-user |
 | info | `flush-cleanup %s/%s: DelTable %s (family=%d)` | pod namespace, pod name, table, family | tenant-pii | tenant-user |
 | info | `flush-cleanup %s/%s: no managed tables found, nothing to clean` | pod namespace, pod name | tenant-pii | tenant-user |
@@ -151,5 +156,5 @@ Every log call of `cmd/` and `pkg/`, by level, with the meaning of its format ar
 ## Keeping this document current
 
 - A change that adds, removes or changes a log call updates the catalog in the same pull request, with the personal-data class and data subject of the new row. `TestLoggingReference` runs in `make test` (`./...`) in the `test` workflow and fails otherwise. It also fails for a call without a literal message or V level, and for a row without a valid class and data subject.
-- A new function that wraps klog with a format argument is added to `wrappers` in `docs/logging_test.go`.
+- Every klog function that writes a line (`Info*`, `Warning*`, `Error*`, `Fatal*`, `Exit*`, including the `Depth` and `S` forms) is scanned. A new function that wraps klog with a format argument is added to `wrappers` in `docs/logging_test.go`.
 - The prose sections are not checked. A change of a flag, a default or a library that logs updates them in the same pull request.
