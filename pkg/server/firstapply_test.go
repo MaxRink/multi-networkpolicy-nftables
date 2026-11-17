@@ -47,7 +47,7 @@ func chainComments(t *testing.T, c *nftables.Conn, chain string) []string {
 // TestApplyPolicyRulesFirstApplyKeepsSetLookups checks that the rules that
 // look up a set created in the same batch survive the cleanup of the first
 // apply to a pod: the input and output jumps into the pod chains (set
-// pod_interfaces) and the IPv6 neighbour discovery rules (set ndp_set).
+// pod_interfaces) and the IPv6 neighbor discovery rules (set ndp_set).
 // Without them, a new pod is unenforced until the next reconcile.
 func TestApplyPolicyRulesFirstApplyKeepsSetLookups(t *testing.T) {
 	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
