@@ -54,7 +54,7 @@ func TestApplyLogging(t *testing.T) {
 		{"info", []string{"v2", "info", "warning", "error"}},
 		{"warn", []string{"info", "warning", "error"}},
 		{"error", []string{"info", "warning", "error"}},
-		{"debug", []string{"v4", "v2", "info", "warning", "error"}},
+		{"debug", []string{"v4", "ctx-v4", "v2", "info", "warning", "error"}},
 	} {
 		buf.Reset()
 		o := &Options{logLevel: tt.level, logFormat: "json"}
@@ -63,6 +63,8 @@ func TestApplyLogging(t *testing.T) {
 		}
 		klog.V(5).Info("v5")
 		klog.V(4).Info("v4")
+		klog.Background().V(5).Info("ctx-v5")
+		klog.Background().V(4).Info("ctx-v4")
 		klog.V(2).Info("v2")
 		klog.Info("info")
 		klog.Warning("warning")

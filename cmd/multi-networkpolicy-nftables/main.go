@@ -240,7 +240,9 @@ func main() {
 	cmd := &cobra.Command{
 		Use:  "multi-networkpolicy-node",
 		Long: `Run the multi-networkpolicy nftables controller on a node.`,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			// In JSON mode the error is logged once, as JSON, below; cobra would print it as text.
+			cmd.SilenceErrors, cmd.SilenceUsage = opts.JSONLogs(), opts.JSONLogs()
 			return run(opts)
 		},
 	}
