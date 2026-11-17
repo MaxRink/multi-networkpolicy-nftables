@@ -111,7 +111,7 @@ func TestConstantSetReplaced(t *testing.T) {
 
 	for _, port := range []int32{81, 82} {
 		p := intstr.FromInt32(port)
-		if err := nftState.applyPolicyPortsRules(chain.Name, chain, "ns/p", []multiv1beta1.MultiNetworkPolicyPort{{Port: &p}}, 0); err != nil {
+		if err := nftState.applyPolicyPortsRules(chain.Name, chain, "ns/p", []multiv1beta1.MultiNetworkPolicyPort{{Port: &p}}, 0, namedPortTargets{}); err != nil {
 			t.Fatalf("port %d: applyPolicyPortsRules(): %v", port, err)
 		}
 		if err := c.Flush(); err != nil {

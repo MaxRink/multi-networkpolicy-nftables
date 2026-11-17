@@ -1505,12 +1505,12 @@ func TestApplyPolicyPortsRules(t *testing.T) {
 		},
 	}
 
-	err = nftState.applyPolicyPortsRules(nftState.ingressChain.Name, nftState.ingressChain, mockPolicy.Name, []multiv1beta1.MultiNetworkPolicyPort{}, 0)
+	err = nftState.applyPolicyPortsRules(nftState.ingressChain.Name, nftState.ingressChain, mockPolicy.Name, []multiv1beta1.MultiNetworkPolicyPort{}, 0, namedPortTargets{})
 	if err != nil {
 		t.Fatalf("applyPolicyPortsRules() for ingress failed: %v", err)
 	}
 
-	err = nftState.applyPolicyPortsRules(nftState.egressChain.Name, nftState.egressChain, mockPolicy.Name, []multiv1beta1.MultiNetworkPolicyPort{}, 0)
+	err = nftState.applyPolicyPortsRules(nftState.egressChain.Name, nftState.egressChain, mockPolicy.Name, []multiv1beta1.MultiNetworkPolicyPort{}, 0, namedPortTargets{})
 	if err != nil {
 		t.Fatalf("applyPolicyPortsRules() for egress failed: %v", err)
 	}
@@ -1570,10 +1570,9 @@ func TestApplyPolicyPortsRules(t *testing.T) {
 	}
 }
 
-// TestApplyPolicyPortsRulesNamedPortRejection tests that applyPolicyPortsRules returns
-// an error for named (non-numeric) string ports and succeeds for numeric string ports.
-// This covers the Cellebyte feedback: string ports like "8080" are valid, "http" is not.
-func TestApplyPolicyPortsRulesNamedPortRejection(t *testing.T) {
+// TestApplyPolicyPortsRulesNumericStringPort tests that a numeric string port
+// such as "8080" is a numeric port, not a named one.
+func TestApplyPolicyPortsRulesNumericStringPort(t *testing.T) {
 	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
 	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
 	defer c.CloseLasting()
@@ -1587,29 +1586,16 @@ func TestApplyPolicyPortsRulesNamedPortRejection(t *testing.T) {
 
 	proto := corev1.ProtocolTCP
 	port8080Str := intstr.FromString("8080")
-	portHTTPStr := intstr.FromString("http")
-
-	t.Run("numeric string port 8080 succeeds", func(t *testing.T) {
-		ports := []multiv1beta1.MultiNetworkPolicyPort{
-			{Protocol: &proto, Port: &port8080Str},
-		}
-		if err := nftState.applyPolicyPortsRules(nftState.ingressChain.Name, nftState.ingressChain, "test-policy", ports, 10); err != nil {
-			t.Fatalf("applyPolicyPortsRules() with numeric string port %q should succeed, got: %v", port8080Str.StrVal, err)
-		}
-	})
-
-	t.Run("named port http rejected with error", func(t *testing.T) {
-		ports := []multiv1beta1.MultiNetworkPolicyPort{
-			{Protocol: &proto, Port: &portHTTPStr},
-		}
-		err := nftState.applyPolicyPortsRules(nftState.ingressChain.Name, nftState.ingressChain, "test-policy", ports, 11)
-		if err == nil {
-			t.Fatal("applyPolicyPortsRules() with named port \"http\" should return an error, got nil")
-		}
-		if !strings.Contains(err.Error(), "named port") {
-			t.Fatalf("applyPolicyPortsRules() error = %q, want it to contain \"named port\"", err.Error())
-		}
-	})
+	ports := []multiv1beta1.MultiNetworkPolicyPort{{Protocol: &proto, Port: &port8080Str}}
+	if err := nftState.applyPolicyPortsRules(nftState.ingressChain.Name, nftState.ingressChain, "test-policy", ports, 10, namedPortTargets{}); err != nil {
+		t.Fatalf("applyPolicyPortsRules() with numeric string port %q should succeed, got: %v", port8080Str.StrVal, err)
+	}
+	if err := nftState.nft.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if got := portIntervals(t, c, findSetByComment(t, c, nftState.filter, "", "_10_tcp")); !slices.Equal(got, [][2]uint16{{8080, 8080}}) {
+		t.Fatalf("tcp ports = %v, want [[8080 8080]]", got)
+	}
 }
 
 type testPort struct {
@@ -2400,7 +2386,7 @@ func TestApplyPolicyPortsRulesOverlappingPorts(t *testing.T) {
 		{Protocol: &udp, Port: &p53},
 	}
 	for index, ports := range [][]multiv1beta1.MultiNetworkPolicyPort{overlapping, {{}, {Port: &p80}}} {
-		if err := nftState.applyPolicyPortsRules(nftState.ingressChain.Name, nftState.ingressChain, "ns/p", ports, index); err != nil {
+		if err := nftState.applyPolicyPortsRules(nftState.ingressChain.Name, nftState.ingressChain, "ns/p", ports, index, namedPortTargets{}); err != nil {
 			t.Fatalf("applyPolicyPortsRules(%d): %v", index, err)
 		}
 	}

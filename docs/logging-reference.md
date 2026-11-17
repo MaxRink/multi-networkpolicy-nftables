@@ -81,6 +81,7 @@ Every log call of `cmd/` and `pkg/`, by level, with the meaning of its format ar
 | error | `cannot close pod (%s/%s) netns: %v` | pod namespace, pod name, error | tenant-pii | tenant-user |
 | error | `cannot get %s/%s podInfo: %v` | pod namespace, pod name, error | tenant-pii | tenant-user |
 | error | `cannot get namespace info: %v %v` | pod name, error | tenant-pii | tenant-user |
+| error | `cannot parse peer address %q: %v` | peer pod address, parse error | customer-data | end-customer |
 | error | `failed to apply rules for %s/%s: %v` | pod namespace, pod name, error (can repeat rule contents and addresses) | customer-data | end-customer |
 | error | `failed to clean legacy daemon-owned tables for pod (%s/%s): %v` | pod namespace, pod name, error | tenant-pii | tenant-user |
 | error | `failed to close CRI connection: %v` | error | none | none |
@@ -97,6 +98,7 @@ Every log call of `cmd/` and `pkg/`, by level, with the meaning of its format ar
 | error | `manager stopped with error, skipping post-shutdown cleanup: %v` | error | none | none |
 | warning | `failed to get key for rule %q in chain %q: %v — deleting as stale` | rule comment (policy name), chain, error | tenant-pii | tenant-user |
 | warning | `policy %s/%s has no %s annotation and is ignored` | policy namespace, policy name, annotation name | tenant-pii | tenant-user |
+| warning | `policy %s: %s named port %q (%s) matches no container port and allows nothing` | policy namespace/name, direction, port name, protocol | tenant-pii | tenant-user |
 | info | `cleanup: failed to connect to CRI: %v` | error | none | none |
 | info | `cleanup: failed to list pods: %v` | error | none | none |
 | info | `cleanup: FAILED to remove rules for %s/%s: %v` | pod namespace, pod name, error | tenant-pii | tenant-user |
