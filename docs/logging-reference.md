@@ -39,10 +39,7 @@ I1117 19:39:11.950704    7565 main.go:204] Starting manager for node node-1
 
 The calls are printf-style, so the arguments are part of `msg`, not separate fields. A klog warning is written as `INFO` in JSON.
 
-With `--log-format=json`, two kinds of output are still plain text:
-
-- **Shutdown cleanup lines** (`cleanup:` and `flush-cleanup`, from `debugLog` in `pkg/controller/cleanup_linux.go`) are written twice: once as plain text with an `HH:MM:SS.mmm` prefix straight to stderr, and once through klog as JSON.
-- **Flags that cannot be parsed** (an unknown flag, a value of the wrong type) are reported by cobra as text with the usage, followed by a klog text line `Execute failed: ...`, because parsing happens before the format is set. An invalid value of a parsed option (`--log-level=verbose`, a relative `--container-runtime-endpoint`) is logged once as JSON.
+With `--log-format=json`, one kind of output is still plain text: **flags that cannot be parsed** (an unknown flag, a value of the wrong type). Cobra reports them as text with the usage, followed by a klog text line `Execute failed: ...`, because parsing happens before the format is set. An invalid value of a parsed option (`--log-level=verbose`, a relative `--container-runtime-endpoint`) is logged once as JSON. The shutdown cleanup lines (`cleanup:` and `flush-cleanup`, from `debugLog` in `pkg/controller/cleanup_linux.go`) go through klog only and are JSON like all others.
 
 ## Lines of libraries
 

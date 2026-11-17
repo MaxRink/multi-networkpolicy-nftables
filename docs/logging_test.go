@@ -65,7 +65,7 @@ var wrappers = map[string]struct {
 	level  string
 	msgIdx int
 }{
-	"debugLog": {"info", 1}, // pkg/controller/cleanup_linux.go, also writes the line to stderr as text
+	"debugLog": {"info", 1}, // pkg/controller/cleanup_linux.go
 }
 
 var (
