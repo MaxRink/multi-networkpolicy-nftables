@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/go-logr/logr"
 	"k8s.io/klog/v2"
 )
 
@@ -37,9 +38,16 @@ func (o *Options) applyLogging() error {
 			return fmt.Errorf("set klog verbosity: %w", err)
 		}
 	}
-	if o.logFormat == "json" {
+	if o.JSONLogs() {
 		// klog applies -v before a line reaches the handler, so the handler passes every level.
-		klog.SetSlogLogger(slog.New(slog.NewJSONHandler(logOutput, &slog.HandlerOptions{Level: slog.Level(-128)})))
+		// Unlike klog.SetSlogLogger, this keeps klog.Background and klog.FromContext behind -v.
+		handler := slog.NewJSONHandler(logOutput, &slog.HandlerOptions{Level: slog.Level(-128)})
+		klog.SetLoggerWithOptions(logr.FromSlogHandler(handler))
 	}
 	return nil
+}
+
+// JSONLogs reports whether --log-format=json was given.
+func (o *Options) JSONLogs() bool {
+	return o.logFormat == "json"
 }
