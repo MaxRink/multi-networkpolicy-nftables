@@ -252,6 +252,56 @@ func TestApplyPolicyPortsRulesEgressNamedPorts(t *testing.T) {
 	}
 }
 
+// TestEgressNamedPortTuplesFollowPeers checks that a reconcile after a peer
+// change rewrites the tuples: a changed port replaces the old element, and the
+// set and rule of a family without peers left are removed by the cleanup.
+func TestEgressNamedPortTuplesFollowPeers(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.CloseLasting()
+	c.FlushRuleset()
+	defer c.FlushRuleset()
+
+	nftState, _, _, _, err := prepareEnv(c, false)
+	if err != nil {
+		t.Fatalf("failed to prepare test env: %s", err.Error())
+	}
+
+	http := intstr.FromString("http")
+	ports := []multiv1beta1.MultiNetworkPolicyPort{{Port: &http}}
+	reconcile := func(peers map[string]*controllers.PodInfo) {
+		t.Helper()
+		if err := nftState.applyPolicyPortsRules(nftState.egressChain.Name, nftState.egressChain, "ns/p", ports, 0, namedPortTargets{peers: peers}); err != nil {
+			t.Fatalf("applyPolicyPortsRules(): %v", err)
+		}
+		if err := nftState.nft.Flush(); err != nil {
+			t.Fatalf("flush: %v", err)
+		}
+		if err := nftState.cleanup(); err != nil {
+			t.Fatalf("cleanup(): %v", err)
+		}
+	}
+
+	reconcile(map[string]*controllers.PodInfo{
+		"10.1.1.1": {ContainerPorts: []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}}},
+		"fd00::5":  {ContainerPorts: []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}}},
+	})
+	reconcile(map[string]*controllers.PodInfo{
+		"10.1.1.1": {ContainerPorts: []corev1.ContainerPort{{Name: "http", ContainerPort: 9090}}},
+		"10.1.1.2": {ContainerPorts: []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}}},
+	})
+
+	if got, want := tupleElements(t, c, findSetByComment(t, c, nftState.filter, "", "ports_0_tcp_named4")), []string{"10.1.1.1:9090", "10.1.1.2:8080"}; !slices.Equal(got, want) {
+		t.Errorf("tcp IPv4 tuples = %v, want %v", got, want)
+	}
+	if slices.ContainsFunc(sets(t, c, nftState.filter), func(s *nftables.Set) bool { return strings.HasSuffix(s.Comment, "_named6") }) {
+		t.Error("the IPv6 tuple set is left after its last peer went away")
+	}
+	if n := countRules(portsChainRules(t, c, nftState, egressChain, 0), "named-port-set:"); n > 1 {
+		t.Errorf("ports chain has %d named port rules, want at most the IPv4 one", n)
+	}
+}
+
 // TestApplyPodRulesNamedPorts runs a policy with named ports through
 // applyPodRules: ingress resolves on the selected pod, egress on each selector
 // peer, whose container ports differ.
