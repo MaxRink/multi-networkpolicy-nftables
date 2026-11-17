@@ -57,6 +57,10 @@ teardown_file() {
 	[ "$status" -eq "0" ]
 	run retry_until_deny 30 kubectl -n test-default-deny exec pod-client -- sh -c "echo x | nc -w 1 ${server_net1} 6666"
 	[ "$status" -eq "0" ]
+	# The cluster network (eth0) is out of scope and stays reachable.
+	server_eth0=$(kubectl -n test-default-deny get pod pod-server -o jsonpath='{.status.podIP}')
+	run retry_until_allow 30 kubectl -n test-default-deny exec pod-client -- sh -c "echo x | nc -w 1 ${server_eth0} 6666"
+	[ "$status" -eq "0" ]
 }
 
 @test "default-deny ingress: a policy re-opens the port it allows" {

@@ -193,3 +193,42 @@ func TestOptionsValidateDefaultDeny(t *testing.T) {
 		})
 	}
 }
+
+// TestApplyPolicyRulesInvalidPolicyFailsClosed checks that a policy whose
+// rules cannot be built still isolates the pods it selects, from the first
+// apply on, instead of failing the batch and leaving the pod without rules.
+func TestApplyPolicyRulesInvalidPolicyFailsClosed(t *testing.T) {
+	for name, breakPolicy := range map[string]func(*multiv1beta1.MultiNetworkPolicy){
+		"port out of range": func(p *multiv1beta1.MultiNetworkPolicy) {
+			outOfRange := intstr.FromInt32(70000)
+			p.Spec.Ingress[0].Ports[0].Port = &outOfRange
+		},
+		"invalid cidr": func(p *multiv1beta1.MultiNetworkPolicy) {
+			p.Spec.Ingress[0].From = []multiv1beta1.MultiNetworkPolicyPeer{{IPBlock: &multiv1beta1.IPBlock{CIDR: "10.0.0.0/33"}}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+			defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+			defer c.FlushRuleset()
+			defer c.CloseLasting()
+			c.FlushRuleset()
+
+			podInfo, newPolicy := defaultDenyPod("testns1")
+			pod := NewFakePodWithNetAnnotation("testns1", "testpod1", "policy-net-1", "", nil)
+			policy := newPolicy()
+			breakPolicy(policy)
+			policies := controllers.PolicyMap{types.NamespacedName{Namespace: "testns1", Name: policy.Name}: policy}
+			err := ApplyPolicyRulesForPodAndFamily(context.Background(), newTestPolicyDeps(), controllers.CommonRuleConfig{}, policies, pod, podInfo, c)
+			if err == nil || !strings.Contains(err.Error(), "invalid policy") {
+				t.Errorf("ApplyPolicyRulesForPodAndFamily() error = %v, want invalid policy error", err)
+			}
+			if got, want := chainComments(t, c, "input"), []string{inputInterfaceFilterComment}; !reflect.DeepEqual(got, want) {
+				t.Errorf("input rules = %q, want %q", got, want)
+			}
+			if got, want := chainComments(t, c, ingressChain), []string{"common-ingress-chain", "drop-remaining"}; !reflect.DeepEqual(got, want) {
+				t.Errorf("%s rules = %q, want %q", ingressChain, got, want)
+			}
+		})
+	}
+}

@@ -267,7 +267,7 @@ func TestApplyPolicyRulesForPodAndFamilyReturnsPolicyRuleError(t *testing.T) {
 	if err == nil {
 		t.Fatal("ApplyPolicyRulesForPodAndFamily() error = nil, want invalid policy rule error")
 	}
-	if !strings.Contains(err.Error(), "failed to apply pod ingress rules") || !strings.Contains(err.Error(), "out of range") {
+	if !strings.Contains(err.Error(), "invalid policy") || !strings.Contains(err.Error(), "out of range") {
 		t.Fatalf("ApplyPolicyRulesForPodAndFamily() error = %v, want invalid port context", err)
 	}
 }

@@ -149,6 +149,19 @@ DHCP is not special-cased. Clients that use packet sockets, such as the CNI
 the pod needs its DHCP traffic allowed by policies, or by `--allow-src-prefix`
 and `--allow-dst-prefix`.
 
+A policy whose rules cannot be built, for example one with a port out of
+range or an invalid CIDR, still selects its pods but allows nothing; the
+daemon logs the error on every reconcile. A named port is valid: one that
+matches no container port allows nothing on that port only.
+
+Default deny filters the pod's own IP traffic in the `input` and `output`
+hooks of the pod's network namespace. It does not filter traffic that the pod
+forwards between its interfaces. It is not a boundary against the pod itself:
+a container with `CAP_NET_RAW` can send and receive frames on a packet socket,
+and a container with `CAP_NET_ADMIN` can change the pod's nftables rules or
+rename its interfaces. Drop these capabilities from pods that default deny
+must contain.
+
 The drop rule is written in the same nftables transaction as the pod's tables,
 chains and interface jumps, so a pod is denied from the first reconcile on.
 Adding or removing a policy rewrites the chain in place and keeps the drop

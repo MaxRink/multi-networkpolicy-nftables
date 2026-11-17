@@ -1950,6 +1950,49 @@ func validatePortSpec(port multiv1beta1.MultiNetworkPolicyPort) ([]nftables.SetE
 	return elements, nil
 }
 
+// validatePolicy returns the error that building the policy's rules hits
+// whatever the cluster state: an unsupported port, an invalid CIDR, an invalid
+// selector or an empty peer.
+func validatePolicy(policy *multiv1beta1.MultiNetworkPolicy) error {
+	var ports []multiv1beta1.MultiNetworkPolicyPort
+	var peers []multiv1beta1.MultiNetworkPolicyPeer
+	for _, r := range policy.Spec.Ingress {
+		ports = append(ports, r.Ports...)
+		peers = append(peers, r.From...)
+	}
+	for _, r := range policy.Spec.Egress {
+		ports = append(ports, r.Ports...)
+		peers = append(peers, r.To...)
+	}
+	for _, port := range ports {
+		// Named ports resolve against container ports when the rules are
+		// built; one that matches nothing allows nothing but is valid.
+		if namedPortName(port) != "" {
+			continue
+		}
+		if _, err := validatePortSpec(port); err != nil {
+			return err
+		}
+	}
+	for index, peer := range peers {
+		switch {
+		case peer.IPBlock != nil:
+			if _, _, err := getPrefixesAsSetInterval(append([]string{peer.IPBlock.CIDR}, peer.IPBlock.Except...)); err != nil {
+				return err
+			}
+		case peer.PodSelector != nil || peer.NamespaceSelector != nil:
+			for _, sel := range []*metav1.LabelSelector{peer.PodSelector, peer.NamespaceSelector} {
+				if _, err := metav1.LabelSelectorAsSelector(sel); err != nil {
+					return fmt.Errorf("peer %d: %w", index, err)
+				}
+			}
+		default:
+			return fmt.Errorf("unknown peer rule at index %d: %+v", index, peer)
+		}
+	}
+	return nil
+}
+
 // mergePortIntervals merges overlapping and adjacent port intervals. An
 // interval set rejects overlapping elements, which fails the whole batch, yet
 // a policy may list overlapping ports, such as 80-90 and 85-95. elements holds
