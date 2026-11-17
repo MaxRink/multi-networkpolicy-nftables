@@ -1,11 +1,14 @@
 package controller
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	multiv1beta1 "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/apis/k8s.cni.cncf.io/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 )
 
@@ -201,5 +204,45 @@ func TestNodePredicate_OtherNode(t *testing.T) {
 	pred := NodePredicate("node-a")
 	if pred.Update(event.UpdateEvent{ObjectNew: &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-b"}}}) {
 		t.Fatal("expected non-matching node to be filtered")
+	}
+}
+
+func TestPolicyPredicate_WarnsOnMissingPolicyNetworkAnnotation(t *testing.T) {
+	var buf bytes.Buffer
+	klog.LogToStderr(false)
+	klog.SetOutput(&buf)
+	t.Cleanup(func() { klog.SetOutput(nil); klog.LogToStderr(true) })
+
+	without := &multiv1beta1.MultiNetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "no-annot", Generation: 1}}
+	with := &multiv1beta1.MultiNetworkPolicy{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "ns", Name: "annot", Generation: 1,
+		Annotations: map[string]string{policyNetworkAnnotation: "net1"},
+	}}
+	pred := PolicyPredicate()
+
+	if !pred.Create(event.CreateEvent{Object: with}) {
+		t.Fatal("expected create event to pass")
+	}
+	klog.Flush()
+	if buf.Len() != 0 {
+		t.Fatalf("annotated policy logged %q, want nothing", buf.String())
+	}
+
+	if !pred.Create(event.CreateEvent{Object: without}) {
+		t.Fatal("expected create event without annotation to pass")
+	}
+	klog.Flush()
+	if !strings.Contains(buf.String(), "policy ns/no-annot has no k8s.v1.cni.cncf.io/policy-for annotation and is ignored") {
+		t.Fatalf("missing warning, got %q", buf.String())
+	}
+
+	// The annotation is removed: the update passes and is logged.
+	buf.Reset()
+	if !pred.Update(event.UpdateEvent{ObjectOld: with, ObjectNew: without}) {
+		t.Fatal("expected annotation removal to pass")
+	}
+	klog.Flush()
+	if !strings.Contains(buf.String(), "ns/no-annot") {
+		t.Fatalf("missing warning on update, got %q", buf.String())
 	}
 }

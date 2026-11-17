@@ -1,10 +1,12 @@
 package controller
 
 import (
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	corev1 "k8s.io/api/core/v1"
+	klog "k8s.io/klog/v2"
 )
 
 const policyNetworkAnnotation = "k8s.v1.cni.cncf.io/policy-for"
@@ -41,16 +43,23 @@ func PodPredicate() predicate.Predicate {
 }
 
 // PolicyPredicate filters policy events: allows Create/Delete, allows Update when
-// spec generation or network-selection annotation changed.
+// spec generation or network-selection annotation changed. Passed Create and
+// Update events of a policy without the policy-for annotation are logged,
+// because such a policy is ignored when rules are built.
 func PolicyPredicate() predicate.Predicate {
 	return predicate.Funcs{
-		CreateFunc: func(event.CreateEvent) bool { return true },
+		CreateFunc: func(e event.CreateEvent) bool {
+			warnIfNoPolicyNetworkAnnotation(e.Object)
+			return true
+		},
 		DeleteFunc: func(event.DeleteEvent) bool { return true },
 		UpdateFunc: func(e event.UpdateEvent) bool {
-			if e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() {
+			if e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() ||
+				policyNetworkAnnotationChanged(e.ObjectOld.GetAnnotations(), e.ObjectNew.GetAnnotations()) {
+				warnIfNoPolicyNetworkAnnotation(e.ObjectNew)
 				return true
 			}
-			return policyNetworkAnnotationChanged(e.ObjectOld.GetAnnotations(), e.ObjectNew.GetAnnotations())
+			return false
 		},
 		GenericFunc: func(event.GenericEvent) bool { return false },
 	}
@@ -115,4 +124,12 @@ func networkAnnotationsChanged(oldAnnotations, newAnnotations map[string]string)
 
 func policyNetworkAnnotationChanged(oldAnnotations, newAnnotations map[string]string) bool {
 	return oldAnnotations[policyNetworkAnnotation] != newAnnotations[policyNetworkAnnotation]
+}
+
+// warnIfNoPolicyNetworkAnnotation logs a policy that has no policy-for
+// annotation. Rule building skips such a policy, so it has no effect.
+func warnIfNoPolicyNetworkAnnotation(obj client.Object) {
+	if _, ok := obj.GetAnnotations()[policyNetworkAnnotation]; !ok {
+		klog.Warningf("policy %s/%s has no %s annotation and is ignored", obj.GetNamespace(), obj.GetName(), policyNetworkAnnotation)
+	}
 }
