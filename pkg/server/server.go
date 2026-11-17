@@ -155,46 +155,11 @@ func ApplyPolicyRulesForPodAndFamily(ctx context.Context, deps controllers.Polic
 	slices.SortStableFunc(ingressPolicies, CompareInternalPolicy)
 	slices.SortStableFunc(egressPolicies, CompareInternalPolicy)
 
-	// With default deny, a pod no ingress policy selects gets the same drop rule
-	// as a pod selected by a policy without ingress rules.
-	if len(ingressPolicies) > 0 || cfg.DefaultDenyIngress {
-		forceUpdate := false
-		for _, policy := range ingressPolicies {
-			newRules, err := nftState.applyPodRules(ctx, deps, cfg, nftState.ingressChain, podInfo, policy.policy, policy.policyNetworks)
-			if err != nil {
-				return fmt.Errorf("failed to apply pod ingress rules for policy %q: %w", policyNamespacedName(policy.policy), err)
-			}
-			if newRules {
-				forceUpdate = true
-			}
-			if err := nftState.applyGeneralMarkCheck(nftState.ingressChain, policy.policy); err != nil {
-				return fmt.Errorf("failed to apply mark check rule in chain %q: %w", nftState.ingressChain.Name, err)
-			}
-		}
-		if err := nftState.applyDropRemaining(nftState.ingressChain, forceUpdate); err != nil {
-			return fmt.Errorf("failed to apply drop-remaining ingress rules: %w", err)
-		}
+	if err := nftState.applyDirectionRules(ctx, deps, cfg, nftState.ingressChain, "ingress", podInfo, ingressPolicies, cfg.DefaultDenyIngress); err != nil {
+		return err
 	}
-
-	// With default deny, a pod no egress policy selects gets the same drop rule
-	// as a pod selected by a policy without egress rules.
-	if len(egressPolicies) > 0 || cfg.DefaultDenyEgress {
-		forceUpdate := false
-		for _, policy := range egressPolicies {
-			newRules, err := nftState.applyPodRules(ctx, deps, cfg, nftState.egressChain, podInfo, policy.policy, policy.policyNetworks)
-			if err != nil {
-				return fmt.Errorf("failed to apply pod egress rules for policy %q: %w", policyNamespacedName(policy.policy), err)
-			}
-			if newRules {
-				forceUpdate = true
-			}
-			if err := nftState.applyGeneralMarkCheck(nftState.egressChain, policy.policy); err != nil {
-				return fmt.Errorf("failed to apply mark check rule in chain %q: %w", nftState.egressChain.Name, err)
-			}
-		}
-		if err := nftState.applyDropRemaining(nftState.egressChain, forceUpdate); err != nil {
-			return fmt.Errorf("failed to apply drop-remaining egress rules: %w", err)
-		}
+	if err := nftState.applyDirectionRules(ctx, deps, cfg, nftState.egressChain, "egress", podInfo, egressPolicies, cfg.DefaultDenyEgress); err != nil {
+		return err
 	}
 	if err := nftState.nft.Flush(); err != nil {
 		return fmt.Errorf("nft flush failed for pod [%s]: %w", podNamespacedName(pod), err)
@@ -204,6 +169,34 @@ func ApplyPolicyRulesForPodAndFamily(ctx context.Context, deps controllers.Polic
 		return fmt.Errorf("failed to cleanup nft: %w", err)
 	}
 
+	return nil
+}
+
+// applyDirectionRules adds the rules of the policies of one direction to its
+// chain, followed by the drop of everything they do not allow. Without
+// policies, the chain gets the drop only with default deny: an unselected pod
+// is then treated like one selected by a policy that allows nothing.
+func (n *nftState) applyDirectionRules(ctx context.Context, deps controllers.PolicyDeps, cfg controllers.CommonRuleConfig, chain *nftables.Chain, direction string, podInfo *controllers.PodInfo, policies []internalPolicy, defaultDeny bool) error {
+	if len(policies) == 0 && !defaultDeny {
+		return nil
+	}
+	forceUpdate := false
+	for _, policy := range policies {
+		newRules, err := n.applyPodRules(ctx, deps, cfg, chain, podInfo, policy.policy, policy.policyNetworks)
+		if err != nil {
+			return fmt.Errorf("failed to apply pod %s rules for policy %q: %w", direction, policyNamespacedName(policy.policy), err)
+		}
+		if newRules {
+			forceUpdate = true
+		}
+		if err := n.applyGeneralMarkCheck(chain, policy.policy); err != nil {
+			return fmt.Errorf("failed to apply mark check rule in chain %q: %w", chain.Name, err)
+		}
+	}
+	// A new rule was appended after the existing drop; re-append the drop.
+	if err := n.applyDropRemaining(chain, forceUpdate); err != nil {
+		return fmt.Errorf("failed to apply drop-remaining %s rules: %w", direction, err)
+	}
 	return nil
 }
 
