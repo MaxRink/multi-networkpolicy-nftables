@@ -1,0 +1,142 @@
+---
+apiVersion: "k8s.cni.cncf.io/v1"
+kind: NetworkAttachmentDefinition
+metadata:
+  namespace: default
+  name: macvlan1-named-ports
+spec:
+  config: '{
+            "cniVersion": "0.3.1",
+            "name": "macvlan1-named-ports",
+            "plugins": [
+                {
+                    "type": "macvlan",
+                    "mode": "bridge",
+                    "ipam":{
+                      "type":"host-local",
+                      "subnet":"2.2.31.0/24",
+                      "rangeStart":"2.2.31.8",
+                      "rangeEnd":"2.2.31.67"
+                    }
+                }]
+        }'
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+    name: test-named-ports
+# The port named "web" has a different number on each pod.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-a
+  namespace: test-named-ports
+  annotations:
+    k8s.v1.cni.cncf.io/networks: default/macvlan1-named-ports
+  labels:
+    app: test-named-ports
+    name: pod-a
+spec:
+  terminationGracePeriodSeconds: 0
+  containers:
+  - name: netcat-tcp-5555
+    image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
+    command: ["nc", "-klp", "5555"]
+    ports:
+    - name: web
+      containerPort: 5555
+    securityContext:
+      privileged: true
+  - name: netcat-tcp-6666
+    image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
+    command: ["nc", "-klp", "6666"]
+    securityContext:
+      privileged: true
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-b
+  namespace: test-named-ports
+  annotations:
+    k8s.v1.cni.cncf.io/networks: default/macvlan1-named-ports
+  labels:
+    app: test-named-ports
+    name: pod-b
+spec:
+  terminationGracePeriodSeconds: 0
+  containers:
+  - name: netcat-tcp-7777
+    image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
+    command: ["nc", "-klp", "7777"]
+    ports:
+    - name: web
+      containerPort: 7777
+    securityContext:
+      privileged: true
+  - name: netcat-tcp-6666
+    image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
+    command: ["nc", "-klp", "6666"]
+    securityContext:
+      privileged: true
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-c
+  namespace: test-named-ports
+  annotations:
+    k8s.v1.cni.cncf.io/networks: default/macvlan1-named-ports
+  labels:
+    app: test-named-ports
+    name: pod-c
+spec:
+  terminationGracePeriodSeconds: 0
+  containers:
+  - name: netcat-tcp-8888
+    image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
+    command: ["nc", "-klp", "8888"]
+    ports:
+    - name: web
+      containerPort: 8888
+    securityContext:
+      privileged: true
+  - name: netcat-tcp-7777
+    image: localhost:5000/multi-networkpolicy-nftables:e2e-test
+    imagePullPolicy: Never
+    command: ["nc", "-klp", "7777"]
+    securityContext:
+      privileged: true
+---
+# pod-a accepts and sends traffic only to the port named "web" of the
+# receiving pod.
+apiVersion: k8s.cni.cncf.io/v1beta1
+kind: MultiNetworkPolicy
+metadata:
+  name: test-multinetwork-policy-named-ports
+  namespace: test-named-ports
+  annotations:
+    k8s.v1.cni.cncf.io/policy-for: default/macvlan1-named-ports
+spec:
+  podSelector:
+    matchLabels:
+      name: pod-a
+  policyTypes:
+  - Egress
+  - Ingress
+  ingress:
+  - ports:
+    - port: web
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: test-named-ports
+    ports:
+    - port: web

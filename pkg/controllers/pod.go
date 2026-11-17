@@ -84,6 +84,9 @@ type PodInfo struct {
 	NetworkStatus []netdefv1.NetworkStatus
 	NodeName      string
 	Interfaces    []InterfaceInfo
+	// ContainerPorts are the ports of the pod's containers. Named ports in
+	// policies resolve against them.
+	ContainerPorts []v1.ContainerPort
 }
 
 // CheckPolicyNetwork checks whether given pod is target or not,
