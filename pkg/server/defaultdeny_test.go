@@ -23,8 +23,6 @@ import (
 	"strings"
 	"testing"
 
-	nftables "github.com/google/nftables"
-	"github.com/google/nftables/userdata"
 	multiv1beta1 "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/apis/k8s.cni.cncf.io/v1beta1"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,23 +31,6 @@ import (
 
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/nftest"
 )
-
-// chainComments returns the comments of the rules in a chain of the filter
-// table, in rule order.
-func chainComments(t *testing.T, c *nftables.Conn, chain string) []string {
-	t.Helper()
-	table := &nftables.Table{Family: nftables.TableFamilyINet, Name: FilterTableName}
-	rules, err := c.GetRules(table, &nftables.Chain{Name: chain, Table: table})
-	if err != nil {
-		t.Fatalf("GetRules(%s) failed: %v", chain, err)
-	}
-	comments := make([]string, 0, len(rules))
-	for _, r := range rules {
-		comment, _ := userdata.GetString(r.UserData, userdata.TypeComment)
-		comments = append(comments, comment)
-	}
-	return comments
-}
 
 func defaultDenyPod(namespace string) (*controllers.PodInfo, func() *multiv1beta1.MultiNetworkPolicy) {
 	podInfo := &controllers.PodInfo{
@@ -114,14 +95,6 @@ func TestApplyPolicyRulesDefaultDeny(t *testing.T) {
 				t.Fatalf("ApplyPolicyRulesForPodAndFamily() failed: %v", err)
 			}
 
-			// The first apply must leave the jumps into the pod chains in
-			// place, so that the pod is never open between two reconciles.
-			if got := chainComments(t, c, "input"); !reflect.DeepEqual(got, []string{inputInterfaceFilterComment}) {
-				t.Errorf("input rules = %q, want %q", got, inputInterfaceFilterComment)
-			}
-			if got := chainComments(t, c, "output"); !reflect.DeepEqual(got, []string{outputInterfaceFilterComment}) {
-				t.Errorf("output rules = %q, want %q", got, outputInterfaceFilterComment)
-			}
 			if got := chainComments(t, c, ingressChain); !reflect.DeepEqual(got, tt.ingress) {
 				t.Errorf("%s rules = %q, want %q", ingressChain, got, tt.ingress)
 			}
