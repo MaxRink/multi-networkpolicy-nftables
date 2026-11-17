@@ -75,6 +75,11 @@ A line at `-v=n` has the slog level `-n`, which slog writes as `DEBUG+2` for
 `n=2`, `DEBUG` for `n=4` and `DEBUG-4` for `n=8`. Filtering by verbosity
 happens in klog before the handler, as with text.
 
+In JSON mode an invalid option or a start-up failure is logged once as
+JSON (`Execute failed: ...`), without cobra's text usage. Only a flag that
+cannot be parsed at all, for example an unknown flag, is still reported by
+cobra as text with the usage, because it happens before the format is set.
+
 #### Compatibility notes
 
 Pod iptables state is no longer persisted. The old `--pod-iptables` flag is

@@ -156,11 +156,15 @@ func (o *Options) Validate() error {
 // BuildReconcilerConfig resolves all configuration needed to build a NodeReconciler.
 // It resolves hostname, parses prefix lists, and packages everything into a ReconcilerConfig.
 func (o *Options) BuildReconcilerConfig() (*ReconcilerConfig, error) {
-	if err := o.Validate(); err != nil {
+	// Set up logging first, so that a validation error is logged in the chosen format.
+	if err := o.validateLogging(); err != nil {
 		return nil, fmt.Errorf("options validation: %w", err)
 	}
 	if err := o.applyLogging(); err != nil {
 		return nil, err
+	}
+	if err := o.Validate(); err != nil {
+		return nil, fmt.Errorf("options validation: %w", err)
 	}
 
 	hostname, err := nodeutil.GetHostname(o.hostnameOverride)
