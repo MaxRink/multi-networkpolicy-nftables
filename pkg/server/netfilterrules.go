@@ -680,37 +680,38 @@ func ruleEqual(a, b *nftables.Rule) bool {
 	}
 
 	for i := range a.Exprs {
-		switch a.Exprs[i].(type) {
+		aExpr, bExpr := canonicalExpr(a.Exprs[i]), canonicalExpr(b.Exprs[i])
+		switch aExpr.(type) {
 		case *expr.Meta:
-			if !exprEqual(&expr.Meta{}, a.Exprs[i], b.Exprs[i]) {
+			if !exprEqual(&expr.Meta{}, aExpr, bExpr) {
 				return false
 			}
 		case *expr.Lookup:
-			if !exprEqual(&expr.Lookup{}, a.Exprs[i], b.Exprs[i]) {
+			if !exprEqual(&expr.Lookup{}, aExpr, bExpr) {
 				return false
 			}
 		case *expr.Verdict:
-			if !exprEqual(&expr.Verdict{}, a.Exprs[i], b.Exprs[i]) {
+			if !exprEqual(&expr.Verdict{}, aExpr, bExpr) {
 				return false
 			}
 		case *expr.Cmp:
-			if !exprEqual(&expr.Cmp{}, a.Exprs[i], b.Exprs[i]) {
+			if !exprEqual(&expr.Cmp{}, aExpr, bExpr) {
 				return false
 			}
 		case *expr.Payload:
-			if !exprEqual(&expr.Payload{}, a.Exprs[i], b.Exprs[i]) {
+			if !exprEqual(&expr.Payload{}, aExpr, bExpr) {
 				return false
 			}
 		case *expr.Ct:
-			if !exprEqual(&expr.Ct{}, a.Exprs[i], b.Exprs[i]) {
+			if !exprEqual(&expr.Ct{}, aExpr, bExpr) {
 				return false
 			}
 		case *expr.Bitwise:
-			if !exprEqual(&expr.Bitwise{}, a.Exprs[i], b.Exprs[i]) {
+			if !exprEqual(&expr.Bitwise{}, aExpr, bExpr) {
 				return false
 			}
 		case *expr.Counter:
-			if _, ok := b.Exprs[i].(*expr.Counter); !ok {
+			if _, ok := bExpr.(*expr.Counter); !ok {
 				return false
 			}
 		default:
