@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -230,5 +231,32 @@ func TestApplyPolicyRulesInvalidPolicyFailsClosed(t *testing.T) {
 				t.Errorf("%s rules = %q, want %q", ingressChain, got, want)
 			}
 		})
+	}
+}
+
+// TestApplyPolicyRulesNamedPortPolicyIsValid checks that a named port does not
+// make a policy invalid: it resolves against container ports, and one that
+// matches none allows nothing, but the policy's chain is still built.
+func TestApplyPolicyRulesNamedPortPolicyIsValid(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.FlushRuleset()
+	defer c.CloseLasting()
+	c.FlushRuleset()
+
+	podInfo, newPolicy := defaultDenyPod("testns2")
+	pod := NewFakePodWithNetAnnotation("testns2", "testpod1", "policy-net-1", "", nil)
+	policy := newPolicy()
+	named := intstr.FromString("http")
+	policy.Spec.Ingress[0].Ports[0].Port = &named
+	if err := validatePolicy(policy); err != nil {
+		t.Fatalf("validatePolicy() error = %v, want nil", err)
+	}
+	policies := controllers.PolicyMap{types.NamespacedName{Namespace: "testns2", Name: policy.Name}: policy}
+	if err := ApplyPolicyRulesForPodAndFamily(context.Background(), newTestPolicyDeps(), controllers.CommonRuleConfig{}, policies, pod, podInfo, c); err != nil {
+		t.Fatalf("ApplyPolicyRulesForPodAndFamily() error = %v, want nil", err)
+	}
+	if got := chainComments(t, c, ingressChain); !slices.ContainsFunc(got, func(c string) bool { return strings.HasPrefix(c, "policy:testns2/allow-80,") }) {
+		t.Errorf("%s rules = %q, want the jump to the policy chain", ingressChain, got)
 	}
 }
