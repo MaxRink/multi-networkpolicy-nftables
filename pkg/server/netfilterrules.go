@@ -807,7 +807,9 @@ func findNonCommon(a, b []nftables.SetElement) []nftables.SetElement {
 
 func isPresent(toCheck nftables.SetElement, elements []nftables.SetElement) bool {
 	for _, e := range elements {
-		if slices.Compare(toCheck.Key, e.Key) == 0 {
+		// In an interval set, an interval end can have the same key as the
+		// start of the next interval; they are different elements.
+		if toCheck.IntervalEnd == e.IntervalEnd && slices.Compare(toCheck.Key, e.Key) == 0 {
 			return true
 		}
 	}
@@ -1387,7 +1389,6 @@ func (n *nftState) applyPrefixes(chainName string, chain *nftables.Chain, policy
 		prefixesSet := &nftables.Set{
 			Table:    chain.Table,
 			Name:     fmt.Sprintf("%s_%s_%s_%s_%d", chainName, peerIPBlockPrefix, protocol, getAddressSuffix(chainName), peerIndex),
-			Constant: true,
 			Counter:  true,
 			KeyType:  keyType,
 			Interval: true,
@@ -1799,7 +1800,6 @@ func (n *nftState) getInetSet(chain *nftables.Chain, portsName, suffix string) *
 		Table:    chain.Table,
 		Name:     setName,
 		Comment:  setName,
-		Constant: true,
 		Counter:  true,
 		KeyType:  nftables.TypeInetService,
 		Interval: true,
