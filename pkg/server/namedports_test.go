@@ -85,36 +85,6 @@ func TestNamedPortName(t *testing.T) {
 	}
 }
 
-func TestNumericPortsCover(t *testing.T) {
-	t.Parallel()
-	tcp, udp := corev1.ProtocolTCP, corev1.ProtocolUDP
-	p80, p1000, http := intstr.FromInt32(80), intstr.FromInt32(1000), intstr.FromString("http")
-	end := int32(2000)
-	ports := []multiv1beta1.MultiNetworkPolicyPort{
-		{Port: &p80}, // TCP by default
-		{Protocol: &tcp, Port: &p1000, EndPort: &end},
-		{Protocol: &udp},
-		{Protocol: &tcp, Port: &http},
-	}
-	cases := []struct {
-		num   uint16
-		proto corev1.Protocol
-		want  bool
-	}{
-		{80, tcp, true},
-		{81, tcp, false},
-		{1500, tcp, true},
-		{2001, tcp, false},
-		{9999, udp, true},
-		{80, corev1.ProtocolSCTP, false},
-	}
-	for _, tc := range cases {
-		if got := numericPortsCover(ports, tc.num, tc.proto); got != tc.want {
-			t.Errorf("numericPortsCover(%d, %s) = %v, want %v", tc.num, tc.proto, got, tc.want)
-		}
-	}
-}
-
 func TestLogUnresolvedNamedPortLogsOnce(t *testing.T) {
 	var buf bytes.Buffer
 	klog.LogToStderr(false)
@@ -173,10 +143,22 @@ func TestApplyPolicyPortsRulesIngressNamedPorts(t *testing.T) {
 	if err := nftState.applyPolicyPortsRules(nftState.ingressChain.Name, nftState.ingressChain, "ns/p", []multiv1beta1.MultiNetworkPolicyPort{{Port: &missing}}, 1, namedPortTargets{local: local}); err != nil {
 		t.Fatalf("applyPolicyPortsRules() unresolved: %v", err)
 	}
+	// A port entry without a port allows all TCP ports, next to a named
+	// port whether that resolves or not.
+	for index, named := range []*intstr.IntOrString{&missing, &http} {
+		if err := nftState.applyPolicyPortsRules(nftState.ingressChain.Name, nftState.ingressChain, "ns/p", []multiv1beta1.MultiNetworkPolicyPort{{}, {Port: named}}, index+2, namedPortTargets{local: local}); err != nil {
+			t.Fatalf("applyPolicyPortsRules() empty entry and %s: %v", named.StrVal, err)
+		}
+	}
 	if err := nftState.nft.Flush(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
 
+	for _, suffix := range []string{"ports_2_tcp", "ports_3_tcp"} {
+		if got := portIntervals(t, c, findSetByComment(t, c, nftState.filter, "", suffix)); !slices.Equal(got, [][2]uint16{{1, 65535}}) {
+			t.Errorf("%s = %v, want [[1 65535]]", suffix, got)
+		}
+	}
 	if got := portIntervals(t, c, findSetByComment(t, c, nftState.filter, "", "ports_0_tcp")); !slices.Equal(got, [][2]uint16{{80, 80}, {8080, 8080}}) {
 		t.Errorf("tcp ports = %v, want [[80 80] [8080 8080]]", got)
 	}
@@ -302,6 +284,44 @@ func TestEgressNamedPortTuplesFollowPeers(t *testing.T) {
 	}
 }
 
+// TestEgressNamedPortTupleRulesSurviveCleanup checks that the tuple rules
+// match their kernel copies, so that the cleanup keeps them and a second apply
+// does not add them again. The kernel dumps the IPv6 rule's port register,
+// NFT_REG32_04, as NFT_REG_2.
+func TestEgressNamedPortTupleRulesSurviveCleanup(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.CloseLasting()
+	c.FlushRuleset()
+	defer c.FlushRuleset()
+
+	nftState, _, _, _, err := prepareEnv(c, false)
+	if err != nil {
+		t.Fatalf("failed to prepare test env: %s", err.Error())
+	}
+
+	http := intstr.FromString("http")
+	http8080 := []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}}
+	peers := map[string]*controllers.PodInfo{"10.1.1.1": {ContainerPorts: http8080}, "fd00::5": {ContainerPorts: http8080}}
+	for round := 1; round <= 2; round++ {
+		if err := nftState.applyPolicyPortsRules(nftState.egressChain.Name, nftState.egressChain, "ns/p", []multiv1beta1.MultiNetworkPolicyPort{{Port: &http}}, 0, namedPortTargets{peers: peers}); err != nil {
+			t.Fatalf("round %d: applyPolicyPortsRules(): %v", round, err)
+		}
+		if err := nftState.nft.Flush(); err != nil {
+			t.Fatalf("round %d: flush: %v", round, err)
+		}
+		if err := nftState.cleanup(); err != nil {
+			t.Fatalf("round %d: cleanup(): %v", round, err)
+		}
+		rules := portsChainRules(t, c, nftState, egressChain, 0)
+		for _, family := range []string{"_named4", "_named6"} {
+			if n := countRules(rules, family); n != 1 {
+				t.Errorf("round %d: ports chain has %d %s rules, want 1: %v", round, n, family, ruleComments(rules))
+			}
+		}
+	}
+}
+
 // TestApplyPodRulesNamedPorts runs a policy with named ports through
 // applyPodRules: ingress resolves on the selected pod, egress on each selector
 // peer, whose container ports differ.
@@ -379,6 +399,12 @@ func TestEgressNamedPortPeers(t *testing.T) {
 		PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"name": "a"}},
 	}}
 	ipBlock := []multiv1beta1.MultiNetworkPolicyPeer{{IPBlock: &multiv1beta1.IPBlock{CIDR: "10.2.0.0/24"}}}
+	// The IPBlock takes precedence over the selector, so the selected pods
+	// must not add tuples outside the CIDR.
+	ipBlockAndSelector := []multiv1beta1.MultiNetworkPolicyPeer{{
+		IPBlock:     &multiv1beta1.IPBlock{CIDR: "10.9.0.0/24"},
+		PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"name": "a"}},
+	}}
 
 	cases := []struct {
 		name string
@@ -389,6 +415,7 @@ func TestEgressNamedPortPeers(t *testing.T) {
 		{"selector peer", multiv1beta1.MultiNetworkPolicyEgressRule{Ports: []multiv1beta1.MultiNetworkPolicyPort{{Port: &http}}, To: onlyA}, []string{"10.2.0.2"}},
 		{"namespace and pod selector peer", multiv1beta1.MultiNetworkPolicyEgressRule{Ports: []multiv1beta1.MultiNetworkPolicyPort{{Port: &http}}, To: otherA}, []string{"10.2.0.4"}},
 		{"ipBlock peer", multiv1beta1.MultiNetworkPolicyEgressRule{Ports: []multiv1beta1.MultiNetworkPolicyPort{{Port: &http}}, To: ipBlock}, nil},
+		{"ipBlock and selector peer", multiv1beta1.MultiNetworkPolicyEgressRule{Ports: []multiv1beta1.MultiNetworkPolicyPort{{Port: &http}}, To: ipBlockAndSelector}, nil},
 		{"no peers", multiv1beta1.MultiNetworkPolicyEgressRule{Ports: []multiv1beta1.MultiNetworkPolicyPort{{Port: &http}}}, []string{"10.2.0.2", "10.2.0.3", "10.2.0.4"}},
 	}
 	for _, tc := range cases {
@@ -408,60 +435,6 @@ func setContainerPorts(deps *testPolicyDeps, namespace, name string, ports ...co
 	info := deps.podMap[key]
 	info.ContainerPorts = ports
 	deps.podMap[key] = info
-}
-
-func sets(t *testing.T, c *nftables.Conn, table *nftables.Table) []*nftables.Set {
-	t.Helper()
-	all, err := c.GetSets(table)
-	if err != nil {
-		t.Fatalf("GetSets(%s): %v", table.Name, err)
-	}
-	return all
-}
-
-// findSetByComment returns the one set whose comment (its unhashed name) has
-// the given prefix and suffix.
-func findSetByComment(t *testing.T, c *nftables.Conn, table *nftables.Table, prefix, suffix string) *nftables.Set {
-	t.Helper()
-	var found []*nftables.Set
-	var comments []string
-	for _, s := range sets(t, c, table) {
-		comments = append(comments, s.Comment)
-		if strings.HasPrefix(s.Comment, prefix) && strings.HasSuffix(s.Comment, suffix) {
-			found = append(found, s)
-		}
-	}
-	if len(found) != 1 {
-		t.Fatalf("found %d sets with comment %q...%q, want 1; sets: %v", len(found), prefix, suffix, comments)
-	}
-	return found[0]
-}
-
-// portIntervals returns the closed port intervals of an interval set.
-func portIntervals(t *testing.T, c *nftables.Conn, set *nftables.Set) [][2]uint16 {
-	t.Helper()
-	els, err := c.GetSetElements(set)
-	if err != nil {
-		t.Fatalf("GetSetElements(%s): %v", set.Name, err)
-	}
-	var starts, ends []uint16
-	for _, e := range els {
-		if e.IntervalEnd {
-			ends = append(ends, binaryutil.BigEndian.Uint16(e.Key)-1)
-		} else {
-			starts = append(starts, binaryutil.BigEndian.Uint16(e.Key))
-		}
-	}
-	slices.Sort(starts)
-	slices.Sort(ends)
-	if len(starts) != len(ends) {
-		t.Fatalf("set %s has %d starts and %d ends", set.Name, len(starts), len(ends))
-	}
-	out := make([][2]uint16, len(starts))
-	for i := range starts {
-		out[i] = [2]uint16{starts[i], ends[i]}
-	}
-	return out
 }
 
 // tupleElements returns the "addr:port" elements of a named port tuple set.

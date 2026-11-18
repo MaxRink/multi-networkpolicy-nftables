@@ -18,6 +18,7 @@ package server
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -679,37 +680,38 @@ func ruleEqual(a, b *nftables.Rule) bool {
 	}
 
 	for i := range a.Exprs {
-		switch a.Exprs[i].(type) {
+		aExpr, bExpr := canonicalExpr(a.Exprs[i]), canonicalExpr(b.Exprs[i])
+		switch aExpr.(type) {
 		case *expr.Meta:
-			if !exprEqual(&expr.Meta{}, a.Exprs[i], b.Exprs[i]) {
+			if !exprEqual(&expr.Meta{}, aExpr, bExpr) {
 				return false
 			}
 		case *expr.Lookup:
-			if !exprEqual(&expr.Lookup{}, a.Exprs[i], b.Exprs[i]) {
+			if !exprEqual(&expr.Lookup{}, aExpr, bExpr) {
 				return false
 			}
 		case *expr.Verdict:
-			if !exprEqual(&expr.Verdict{}, a.Exprs[i], b.Exprs[i]) {
+			if !exprEqual(&expr.Verdict{}, aExpr, bExpr) {
 				return false
 			}
 		case *expr.Cmp:
-			if !exprEqual(&expr.Cmp{}, a.Exprs[i], b.Exprs[i]) {
+			if !exprEqual(&expr.Cmp{}, aExpr, bExpr) {
 				return false
 			}
 		case *expr.Payload:
-			if !exprEqual(&expr.Payload{}, a.Exprs[i], b.Exprs[i]) {
+			if !exprEqual(&expr.Payload{}, aExpr, bExpr) {
 				return false
 			}
 		case *expr.Ct:
-			if !exprEqual(&expr.Ct{}, a.Exprs[i], b.Exprs[i]) {
+			if !exprEqual(&expr.Ct{}, aExpr, bExpr) {
 				return false
 			}
 		case *expr.Bitwise:
-			if !exprEqual(&expr.Bitwise{}, a.Exprs[i], b.Exprs[i]) {
+			if !exprEqual(&expr.Bitwise{}, aExpr, bExpr) {
 				return false
 			}
 		case *expr.Counter:
-			if _, ok := b.Exprs[i].(*expr.Counter); !ok {
+			if _, ok := bExpr.(*expr.Counter); !ok {
 				return false
 			}
 		default:
@@ -1946,6 +1948,39 @@ func validatePolicy(policy *multiv1beta1.MultiNetworkPolicy) error {
 	return nil
 }
 
+// mergePortIntervals merges overlapping and adjacent port intervals. An
+// interval set rejects overlapping elements, which fails the whole batch, yet
+// a policy may list overlapping ports, such as 80-90 and 85-95. elements holds
+// [start, end) pairs as validatePortSpec returns them; an end of 0 is 65536.
+func mergePortIntervals(elements []nftables.SetElement) []nftables.SetElement {
+	type interval struct{ start, end uint32 }
+	intervals := make([]interval, 0, len(elements)/2)
+	for i := 0; i+1 < len(elements); i += 2 {
+		end := uint32(binaryutil.BigEndian.Uint16(elements[i+1].Key))
+		if end == 0 {
+			end = math.MaxUint16 + 1
+		}
+		intervals = append(intervals, interval{start: uint32(binaryutil.BigEndian.Uint16(elements[i].Key)), end: end})
+	}
+	slices.SortFunc(intervals, func(a, b interval) int { return cmp.Compare(a.start, b.start) })
+	merged := make([]interval, 0, len(intervals))
+	for _, iv := range intervals {
+		if last := len(merged) - 1; last >= 0 && iv.start <= merged[last].end {
+			merged[last].end = max(merged[last].end, iv.end)
+			continue
+		}
+		merged = append(merged, iv)
+	}
+	out := make([]nftables.SetElement, 0, 2*len(merged))
+	for _, iv := range merged {
+		out = append(out,
+			nftables.SetElement{Key: binaryutil.BigEndian.PutUint16(uint16(iv.start))},                  //nolint:gosec // G115: start is a port in [1, 65535]
+			nftables.SetElement{Key: binaryutil.BigEndian.PutUint16(uint16(iv.end)), IntervalEnd: true}, //nolint:gosec // G115: 65536 wraps to the 0 past-max sentinel
+		)
+	}
+	return out
+}
+
 func (n *nftState) applyPolicyPortsRules(chainName string, chain *nftables.Chain, policyName string, ports []multiv1beta1.MultiNetworkPolicyPort, portIndex int, targets namedPortTargets) error {
 	portsName := nftNameWithSuffix(chainName, "-", fmt.Sprintf("%s-%d", portsChainSuffix, portIndex))
 	// create ports chain
@@ -1977,7 +2012,9 @@ func (n *nftState) applyPolicyPortsRules(chainName string, chain *nftables.Chain
 	portsSCTP := []nftables.SetElement{}
 	numericPorts, tuples, hasNamedPorts := resolveRuleNamedPorts(policyName, chainName, ports, targets)
 	for _, port := range numericPorts {
-		if port.Port == nil && port.Protocol != nil {
+		// A port entry without a port matches all ports of its protocol,
+		// which defaults to TCP.
+		if port.Port == nil {
 			port.Port = &intstr.IntOrString{Type: intstr.Int, IntVal: 1}
 			port.EndPort = new(int32)
 			*port.EndPort = math.MaxUint16
@@ -2002,6 +2039,7 @@ func (n *nftState) applyPolicyPortsRules(chainName string, chain *nftables.Chain
 		}
 
 	}
+	portsTCP, portsUDP, portsSCTP = mergePortIntervals(portsTCP), mergePortIntervals(portsUDP), mergePortIntervals(portsSCTP)
 	if len(portsTCP) > 0 {
 		suffix, unixFlag := getProtocolInfo(v1.ProtocolTCP)
 		tcpSet := n.getInetSet(chain, portsName, suffix)
