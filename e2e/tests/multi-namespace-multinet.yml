@@ -140,14 +140,29 @@ spec:
       name: pod-a-1
   ingress:
   - from:
-    - podSelector:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: test-namespace-b
+      podSelector:
         matchLabels:
           name: pod-b-1
-  egress:
-  - to:
+    # Without a namespaceSelector, a podSelector selects pods in the policy's
+    # own namespace only: this peer does not match pod-b-2.
     - podSelector:
         matchLabels:
           name: pod-b-2
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: test-namespace-b
+      podSelector:
+        matchLabels:
+          name: pod-b-2
+    # Does not match pod-b-1, which is in another namespace.
+    - podSelector:
+        matchLabels:
+          name: pod-b-1
   policyTypes:
   - Ingress
   - Egress

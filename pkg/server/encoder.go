@@ -52,10 +52,20 @@ func newRuleData(rule *nftables.Rule) (*ruleData, error) {
 
 	newExprs := []string{}
 	for i := range rule.Exprs {
-		switch rule.Exprs[i].(type) {
+		e := rule.Exprs[i]
+		if l, ok := e.(*expr.Lookup); ok {
+			// SetID only identifies a set created in the same batch; the
+			// kernel does not return it. Hashing it would make a rule that
+			// references a new set differ from its kernel copy, and the
+			// cleanup after the first apply would delete it as stale.
+			lookup := *l
+			lookup.SetID = 0
+			e = &lookup
+		}
+		switch e.(type) {
 		case *expr.Meta, *expr.Lookup, *expr.Verdict, *expr.Cmp,
 			*expr.Payload, *expr.Ct, *expr.Bitwise:
-			v, err := hash(rule.Exprs[i])
+			v, err := hash(e)
 			if err != nil {
 				return nil, fmt.Errorf("failed to hash expression: %w", err)
 			}

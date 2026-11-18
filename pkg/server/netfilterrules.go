@@ -1492,9 +1492,9 @@ func (n *nftState) applyPolicyPeersRulesIPBlock(chainName string, chain *nftable
 	return nil
 }
 
-func (n *nftState) applyPolicyPeersRulesSelector(ctx context.Context, deps controllers.PolicyDeps, chainName string, chain *nftables.Chain, policyName string, peer multiv1beta1.MultiNetworkPolicyPeer,
+func (n *nftState) applyPolicyPeersRulesSelector(ctx context.Context, deps controllers.PolicyDeps, chainName string, chain *nftables.Chain, policyName, policyNamespace string, peer multiv1beta1.MultiNetworkPolicyPeer,
 	podInfo *controllers.PodInfo, policyNetworks []string, peerIndex int) error {
-	peerPods, err := selectorPeerPods(ctx, deps, peer, podInfo, policyNetworks)
+	peerPods, err := selectorPeerPods(ctx, deps, peer, policyNamespace, podInfo, policyNetworks)
 	if err != nil {
 		return err
 	}
@@ -1512,8 +1512,9 @@ func (n *nftState) applyPolicyPeersRulesSelector(ctx context.Context, deps contr
 }
 
 // selectorPeerPods returns the pods that a selector peer matches, by their IPs
-// on the policy networks. IPs of the selected pod itself are left out.
-func selectorPeerPods(ctx context.Context, deps controllers.PolicyDeps, peer multiv1beta1.MultiNetworkPolicyPeer,
+// on the policy networks. A peer without a namespaceSelector matches pods in
+// policyNamespace only. IPs of the selected pod itself are left out.
+func selectorPeerPods(ctx context.Context, deps controllers.PolicyDeps, peer multiv1beta1.MultiNetworkPolicyPeer, policyNamespace string,
 	podInfo *controllers.PodInfo, policyNetworks []string) (map[string]*controllers.PodInfo, error) {
 	if peer.PodSelector != nil {
 		klog.V(8).Infof("applying peers rules with pod selector: %s", peer.PodSelector.String())
@@ -1559,6 +1560,11 @@ func selectorPeerPods(ctx context.Context, deps controllers.PolicyDeps, peer mul
 	// Collect peer IPs, excluding protected IPs
 	peerPods := make(map[string]*controllers.PodInfo)
 	for _, sPod := range pods {
+		// Like NetworkPolicy: a peer without a namespaceSelector selects pods
+		// in the policy's own namespace only.
+		if nsSelector == nil && sPod.Namespace != policyNamespace {
+			continue
+		}
 		nsLabels, err := deps.GetNamespaceInfo(ctx, sPod.Namespace)
 		if err != nil {
 			klog.Errorf("cannot get namespace info: %v %v", sPod.Name, err)
@@ -1712,7 +1718,7 @@ func (n *nftState) addIPRules(chainName string, addrs []string, chain *nftables.
 	return nil
 }
 
-func (n *nftState) applyPolicyPeersRules(ctx context.Context, deps controllers.PolicyDeps, chainName string, chain *nftables.Chain, policyName string, peers []multiv1beta1.MultiNetworkPolicyPeer,
+func (n *nftState) applyPolicyPeersRules(ctx context.Context, deps controllers.PolicyDeps, chainName string, chain *nftables.Chain, policyName, policyNamespace string, peers []multiv1beta1.MultiNetworkPolicyPeer,
 	podInfo *controllers.PodInfo, policyNetworks []string, peerIndex int) error {
 	peersName := nftNameWithSuffix(chainName, "-", fmt.Sprintf("%s-%d", peersChainSuffix, peerIndex))
 
@@ -1745,7 +1751,7 @@ func (n *nftState) applyPolicyPeersRules(ctx context.Context, deps controllers.P
 			continue
 		}
 		if peer.PodSelector != nil || peer.NamespaceSelector != nil {
-			if err := n.applyPolicyPeersRulesSelector(ctx, deps, peersName, peersChain, policyName, peer, podInfo, policyNetworks, index); err != nil {
+			if err := n.applyPolicyPeersRulesSelector(ctx, deps, peersName, peersChain, policyName, policyNamespace, peer, podInfo, policyNetworks, index); err != nil {
 				return fmt.Errorf("apply selector peer rules at index %d: %w", index, err)
 			}
 			continue
@@ -2050,7 +2056,7 @@ func (n *nftState) applyPodRules(ctx context.Context, deps controllers.PolicyDep
 			if err := n.applyPolicyPortsRules(policyChainName, policyChain, policyNamespacedName(policy), ingress.Ports, index, namedPortTargets{local: podInfo.ContainerPorts}); err != nil {
 				return newRules, fmt.Errorf("failed to apply ingress ports for policy %q: %w", policyNamespacedName(policy), err)
 			}
-			if err := n.applyPolicyPeersRules(ctx, deps, policyChainName, policyChain, policyNamespacedName(policy), ingress.From, podInfo, policyNetworks, index); err != nil {
+			if err := n.applyPolicyPeersRules(ctx, deps, policyChainName, policyChain, policyNamespacedName(policy), policy.Namespace, ingress.From, podInfo, policyNetworks, index); err != nil {
 				return newRules, fmt.Errorf("failed to apply ingress address rules for policy %q: %w", policyNamespacedName(policy), err)
 			}
 			if err := n.applyMarkCheck(policyChainName, policyChain, policyNamespacedName(policy), index); err != nil {
@@ -2062,14 +2068,14 @@ func (n *nftState) applyPodRules(ctx context.Context, deps controllers.PolicyDep
 			if err := n.applyMarkReset(policyChainName, policyChain, policy.Name, index); err != nil {
 				return newRules, fmt.Errorf("failed to apply egress mark reset for policy %q: %w", policyNamespacedName(policy), err)
 			}
-			peerPods, err := egressNamedPortPeers(ctx, deps, egress, podInfo, policyNetworks)
+			peerPods, err := egressNamedPortPeers(ctx, deps, egress, policy.Namespace, podInfo, policyNetworks)
 			if err != nil {
 				return newRules, fmt.Errorf("failed to resolve egress named ports for policy %q: %w", policyNamespacedName(policy), err)
 			}
 			if err := n.applyPolicyPortsRules(policyChainName, policyChain, policyNamespacedName(policy), egress.Ports, index, namedPortTargets{peers: peerPods}); err != nil {
 				return newRules, fmt.Errorf("failed to apply egress ports for policy %q: %w", policyNamespacedName(policy), err)
 			}
-			if err := n.applyPolicyPeersRules(ctx, deps, policyChainName, policyChain, policyNamespacedName(policy), egress.To, podInfo, policyNetworks, index); err != nil {
+			if err := n.applyPolicyPeersRules(ctx, deps, policyChainName, policyChain, policyNamespacedName(policy), policy.Namespace, egress.To, podInfo, policyNetworks, index); err != nil {
 				return newRules, fmt.Errorf("failed to apply egress address rules for policy %q: %w", policyNamespacedName(policy), err)
 			}
 			if err := n.applyMarkCheck(policyChainName, policyChain, policyNamespacedName(policy), index); err != nil {

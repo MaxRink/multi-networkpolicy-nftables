@@ -221,7 +221,7 @@ func addNamedPortTuples(tuples map[namedPortTupleKey]map[string]nftables.SetElem
 // an egress rule resolve against, or nil if the rule has no named ports. A rule
 // without peers allows all destinations, so its named ports resolve against
 // all pods. IPBlock peers have no container ports and are left out.
-func egressNamedPortPeers(ctx context.Context, deps controllers.PolicyDeps, rule multiv1beta1.MultiNetworkPolicyEgressRule,
+func egressNamedPortPeers(ctx context.Context, deps controllers.PolicyDeps, rule multiv1beta1.MultiNetworkPolicyEgressRule, policyNamespace string,
 	podInfo *controllers.PodInfo, policyNetworks []string) (map[string]*controllers.PodInfo, error) {
 	if !slices.ContainsFunc(rule.Ports, func(p multiv1beta1.MultiNetworkPolicyPort) bool { return namedPortName(p) != "" }) {
 		return nil, nil
@@ -235,7 +235,7 @@ func egressNamedPortPeers(ctx context.Context, deps controllers.PolicyDeps, rule
 		if peer.PodSelector == nil && peer.NamespaceSelector == nil {
 			continue
 		}
-		pods, err := selectorPeerPods(ctx, deps, peer, podInfo, policyNetworks)
+		pods, err := selectorPeerPods(ctx, deps, peer, policyNamespace, podInfo, policyNetworks)
 		if err != nil {
 			return nil, err
 		}
