@@ -358,7 +358,8 @@ func TestApplyPodRulesNamedPorts(t *testing.T) {
 
 // TestEgressNamedPortPeers checks which pods egress named ports resolve
 // against: none without named ports, the selector peers, and without peers all
-// pods except the selected pod itself.
+// pods except the selected pod itself. A podSelector-only peer matches pods in
+// the policy namespace only, like the peer IP sets.
 func TestEgressNamedPortPeers(t *testing.T) {
 	deps := newTestPolicyDeps()
 	addNamespace(deps, "ns")
@@ -366,10 +367,17 @@ func TestEgressNamedPortPeers(t *testing.T) {
 	for name, ip := range map[string]string{"self": "10.2.0.1", "a": "10.2.0.2", "b": "10.2.0.3"} {
 		addPod(deps, NewFakePodWithNetAnnotation("ns", name, "net", NewFakeNetworkStatus("ns", "net", "192.168.2.1", ip), map[string]string{"name": name}))
 	}
+	// Same label as "a", on the same network, in another namespace.
+	addNamespace(deps, "other")
+	addPod(deps, NewFakePodWithNetAnnotation("other", "a", "ns/net", NewFakeNetworkStatus("ns", "net", "192.168.2.1", "10.2.0.4"), map[string]string{"name": "a"}))
 	self := &controllers.PodInfo{Interfaces: []controllers.InterfaceInfo{{NetattachName: "ns/net", IPs: []string{"10.2.0.1"}}}}
 	policyNetworks := []string{"ns/net"}
 	http, p80 := intstr.FromString("http"), intstr.FromInt32(80)
 	onlyA := []multiv1beta1.MultiNetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"name": "a"}}}}
+	otherA := []multiv1beta1.MultiNetworkPolicyPeer{{
+		NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"nsname": "other"}},
+		PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"name": "a"}},
+	}}
 	ipBlock := []multiv1beta1.MultiNetworkPolicyPeer{{IPBlock: &multiv1beta1.IPBlock{CIDR: "10.2.0.0/24"}}}
 
 	cases := []struct {
@@ -379,11 +387,12 @@ func TestEgressNamedPortPeers(t *testing.T) {
 	}{
 		{"numeric ports only", multiv1beta1.MultiNetworkPolicyEgressRule{Ports: []multiv1beta1.MultiNetworkPolicyPort{{Port: &p80}}}, nil},
 		{"selector peer", multiv1beta1.MultiNetworkPolicyEgressRule{Ports: []multiv1beta1.MultiNetworkPolicyPort{{Port: &http}}, To: onlyA}, []string{"10.2.0.2"}},
+		{"namespace and pod selector peer", multiv1beta1.MultiNetworkPolicyEgressRule{Ports: []multiv1beta1.MultiNetworkPolicyPort{{Port: &http}}, To: otherA}, []string{"10.2.0.4"}},
 		{"ipBlock peer", multiv1beta1.MultiNetworkPolicyEgressRule{Ports: []multiv1beta1.MultiNetworkPolicyPort{{Port: &http}}, To: ipBlock}, nil},
-		{"no peers", multiv1beta1.MultiNetworkPolicyEgressRule{Ports: []multiv1beta1.MultiNetworkPolicyPort{{Port: &http}}}, []string{"10.2.0.2", "10.2.0.3"}},
+		{"no peers", multiv1beta1.MultiNetworkPolicyEgressRule{Ports: []multiv1beta1.MultiNetworkPolicyPort{{Port: &http}}}, []string{"10.2.0.2", "10.2.0.3", "10.2.0.4"}},
 	}
 	for _, tc := range cases {
-		peers, err := egressNamedPortPeers(context.Background(), deps, tc.rule, self, policyNetworks)
+		peers, err := egressNamedPortPeers(context.Background(), deps, tc.rule, "ns", self, policyNetworks)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
