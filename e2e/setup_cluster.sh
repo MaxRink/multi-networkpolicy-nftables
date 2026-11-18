@@ -40,7 +40,18 @@ kubectl -n kube-system wait --for=condition=available deploy/coredns --timeout=3
 
 #install multus
 kubectl apply --wait --timeout=10s -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset.yml
-kubectl -n kube-system wait --for=condition=ready -l name=multus pod --timeout=660s
+# The install-multus-binary init container already installs the multus binary.
+# Copying the 66MB binary again from kube-multus, under its 50Mi memory limit,
+# gets it OOM-killed on CI runners. It then crash-loops without writing
+# 00-multus.conf, and pods start with only the default network.
+kubectl -n kube-system patch daemonset/kube-multus-ds --type=json \
+	-p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--skip-multus-binary-copy=true"}]'
+kubectl -n kube-system rollout status daemonset/kube-multus-ds --timeout=660s
+# Pod readiness does not prove multus is the active CNI; wait for its config.
+for node in $(kind get nodes); do
+	$OCI_BIN exec "$node" sh -c 'for i in $(seq 60); do [ -f /etc/cni/net.d/00-multus.conf ] && exit 0; sleep 2; done; exit 1' ||
+		{ echo "multus config missing on $node" >&2; exit 1; }
+done
 kubectl apply --wait --timeout=10s -f cni-install.yml
 kubectl -n kube-system rollout status daemonset/install-cni-plugins --timeout=300s
 
