@@ -916,34 +916,47 @@ func (n *nftState) allowNeighborDiscovery(chain *nftables.Chain) error {
 }
 
 func getPrefixesAsSetInterval(prefixes []string) ([]nftables.SetElement, []nftables.SetElement, error) {
-	v4Prefixes := []nftables.SetElement{}
-	v6Prefixes := []nftables.SetElement{}
+	// An interval set rejects overlapping elements, which fails the whole
+	// batch, so merge overlapping, duplicate and adjacent prefixes first.
+	var builder netipx.IPSetBuilder
 	for index, addr := range prefixes {
-		net, err := netip.ParsePrefix(addr) // validate
+		prefix, err := netip.ParsePrefix(addr) // validate
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to parse CIDR %q prefix[%d]: %w", addr, index, err)
 		}
-		if net.Addr().Is4() {
-			// specific first element to inform nftables this is an interval set
-			if index == 0 {
-				v4Prefixes = append(v4Prefixes, nftables.SetElement{
-					Key:         netip.IPv4Unspecified().AsSlice(),
-					IntervalEnd: true,
-				})
-			}
-			v4Prefixes = append(v4Prefixes, convertPrefixToSet(net)...)
-		} else {
-			// specific first element to inform nftables this is an interval set
-			if index == 0 {
-				v6Prefixes = append(v6Prefixes, nftables.SetElement{
-					Key:         netip.IPv6Unspecified().AsSlice(),
-					IntervalEnd: true,
-				})
-			}
-			v6Prefixes = append(v6Prefixes, convertPrefixToSet(net)...)
+		builder.AddPrefix(prefix)
+	}
+	ipSet, err := builder.IPSet()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to merge prefixes %v: %w", prefixes, err)
+	}
+	v4Prefixes := []nftables.SetElement{}
+	v6Prefixes := []nftables.SetElement{}
+	for _, r := range ipSet.Ranges() {
+		elements := &v4Prefixes
+		if r.From().Is6() {
+			elements = &v6Prefixes
 		}
+		// specific first element to inform nftables this is an interval set
+		if len(*elements) == 0 {
+			*elements = append(*elements, nftables.SetElement{Key: unspecifiedAddr(r.From()).AsSlice(), IntervalEnd: true})
+		}
+		// nftables needs half-open intervals [first, last+1); past the
+		// last address, the end wraps to the all-0s address.
+		end := r.To().Next()
+		if !end.IsValid() {
+			end = unspecifiedAddr(r.From())
+		}
+		*elements = append(*elements, nftables.SetElement{Key: r.From().AsSlice()}, nftables.SetElement{Key: end.AsSlice(), IntervalEnd: true})
 	}
 	return v4Prefixes, v6Prefixes, nil
+}
+
+func unspecifiedAddr(addr netip.Addr) netip.Addr {
+	if addr.Is4() {
+		return netip.IPv4Unspecified()
+	}
+	return netip.IPv6Unspecified()
 }
 
 func (n *nftState) applyCommonPrefixRules(chain *nftables.Chain, prefixes []string, prefix string) error {
@@ -1123,27 +1136,6 @@ func (n *nftState) applyCommonChainRules(cfg controllers.CommonRuleConfig) error
 	}
 
 	return nil
-}
-
-func convertPrefixToSet(prefix netip.Prefix) []nftables.SetElement {
-	// nftables needs half-open intervals [firstIP, lastIP) for prefixes
-	// e.g. 10.0.0.0/24 becomes [10.0.0.0, 10.0.1.0), 10.1.1.1/32 becomes [10.1.1.1, 10.1.1.2) etc
-	firstIP := prefix.Masked().Addr()
-	lastIP := netipx.PrefixLastIP(prefix).Next()
-	elements := []nftables.SetElement{
-		{Key: firstIP.AsSlice()},
-	}
-	// It seems .Next does not return a valid IP for the all-0s address
-	// So we need to special case that here
-	if (lastIP == netip.Addr{}) {
-		// we had a turnover, so add the all-0s address as the interval end
-		if firstIP.Is4() {
-			return append(elements, nftables.SetElement{Key: netip.IPv4Unspecified().AsSlice(), IntervalEnd: true})
-		}
-		return append(elements, nftables.SetElement{Key: netip.IPv6Unspecified().AsSlice(), IntervalEnd: true})
-	}
-
-	return append(elements, nftables.SetElement{Key: lastIP.AsSlice(), IntervalEnd: true})
 }
 
 func ifname(n string) []byte {
