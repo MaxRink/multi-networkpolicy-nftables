@@ -121,6 +121,7 @@ Every log call of `cmd/` and `pkg/`, by level, with the meaning of its format ar
 | V(2) | `removing daemon-owned legacy chain %q from table %q` | chain, table | tenant-pii | tenant-user |
 | V(2) | `removing daemon-owned legacy rule %q from chain %q in table %q` | rule comment, chain, table | tenant-pii | tenant-user |
 | V(2) | `removing daemon-owned legacy set %q from table %q` | set, table | tenant-pii | tenant-user |
+| V(2) | `replacing constant set %q, table %q` | set, table | tenant-pii | tenant-user |
 | V(4) | `Generate rules for Pod: [%s]` | pod namespace/name | tenant-pii | tenant-user |
 | V(4) | `pod %s/%s has no relevant interfaces, skipping` | pod namespace, pod name | tenant-pii | tenant-user |
 | V(6) | `netdef->pluginMap: %v` | NetworkAttachmentDefinition namespace/name to plugin type | tenant-pii | tenant-user |
