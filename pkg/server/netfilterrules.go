@@ -760,16 +760,13 @@ func (n *nftState) updateSet(set *nftables.Set, elements []nftables.SetElement) 
 
 		if len(toAdd) > 0 || len(toDel) > 0 {
 			klog.V(8).Infof("updating set %q, table %q", existingSet.Name, existingSet.Table.Name)
-			if len(toDel) > 0 {
-				if err := n.nft.SetDeleteElements(existingSet, toDel); err != nil {
-					return fmt.Errorf("failed to remove elements from set %q: %w", existingSet.Name, err)
-				}
-			}
-
-			if len(toAdd) > 0 {
-				if err := n.nft.SetAddElements(existingSet, toAdd); err != nil {
-					return fmt.Errorf("failed to add elements to set %q: %w", existingSet.Name, err)
-				}
+			// Refill the set rather than apply the difference: the kernel
+			// rejects deleting interval elements in some orders, and an
+			// interval end whose start was deleted alone cannot be deleted
+			// later. Flush and refill is one atomic step of the batch.
+			n.nft.FlushSet(existingSet)
+			if err := n.nft.SetAddElements(existingSet, elements); err != nil {
+				return fmt.Errorf("failed to add elements to set %q: %w", existingSet.Name, err)
 			}
 		}
 

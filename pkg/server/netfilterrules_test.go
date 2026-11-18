@@ -2457,6 +2457,49 @@ func portIntervals(t *testing.T, c *nftables.Conn, set *nftables.Set) [][2]uint1
 	return out
 }
 
+// prefixIntervals returns the [start-end) address intervals of the named
+// interval set, leaving out the all-0s elements.
+func prefixIntervals(t *testing.T, c *nftables.Conn, table *nftables.Table, name string) []string {
+	t.Helper()
+	if len(name) > 31 {
+		var err error
+		if name, err = hash(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	els, err := c.GetSetElements(&nftables.Set{Table: table, Name: name})
+	if err != nil {
+		t.Fatalf("GetSetElements(%s): %v", name, err)
+	}
+	var starts, ends []netip.Addr
+	for _, e := range els {
+		addr, _ := netip.AddrFromSlice(e.Key)
+		switch {
+		case addr.IsUnspecified():
+		case e.IntervalEnd:
+			ends = append(ends, addr)
+		default:
+			starts = append(starts, addr)
+		}
+	}
+	slices.SortFunc(starts, netip.Addr.Compare)
+	slices.SortFunc(ends, netip.Addr.Compare)
+	if len(starts) != len(ends) {
+		t.Fatalf("set %s has starts %v and ends %v", name, starts, ends)
+	}
+	var out []string
+	for i := range starts {
+		out = append(out, starts[i].String()+"-"+ends[i].String())
+	}
+	return out
+}
+
+// exceptSetName returns the name of the except set of an IPBlock peer.
+func exceptSetName(chain *nftables.Chain, family string, peerIndex int) string {
+	chainName := fmt.Sprintf("%s-%s-%d", chain.Name, ipBlockChainSuffix, peerIndex)
+	return fmt.Sprintf("%s_%s_%s_%s_%d", chainName, peerIPBlockExceptPrefix, family, getAddressSuffix(chainName), peerIndex)
+}
+
 // TestOverlappingPrefixesBuild checks that overlapping, duplicate and adjacent
 // prefixes that share an interval set are merged: the except list of an
 // IPBlock and the common allowed prefixes. Unmerged, the kernel rejects the
@@ -2473,12 +2516,14 @@ func TestOverlappingPrefixesBuild(t *testing.T) {
 		t.Fatalf("failed to prepare test env: %s", err.Error())
 	}
 
-	peer := multiv1beta1.MultiNetworkPolicyPeer{IPBlock: &multiv1beta1.IPBlock{
-		CIDR:   "10.0.0.0/16",
-		Except: []string{"10.0.1.0/24", "10.0.1.0/25", "10.0.1.0/24", "10.0.2.0/24", "fd00::/64", "fd00::/80"},
-	}}
-	if err := nftState.applyPolicyPeersRulesIPBlock(nftState.ingressChain.Name, nftState.ingressChain, "ns/p", peer, 0); err != nil {
-		t.Fatalf("applyPolicyPeersRulesIPBlock(): %v", err)
+	for index, ipBlock := range []multiv1beta1.IPBlock{
+		{CIDR: "10.0.0.0/16", Except: []string{"10.0.1.0/24", "10.0.1.0/25", "10.0.1.0/24", "10.0.2.0/24"}},
+		{CIDR: "fd00::/48", Except: []string{"fd00::/64", "fd00::/80", "fd00:0:0:1::/64"}},
+	} {
+		peer := multiv1beta1.MultiNetworkPolicyPeer{IPBlock: &ipBlock}
+		if err := nftState.applyPolicyPeersRulesIPBlock(nftState.ingressChain.Name, nftState.ingressChain, "ns/p", peer, index); err != nil {
+			t.Fatalf("applyPolicyPeersRulesIPBlock(%d): %v", index, err)
+		}
 	}
 	if err := nftState.applyCommonPrefixRules(nftState.commonIngressChain, []string{"192.168.0.0/16", "192.168.1.0/24", "fd01::/48", "fd01::/48"}, "overlap"); err != nil {
 		t.Fatalf("applyCommonPrefixRules(): %v", err)
@@ -2487,38 +2532,23 @@ func TestOverlappingPrefixesBuild(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 
-	for _, s := range sets(t, c, nftState.filter) {
-		els, err := c.GetSetElements(s)
-		if err != nil {
-			t.Fatalf("GetSetElements(%s): %v", s.Name, err)
-		}
-		var keys []string
-		for _, e := range els {
-			if addr, ok := netip.AddrFromSlice(e.Key); ok && !addr.IsUnspecified() {
-				keys = append(keys, fmt.Sprintf("%s/%t", addr, e.IntervalEnd))
-			}
-		}
-		slices.Sort(keys)
-		want := map[string][]string{
-			"ipv4": {"10.0.1.0/false", "10.0.3.0/true"},
-			"ipv6": {"fd00::/false", "fd00:0:0:1::/true"},
-		}
-		switch {
-		case strings.Contains(s.Name, peerIPBlockExceptPrefix) && s.KeyType == nftables.TypeIPAddr:
-			if !slices.Equal(keys, want["ipv4"]) {
-				t.Errorf("IPv4 except set %s = %v, want %v", s.Name, keys, want["ipv4"])
-			}
-		case strings.Contains(s.Name, peerIPBlockExceptPrefix):
-			if !slices.Equal(keys, want["ipv6"]) {
-				t.Errorf("IPv6 except set %s = %v, want %v", s.Name, keys, want["ipv6"])
-			}
+	commonSuffix := getAddressSuffix(nftState.commonIngressChain.Name)
+	for name, want := range map[string][]string{
+		exceptSetName(nftState.ingressChain, protoIPv4, 0):    {"10.0.1.0-10.0.3.0"},
+		exceptSetName(nftState.ingressChain, protoIPv6, 1):    {"fd00::-fd00:0:0:2::"},
+		fmt.Sprintf("overlap_%s_%s", protoIPv4, commonSuffix): {"192.168.0.0-192.169.0.0"},
+		fmt.Sprintf("overlap_%s_%s", protoIPv6, commonSuffix): {"fd01::-fd01:0:1::"},
+	} {
+		if got := prefixIntervals(t, c, nftState.filter, name); !slices.Equal(got, want) {
+			t.Errorf("set %s = %v, want %v", name, got, want)
 		}
 	}
 }
 
 // TestIPBlockExceptEdit checks that an edit of an IPBlock except list
-// updates the existing interval set: a replaced, an added and a removed
-// prefix. A failed update fails the whole batch.
+// updates the existing interval set: a replaced, an added, two shifted and a
+// removed prefix. Shifted, each new start equals an old end. A failed update
+// fails the whole batch.
 func TestIPBlockExceptEdit(t *testing.T) {
 	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
 	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
@@ -2539,7 +2569,8 @@ func TestIPBlockExceptEdit(t *testing.T) {
 		{"initial", []string{"10.0.1.0/24"}, []string{"10.0.1.0-10.0.2.0"}},
 		{"replaced", []string{"10.0.2.0/24"}, []string{"10.0.2.0-10.0.3.0"}},
 		{"added", []string{"10.0.2.0/24", "10.0.4.0/24"}, []string{"10.0.2.0-10.0.3.0", "10.0.4.0-10.0.5.0"}},
-		{"removed", []string{"10.0.4.0/24"}, []string{"10.0.4.0-10.0.5.0"}},
+		{"shifted", []string{"10.0.3.0/24", "10.0.5.0/24"}, []string{"10.0.3.0-10.0.4.0", "10.0.5.0-10.0.6.0"}},
+		{"removed", []string{"10.0.5.0/24"}, []string{"10.0.5.0-10.0.6.0"}},
 	} {
 		peer := multiv1beta1.MultiNetworkPolicyPeer{IPBlock: &multiv1beta1.IPBlock{CIDR: "10.0.0.0/16", Except: step.except}}
 		if err := nftState.applyPolicyPeersRulesIPBlock(nftState.ingressChain.Name, nftState.ingressChain, "ns/p", peer, 0); err != nil {
@@ -2548,40 +2579,7 @@ func TestIPBlockExceptEdit(t *testing.T) {
 		if err := nftState.nft.Flush(); err != nil {
 			t.Fatalf("%s: flush: %v", step.name, err)
 		}
-		var got []string
-		{
-			chainName := nftState.ingressChain.Name + "-" + ipBlockChainSuffix + "-0"
-			name := fmt.Sprintf("%s_%s_%s_%s_%d", chainName, peerIPBlockExceptPrefix, protoIPv4, getAddressSuffix(chainName), 0)
-			if len(name) > 31 {
-				if name, err = hash(name); err != nil {
-					t.Fatal(err)
-				}
-			}
-			els, err := c.GetSetElements(&nftables.Set{Table: nftState.filter, Name: name})
-			if err != nil {
-				t.Fatalf("%s: GetSetElements(%s): %v", step.name, name, err)
-			}
-			var starts, ends []netip.Addr
-			for _, e := range els {
-				addr, _ := netip.AddrFromSlice(e.Key)
-				switch {
-				case addr.IsUnspecified():
-				case e.IntervalEnd:
-					ends = append(ends, addr)
-				default:
-					starts = append(starts, addr)
-				}
-			}
-			slices.SortFunc(starts, netip.Addr.Compare)
-			slices.SortFunc(ends, netip.Addr.Compare)
-			if len(starts) != len(ends) {
-				t.Fatalf("%s: set %s has starts %v and ends %v", step.name, name, starts, ends)
-			}
-			for i := range starts {
-				got = append(got, starts[i].String()+"-"+ends[i].String())
-			}
-		}
-		if !slices.Equal(got, step.want) {
+		if got := prefixIntervals(t, c, nftState.filter, exceptSetName(nftState.ingressChain, protoIPv4, 0)); !slices.Equal(got, step.want) {
 			t.Errorf("%s: except intervals = %v, want %v", step.name, got, step.want)
 		}
 	}
