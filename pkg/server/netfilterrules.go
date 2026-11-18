@@ -81,6 +81,14 @@ type nftState struct {
 	rules  map[string]*nftables.Rule
 	sets   map[string]*nftables.Set
 	chains map[string]*nftables.Chain
+	// deletedRules holds the rules deleted in the pending batch, which the
+	// kernel still lists until the batch is flushed.
+	deletedRules map[ruleHandle]bool
+}
+
+type ruleHandle struct {
+	table  string
+	handle uint64
 }
 
 func policyRuleNamespacedName(o *multiv1beta1.MultiNetworkPolicy) string {
@@ -792,8 +800,8 @@ func (n *nftState) updateSet(set *nftables.Set, elements []nftables.SetElement) 
 // A constant set rejects any element change, so a policy edit would fail the
 // batch until the pod restarts. In the same batch, it deletes the rules that
 // look up the set and the set, and adds the set as wanted. The callers add
-// their lookup rule right after updateSet; the rule carries the new set's ID,
-// so updateRule does not take the deleted rule for it and adds it again.
+// their lookup rule right after updateSet, and findRule skips the deleted
+// rule, so updateRule adds it again.
 func (n *nftState) replaceConstantSet(existingSet, set *nftables.Set, elements []nftables.SetElement) error {
 	klog.V(2).Infof("replacing constant set %q, table %q", existingSet.Name, existingSet.Table.Name)
 	chains, err := n.nft.ListChainsOfTableFamily(existingSet.Table.Family)
@@ -816,6 +824,10 @@ func (n *nftState) replaceConstantSet(existingSet, set *nftables.Set, elements [
 				if err := n.nft.DelRule(rule); err != nil {
 					return fmt.Errorf("failed to delete rule of set %q: %w", existingSet.Name, err)
 				}
+				if n.deletedRules == nil {
+					n.deletedRules = map[ruleHandle]bool{}
+				}
+				n.deletedRules[ruleHandle{existingSet.Table.Name, rule.Handle}] = true
 			}
 		}
 	}
@@ -1806,6 +1818,9 @@ func (n *nftState) findRule(rule *nftables.Rule) (*nftables.Rule, error) {
 	}
 
 	for _, r := range rules {
+		if n.deletedRules[ruleHandle{r.Table.Name, r.Handle}] {
+			continue
+		}
 		if ruleEqual(rule, r) {
 			return r, nil
 		}
@@ -2154,6 +2169,7 @@ func chainID(c *nftables.Chain) string {
 func (n *nftState) cleanup() error {
 	defer func() {
 		n.rules = make(map[string]*nftables.Rule)
+		n.deletedRules = nil
 		n.sets = make(map[string]*nftables.Set)
 		n.chains = make(map[string]*nftables.Chain)
 	}()
