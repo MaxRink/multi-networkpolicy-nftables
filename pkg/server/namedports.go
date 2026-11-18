@@ -116,32 +116,6 @@ func resolveNamedPort(ports []v1.ContainerPort, name string, proto v1.Protocol) 
 	return 0, false
 }
 
-// numericPortsCover reports whether a numeric port or port range of the rule
-// already contains num for proto.
-func numericPortsCover(ports []multiv1beta1.MultiNetworkPolicyPort, num uint16, proto v1.Protocol) bool {
-	for _, p := range ports {
-		if namedPortName(p) != "" || portProtocol(p) != proto {
-			continue
-		}
-		if p.Port == nil {
-			// A protocol without a port covers all ports of the protocol.
-			if p.Protocol != nil {
-				return true
-			}
-			continue
-		}
-		start := p.Port.IntValue()
-		end := start
-		if p.EndPort != nil && int(*p.EndPort) > start {
-			end = int(*p.EndPort)
-		}
-		if start <= int(num) && int(num) <= end {
-			return true
-		}
-	}
-	return false
-}
-
 // resolveRuleNamedPorts splits the named ports off the ports of a rule. For
 // ingress, it returns them resolved to numeric ports, next to the numeric
 // ports. For egress, it returns them as (peer address . port) tuples. It also
@@ -151,7 +125,6 @@ func resolveRuleNamedPorts(policyName, chainName string, ports []multiv1beta1.Mu
 	[]multiv1beta1.MultiNetworkPolicyPort, map[namedPortTupleKey]map[string]nftables.SetElement, bool) {
 	numeric := make([]multiv1beta1.MultiNetworkPolicyPort, 0, len(ports))
 	tuples := make(map[namedPortTupleKey]map[string]nftables.SetElement)
-	resolved := make(map[v1.Protocol]map[uint16]bool)
 	hasNamed := false
 	for _, port := range ports {
 		name := namedPortName(port)
@@ -172,15 +145,6 @@ func resolveRuleNamedPorts(policyName, chainName string, ports []multiv1beta1.Mu
 			logUnresolvedNamedPort(policyName, chainName, name, proto)
 			continue
 		}
-		// The interval set rejects overlapping elements: skip a port that is
-		// already in it.
-		if resolved[proto][num] || numericPortsCover(ports, num, proto) {
-			continue
-		}
-		if resolved[proto] == nil {
-			resolved[proto] = make(map[uint16]bool)
-		}
-		resolved[proto][num] = true
 		numeric = append(numeric, multiv1beta1.MultiNetworkPolicyPort{
 			Protocol: &proto,
 			Port:     &intstr.IntOrString{Type: intstr.Int, IntVal: int32(num)},
@@ -232,7 +196,9 @@ func egressNamedPortPeers(ctx context.Context, deps controllers.PolicyDeps, rule
 	}
 	all := make(map[string]*controllers.PodInfo)
 	for _, peer := range peers {
-		if peer.PodSelector == nil && peer.NamespaceSelector == nil {
+		// An IPBlock takes precedence over selectors in the same peer, as in
+		// applyPolicyPeersRules; its pods must not widen the CIDR.
+		if peer.IPBlock != nil || (peer.PodSelector == nil && peer.NamespaceSelector == nil) {
 			continue
 		}
 		pods, err := selectorPeerPods(ctx, deps, peer, policyNamespace, podInfo, policyNetworks)
