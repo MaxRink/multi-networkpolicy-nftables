@@ -18,13 +18,16 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"testing"
 
 	nftables "github.com/google/nftables"
+	"github.com/google/nftables/expr"
 	multiv1beta1 "github.com/k8snetworkplumbingwg/multi-networkpolicy/pkg/apis/k8s.cni.cncf.io/v1beta1"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/nftest"
+	"golang.org/x/sys/unix"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -66,5 +69,75 @@ func TestApplyPolicyRulesPolicyEdit(t *testing.T) {
 	table := &nftables.Table{Family: nftables.TableFamilyINet, Name: FilterTableName}
 	if got := portIntervals(t, c, findSetByComment(t, c, table, "", "ports_0_tcp")); !slices.Equal(got, [][2]uint16{{81, 81}}) {
 		t.Errorf("tcp ports after the edit = %v, want [[81 81]]", got)
+	}
+}
+
+// TestConstantSetReplaced checks that a ports set an older version created
+// constant is replaced on the next apply, so that a policy edit can change
+// its elements. A constant set rejected the edit and failed the batch on
+// every reconcile until the pod restarted.
+func TestConstantSetReplaced(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.CloseLasting()
+	c.FlushRuleset()
+	defer c.FlushRuleset()
+
+	nftState, _, _, _, err := prepareEnv(c, false)
+	if err != nil {
+		t.Fatalf("failed to prepare test env: %s", err.Error())
+	}
+	chain := nftState.ingressChain
+
+	// What an older version left behind: a constant ports set and its rule.
+	portsName := nftNameWithSuffix(chain.Name, "-", fmt.Sprintf("%s-%d", portsChainSuffix, 0))
+	portChain := c.AddChain(&nftables.Chain{Name: portsName, Table: chain.Table})
+	legacy := nftState.getInetSet(chain, portsName, "tcp")
+	legacy.Constant = true
+	p80 := intstr.FromInt32(80)
+	elements, err := validatePortSpec(multiv1beta1.MultiNetworkPolicyPort{Port: &p80})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AddSet(legacy, elements); err != nil {
+		t.Fatal(err)
+	}
+	if err := nftState.applyProtoPortsRules(portsName, portChain, "ns/p", legacy, []byte{unix.IPPROTO_TCP}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(); err != nil {
+		t.Fatalf("flush legacy state: %v", err)
+	}
+
+	for _, port := range []int32{81, 82} {
+		p := intstr.FromInt32(port)
+		if err := nftState.applyPolicyPortsRules(chain.Name, chain, "ns/p", []multiv1beta1.MultiNetworkPolicyPort{{Port: &p}}, 0, namedPortTargets{}); err != nil {
+			t.Fatalf("port %d: applyPolicyPortsRules(): %v", port, err)
+		}
+		if err := c.Flush(); err != nil {
+			t.Fatalf("port %d: flush: %v", port, err)
+		}
+		set := findSetByComment(t, c, chain.Table, "", "ports_0_tcp")
+		if set.Constant {
+			t.Errorf("port %d: set %s is still constant", port, set.Name)
+		}
+		if got := portIntervals(t, c, set); !slices.Equal(got, [][2]uint16{{uint16(port), uint16(port)}}) {
+			t.Errorf("port %d: tcp ports = %v", port, got)
+		}
+		rules, err := c.GetRules(chain.Table, portChain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lookups := 0
+		for _, r := range rules {
+			for _, e := range r.Exprs {
+				if l, ok := e.(*expr.Lookup); ok && l.SetName == set.Name {
+					lookups++
+				}
+			}
+		}
+		if lookups != 1 {
+			t.Errorf("port %d: %d rules look up set %s, want 1", port, lookups, set.Name)
+		}
 	}
 }
