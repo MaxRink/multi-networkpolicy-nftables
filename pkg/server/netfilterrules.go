@@ -750,6 +750,10 @@ func (n *nftState) updateSet(set *nftables.Set, elements []nftables.SetElement) 
 
 	exists := err == nil && existingSet != nil
 
+	if exists && existingSet.Constant {
+		return n.replaceConstantSet(existingSet, set, elements)
+	}
+
 	if exists {
 		existingElements, err := n.nft.GetSetElements(existingSet)
 		if err != nil {
@@ -780,6 +784,45 @@ func (n *nftState) updateSet(set *nftables.Set, elements []nftables.SetElement) 
 		return fmt.Errorf("failed to add set %q to table %q: %w", set.Name, set.Table.Name, err)
 	}
 
+	n.sets[fmt.Sprintf("%s-%s", set.Table.Name, set.Name)] = set
+	return nil
+}
+
+// replaceConstantSet replaces a set that an older version created constant.
+// A constant set rejects any element change, so a policy edit would fail the
+// batch until the pod restarts. In the same batch, it deletes the rules that
+// look up the set and the set, and adds the set as wanted. The callers add
+// their lookup rule right after updateSet; the rule carries the new set's ID,
+// so updateRule does not take the deleted rule for it and adds it again.
+func (n *nftState) replaceConstantSet(existingSet, set *nftables.Set, elements []nftables.SetElement) error {
+	klog.V(2).Infof("replacing constant set %q, table %q", existingSet.Name, existingSet.Table.Name)
+	chains, err := n.nft.ListChainsOfTableFamily(existingSet.Table.Family)
+	if err != nil {
+		return fmt.Errorf("failed to list chains to replace set %q: %w", existingSet.Name, err)
+	}
+	for _, chain := range chains {
+		if chain.Table.Name != existingSet.Table.Name {
+			continue
+		}
+		rules, err := n.nft.GetRules(existingSet.Table, chain)
+		if err != nil {
+			return fmt.Errorf("failed to list rules of chain %q to replace set %q: %w", chain.Name, existingSet.Name, err)
+		}
+		for _, rule := range rules {
+			if slices.ContainsFunc(rule.Exprs, func(e expr.Any) bool {
+				l, ok := e.(*expr.Lookup)
+				return ok && l.SetName == existingSet.Name
+			}) {
+				if err := n.nft.DelRule(rule); err != nil {
+					return fmt.Errorf("failed to delete rule of set %q: %w", existingSet.Name, err)
+				}
+			}
+		}
+	}
+	n.nft.DelSet(existingSet)
+	if err := n.nft.AddSet(set, elements); err != nil {
+		return fmt.Errorf("failed to add set %q to table %q: %w", set.Name, set.Table.Name, err)
+	}
 	n.sets[fmt.Sprintf("%s-%s", set.Table.Name, set.Name)] = set
 	return nil
 }
