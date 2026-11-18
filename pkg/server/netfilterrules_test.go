@@ -2350,3 +2350,109 @@ func TestCleanupChainsKeepsForeignTableChains(t *testing.T) {
 		t.Errorf("foreign empty chain was incorrectly removed")
 	}
 }
+
+// TestApplyPolicyPortsRulesOverlappingPorts checks that overlapping and
+// adjacent ports of a rule are merged, since an interval set rejects
+// overlapping elements and so would fail the whole batch, and that a port
+// entry without a port allows all ports of its protocol, which defaults to TCP.
+func TestApplyPolicyPortsRulesOverlappingPorts(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.CloseLasting()
+	c.FlushRuleset()
+	defer c.FlushRuleset()
+
+	nftState, _, _, _, err := prepareEnv(c, false)
+	if err != nil {
+		t.Fatalf("failed to prepare test env: %s", err.Error())
+	}
+
+	udp := corev1.ProtocolUDP
+	p53, p80, p85, p96, p97 := intstr.FromInt32(53), intstr.FromInt32(80), intstr.FromInt32(85), intstr.FromInt32(96), intstr.FromInt32(97)
+	end90, end95 := int32(90), int32(95)
+	overlapping := []multiv1beta1.MultiNetworkPolicyPort{
+		{Port: &p85, EndPort: &end95},
+		{Port: &p80, EndPort: &end90},
+		{Port: &p96}, // adjacent to 85-95
+		{Port: &p97},
+		{Protocol: &udp, Port: &p53},
+		{Protocol: &udp, Port: &p53},
+	}
+	for index, ports := range [][]multiv1beta1.MultiNetworkPolicyPort{overlapping, {{}, {Port: &p80}}} {
+		if err := nftState.applyPolicyPortsRules(nftState.ingressChain.Name, nftState.ingressChain, "ns/p", ports, index); err != nil {
+			t.Fatalf("applyPolicyPortsRules(%d): %v", index, err)
+		}
+	}
+	if err := nftState.nft.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	for suffix, want := range map[string][][2]uint16{
+		"ports_0_tcp": {{80, 97}},
+		"ports_0_udp": {{53, 53}},
+		"ports_1_tcp": {{1, 65535}},
+	} {
+		if got := portIntervals(t, c, findSetByComment(t, c, nftState.filter, "", suffix)); !slices.Equal(got, want) {
+			t.Errorf("%s = %v, want %v", suffix, got, want)
+		}
+	}
+	for _, s := range sets(t, c, nftState.filter) {
+		if strings.Contains(s.Comment, "ports_1_udp") {
+			t.Error("a port entry without protocol and port created a UDP set")
+		}
+	}
+}
+
+func sets(t *testing.T, c *nftables.Conn, table *nftables.Table) []*nftables.Set {
+	t.Helper()
+	all, err := c.GetSets(table)
+	if err != nil {
+		t.Fatalf("GetSets(%s): %v", table.Name, err)
+	}
+	return all
+}
+
+// findSetByComment returns the one set whose comment (its unhashed name) has
+// the given prefix and suffix.
+func findSetByComment(t *testing.T, c *nftables.Conn, table *nftables.Table, prefix, suffix string) *nftables.Set {
+	t.Helper()
+	var found []*nftables.Set
+	var comments []string
+	for _, s := range sets(t, c, table) {
+		comments = append(comments, s.Comment)
+		if strings.HasPrefix(s.Comment, prefix) && strings.HasSuffix(s.Comment, suffix) {
+			found = append(found, s)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("found %d sets with comment %q...%q, want 1; sets: %v", len(found), prefix, suffix, comments)
+	}
+	return found[0]
+}
+
+// portIntervals returns the closed port intervals of an interval set.
+func portIntervals(t *testing.T, c *nftables.Conn, set *nftables.Set) [][2]uint16 {
+	t.Helper()
+	els, err := c.GetSetElements(set)
+	if err != nil {
+		t.Fatalf("GetSetElements(%s): %v", set.Name, err)
+	}
+	var starts, ends []uint16
+	for _, e := range els {
+		if e.IntervalEnd {
+			ends = append(ends, binaryutil.BigEndian.Uint16(e.Key)-1)
+		} else {
+			starts = append(starts, binaryutil.BigEndian.Uint16(e.Key))
+		}
+	}
+	slices.Sort(starts)
+	slices.Sort(ends)
+	if len(starts) != len(ends) {
+		t.Fatalf("set %s has %d starts and %d ends", set.Name, len(starts), len(ends))
+	}
+	out := make([][2]uint16, len(starts))
+	for i := range starts {
+		out[i] = [2]uint16{starts[i], ends[i]}
+	}
+	return out
+}
