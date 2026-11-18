@@ -81,6 +81,14 @@ type nftState struct {
 	rules  map[string]*nftables.Rule
 	sets   map[string]*nftables.Set
 	chains map[string]*nftables.Chain
+	// deletedRules holds the rules deleted in the pending batch, which the
+	// kernel still lists until the batch is flushed.
+	deletedRules map[ruleHandle]bool
+}
+
+type ruleHandle struct {
+	table  string
+	handle uint64
 }
 
 func policyRuleNamespacedName(o *multiv1beta1.MultiNetworkPolicy) string {
@@ -750,6 +758,10 @@ func (n *nftState) updateSet(set *nftables.Set, elements []nftables.SetElement) 
 
 	exists := err == nil && existingSet != nil
 
+	if exists && existingSet.Constant {
+		return n.replaceConstantSet(existingSet, set, elements)
+	}
+
 	if exists {
 		existingElements, err := n.nft.GetSetElements(existingSet)
 		if err != nil {
@@ -780,6 +792,49 @@ func (n *nftState) updateSet(set *nftables.Set, elements []nftables.SetElement) 
 		return fmt.Errorf("failed to add set %q to table %q: %w", set.Name, set.Table.Name, err)
 	}
 
+	n.sets[fmt.Sprintf("%s-%s", set.Table.Name, set.Name)] = set
+	return nil
+}
+
+// replaceConstantSet replaces a set that an older version created constant.
+// A constant set rejects any element change, so a policy edit would fail the
+// batch until the pod restarts. In the same batch, it deletes the rules that
+// look up the set and the set, and adds the set as wanted. The callers add
+// their lookup rule right after updateSet, and findRule skips the deleted
+// rule, so updateRule adds it again.
+func (n *nftState) replaceConstantSet(existingSet, set *nftables.Set, elements []nftables.SetElement) error {
+	klog.V(2).Infof("replacing constant set %q, table %q", existingSet.Name, existingSet.Table.Name)
+	chains, err := n.nft.ListChainsOfTableFamily(existingSet.Table.Family)
+	if err != nil {
+		return fmt.Errorf("failed to list chains to replace set %q: %w", existingSet.Name, err)
+	}
+	for _, chain := range chains {
+		if chain.Table.Name != existingSet.Table.Name {
+			continue
+		}
+		rules, err := n.nft.GetRules(existingSet.Table, chain)
+		if err != nil {
+			return fmt.Errorf("failed to list rules of chain %q to replace set %q: %w", chain.Name, existingSet.Name, err)
+		}
+		for _, rule := range rules {
+			if slices.ContainsFunc(rule.Exprs, func(e expr.Any) bool {
+				l, ok := e.(*expr.Lookup)
+				return ok && l.SetName == existingSet.Name
+			}) {
+				if err := n.nft.DelRule(rule); err != nil {
+					return fmt.Errorf("failed to delete rule of set %q: %w", existingSet.Name, err)
+				}
+				if n.deletedRules == nil {
+					n.deletedRules = map[ruleHandle]bool{}
+				}
+				n.deletedRules[ruleHandle{existingSet.Table.Name, rule.Handle}] = true
+			}
+		}
+	}
+	n.nft.DelSet(existingSet)
+	if err := n.nft.AddSet(set, elements); err != nil {
+		return fmt.Errorf("failed to add set %q to table %q: %w", set.Name, set.Table.Name, err)
+	}
 	n.sets[fmt.Sprintf("%s-%s", set.Table.Name, set.Name)] = set
 	return nil
 }
@@ -1763,6 +1818,9 @@ func (n *nftState) findRule(rule *nftables.Rule) (*nftables.Rule, error) {
 	}
 
 	for _, r := range rules {
+		if n.deletedRules[ruleHandle{r.Table.Name, r.Handle}] {
+			continue
+		}
 		if ruleEqual(rule, r) {
 			return r, nil
 		}
@@ -2111,6 +2169,7 @@ func chainID(c *nftables.Chain) string {
 func (n *nftState) cleanup() error {
 	defer func() {
 		n.rules = make(map[string]*nftables.Rule)
+		n.deletedRules = nil
 		n.sets = make(map[string]*nftables.Set)
 		n.chains = make(map[string]*nftables.Chain)
 	}()
