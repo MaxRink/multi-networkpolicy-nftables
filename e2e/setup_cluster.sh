@@ -39,7 +39,13 @@ kubectl -n kube-system rollout status daemonset/calico-node --timeout=300s
 kubectl -n kube-system wait --for=condition=available deploy/coredns --timeout=300s
 
 #install multus
-kubectl apply --wait --timeout=10s -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset.yml
+# Pin the manifest to a release tag and the image by tag and digest. The upstream
+# manifest references the moving :snapshot image even on release tags.
+MULTUS_VERSION=v4.3.1
+MULTUS_IMAGE="ghcr.io/k8snetworkplumbingwg/multus-cni:${MULTUS_VERSION}@sha256:9dc8ca645a78552ed4151cf67c2998d18f260f172cc541580d8acce2ee3495c2"
+multus_manifest=$(curl -fsSL "https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/${MULTUS_VERSION}/deployments/multus-daemonset.yml")
+printf '%s\n' "$multus_manifest" | sed "s#ghcr.io/k8snetworkplumbingwg/multus-cni:snapshot#${MULTUS_IMAGE}#" |
+	kubectl apply --wait --timeout=10s -f -
 # The install-multus-binary init container already installs the multus binary.
 # Copying the 66MB binary again from kube-multus, under its 50Mi memory limit,
 # gets it OOM-killed on CI runners. It then crash-loops without writing
