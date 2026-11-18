@@ -410,60 +410,6 @@ func setContainerPorts(deps *testPolicyDeps, namespace, name string, ports ...co
 	deps.podMap[key] = info
 }
 
-func sets(t *testing.T, c *nftables.Conn, table *nftables.Table) []*nftables.Set {
-	t.Helper()
-	all, err := c.GetSets(table)
-	if err != nil {
-		t.Fatalf("GetSets(%s): %v", table.Name, err)
-	}
-	return all
-}
-
-// findSetByComment returns the one set whose comment (its unhashed name) has
-// the given prefix and suffix.
-func findSetByComment(t *testing.T, c *nftables.Conn, table *nftables.Table, prefix, suffix string) *nftables.Set {
-	t.Helper()
-	var found []*nftables.Set
-	var comments []string
-	for _, s := range sets(t, c, table) {
-		comments = append(comments, s.Comment)
-		if strings.HasPrefix(s.Comment, prefix) && strings.HasSuffix(s.Comment, suffix) {
-			found = append(found, s)
-		}
-	}
-	if len(found) != 1 {
-		t.Fatalf("found %d sets with comment %q...%q, want 1; sets: %v", len(found), prefix, suffix, comments)
-	}
-	return found[0]
-}
-
-// portIntervals returns the closed port intervals of an interval set.
-func portIntervals(t *testing.T, c *nftables.Conn, set *nftables.Set) [][2]uint16 {
-	t.Helper()
-	els, err := c.GetSetElements(set)
-	if err != nil {
-		t.Fatalf("GetSetElements(%s): %v", set.Name, err)
-	}
-	var starts, ends []uint16
-	for _, e := range els {
-		if e.IntervalEnd {
-			ends = append(ends, binaryutil.BigEndian.Uint16(e.Key)-1)
-		} else {
-			starts = append(starts, binaryutil.BigEndian.Uint16(e.Key))
-		}
-	}
-	slices.Sort(starts)
-	slices.Sort(ends)
-	if len(starts) != len(ends) {
-		t.Fatalf("set %s has %d starts and %d ends", set.Name, len(starts), len(ends))
-	}
-	out := make([][2]uint16, len(starts))
-	for i := range starts {
-		out[i] = [2]uint16{starts[i], ends[i]}
-	}
-	return out
-}
-
 // tupleElements returns the "addr:port" elements of a named port tuple set.
 func tupleElements(t *testing.T, c *nftables.Conn, set *nftables.Set) []string {
 	t.Helper()
