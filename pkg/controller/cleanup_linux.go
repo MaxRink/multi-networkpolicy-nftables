@@ -6,8 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"time"
 
 	"github.com/telekom/multi-networkpolicy-nftables/pkg/controllers"
 	corev1 "k8s.io/api/core/v1"
@@ -16,10 +14,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// debugLog writes to stderr and klog, both of which are captured in container logs.
+// debugLog logs through klog only, so that the output follows --log-format. klog
+// writes each line synchronously to stderr, so nothing is lost when the process exits.
 func debugLog(_ string, format string, args ...interface{}) {
-	msg := fmt.Sprintf(time.Now().UTC().Format("15:04:05.000")+" "+format+"\n", args...)
-	fmt.Fprint(os.Stderr, msg)
 	klog.Infof(format, args...)
 }
 
