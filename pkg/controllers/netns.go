@@ -173,11 +173,22 @@ func NewPodInfoFromPod(ctx context.Context, pod *corev1.Pod, criClient pb.Runtim
 	})
 
 	return &PodInfo{
-		Name:          pod.Name,
-		Namespace:     pod.Namespace,
-		NetworkStatus: statuses,
-		NetNSPath:     netnsPath,
-		NodeName:      pod.Spec.NodeName,
-		Interfaces:    netifs,
+		Name:           pod.Name,
+		Namespace:      pod.Namespace,
+		NetworkStatus:  statuses,
+		NetNSPath:      netnsPath,
+		NodeName:       pod.Spec.NodeName,
+		Interfaces:     netifs,
+		ContainerPorts: containerPorts(pod),
 	}, nil
+}
+
+// containerPorts returns the ports of all containers of the pod. Like
+// Kubernetes NetworkPolicy, it leaves out init and ephemeral containers.
+func containerPorts(pod *corev1.Pod) []corev1.ContainerPort {
+	var ports []corev1.ContainerPort
+	for _, c := range pod.Spec.Containers {
+		ports = append(ports, c.Ports...)
+	}
+	return ports
 }

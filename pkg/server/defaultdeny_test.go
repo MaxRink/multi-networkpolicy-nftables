@@ -199,9 +199,9 @@ func TestOptionsValidateDefaultDeny(t *testing.T) {
 // apply on, instead of failing the batch and leaving the pod without rules.
 func TestApplyPolicyRulesInvalidPolicyFailsClosed(t *testing.T) {
 	for name, breakPolicy := range map[string]func(*multiv1beta1.MultiNetworkPolicy){
-		"named port": func(p *multiv1beta1.MultiNetworkPolicy) {
-			named := intstr.FromString("http")
-			p.Spec.Ingress[0].Ports[0].Port = &named
+		"port out of range": func(p *multiv1beta1.MultiNetworkPolicy) {
+			outOfRange := intstr.FromInt32(70000)
+			p.Spec.Ingress[0].Ports[0].Port = &outOfRange
 		},
 		"invalid cidr": func(p *multiv1beta1.MultiNetworkPolicy) {
 			p.Spec.Ingress[0].From = []multiv1beta1.MultiNetworkPolicyPeer{{IPBlock: &multiv1beta1.IPBlock{CIDR: "10.0.0.0/33"}}}
