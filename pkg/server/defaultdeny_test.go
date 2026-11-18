@@ -260,3 +260,41 @@ func TestApplyPolicyRulesNamedPortPolicyIsValid(t *testing.T) {
 		t.Errorf("%s rules = %q, want the jump to the policy chain", ingressChain, got)
 	}
 }
+
+// TestApplyPolicyRulesOverlappingPortsFirstApply checks that a valid policy
+// with overlapping port ranges builds on the first apply to a pod. Unmerged,
+// the interval set rejected them, and the failed batch also dropped the
+// interface jumps and the default-deny drops, leaving the pod open.
+func TestApplyPolicyRulesOverlappingPortsFirstApply(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.FlushRuleset()
+	defer c.CloseLasting()
+	c.FlushRuleset()
+
+	podInfo, newPolicy := defaultDenyPod("testns1")
+	pod := NewFakePodWithNetAnnotation("testns1", "testpod1", "policy-net-1", "", nil)
+	policy := newPolicy()
+	p80, p85 := intstr.FromInt32(80), intstr.FromInt32(85)
+	end90, end95 := int32(90), int32(95)
+	policy.Spec.Ingress[0].Ports = []multiv1beta1.MultiNetworkPolicyPort{{Port: &p80, EndPort: &end90}, {Port: &p85, EndPort: &end95}}
+	if err := validatePolicy(policy); err != nil {
+		t.Fatalf("validatePolicy() error = %v, want nil", err)
+	}
+	policies := controllers.PolicyMap{types.NamespacedName{Namespace: "testns1", Name: policy.Name}: policy}
+	cfg := controllers.CommonRuleConfig{DefaultDenyIngress: true, DefaultDenyEgress: true}
+	if err := ApplyPolicyRulesForPodAndFamily(context.Background(), newTestPolicyDeps(), cfg, policies, pod, podInfo, c); err != nil {
+		t.Fatalf("ApplyPolicyRulesForPodAndFamily() error = %v, want nil", err)
+	}
+
+	if got, want := chainComments(t, c, "input"), []string{inputInterfaceFilterComment}; !reflect.DeepEqual(got, want) {
+		t.Errorf("input rules = %q, want %q", got, want)
+	}
+	got := chainComments(t, c, ingressChain)
+	if len(got) != 4 || got[0] != "common-ingress-chain" || got[3] != "drop-remaining" || !strings.Contains(got[1], "policy:testns1/allow-80") {
+		t.Errorf("%s rules = %q, want common jump, policy jump, mark check, drop-remaining", ingressChain, got)
+	}
+	if got, want := chainComments(t, c, egressChain), []string{"common-egress-chain", "drop-remaining"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("%s rules = %q, want %q", egressChain, got, want)
+	}
+}
