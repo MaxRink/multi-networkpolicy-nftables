@@ -182,14 +182,16 @@ Rollout:
    apiVersion: k8s.cni.cncf.io/v1beta1
    kind: MultiNetworkPolicy
    metadata:
-     name: allow-all-ingress
+     name: allow-all
      namespace: my-namespace
      annotations:
        k8s.v1.cni.cncf.io/policy-for: my-namespace/my-network
    spec:
      podSelector: {}
-     policyTypes: [Ingress]
+     policyTypes: [Ingress, Egress]
      ingress:
+     - {}
+     egress:
      - {}
    ```
 
