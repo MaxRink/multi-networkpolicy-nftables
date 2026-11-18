@@ -2410,3 +2410,74 @@ func TestOverlappingPrefixesBuild(t *testing.T) {
 		}
 	}
 }
+
+// TestIPBlockExceptEdit checks that an edit of an IPBlock except list
+// updates the existing interval set: a replaced, an added and a removed
+// prefix. A failed update fails the whole batch.
+func TestIPBlockExceptEdit(t *testing.T) {
+	c, newNS := nftest.OpenSystemConn(t, true, DEBUG)
+	defer nftest.CleanupSystemConn(t, newNS, DEBUG)
+	defer c.CloseLasting()
+	c.FlushRuleset()
+	defer c.FlushRuleset()
+
+	nftState, _, _, _, err := prepareEnv(c, false)
+	if err != nil {
+		t.Fatalf("failed to prepare test env: %s", err.Error())
+	}
+
+	for _, step := range []struct {
+		name   string
+		except []string
+		want   []string
+	}{
+		{"initial", []string{"10.0.1.0/24"}, []string{"10.0.1.0-10.0.2.0"}},
+		{"replaced", []string{"10.0.2.0/24"}, []string{"10.0.2.0-10.0.3.0"}},
+		{"added", []string{"10.0.2.0/24", "10.0.4.0/24"}, []string{"10.0.2.0-10.0.3.0", "10.0.4.0-10.0.5.0"}},
+		{"removed", []string{"10.0.4.0/24"}, []string{"10.0.4.0-10.0.5.0"}},
+	} {
+		peer := multiv1beta1.MultiNetworkPolicyPeer{IPBlock: &multiv1beta1.IPBlock{CIDR: "10.0.0.0/16", Except: step.except}}
+		if err := nftState.applyPolicyPeersRulesIPBlock(nftState.ingressChain.Name, nftState.ingressChain, "ns/p", peer, 0); err != nil {
+			t.Fatalf("%s: applyPolicyPeersRulesIPBlock(): %v", step.name, err)
+		}
+		if err := nftState.nft.Flush(); err != nil {
+			t.Fatalf("%s: flush: %v", step.name, err)
+		}
+		var got []string
+		{
+			chainName := nftState.ingressChain.Name + "-" + ipBlockChainSuffix + "-0"
+			name := fmt.Sprintf("%s_%s_%s_%s_%d", chainName, peerIPBlockExceptPrefix, protoIPv4, getAddressSuffix(chainName), 0)
+			if len(name) > 31 {
+				if name, err = hash(name); err != nil {
+					t.Fatal(err)
+				}
+			}
+			els, err := c.GetSetElements(&nftables.Set{Table: nftState.filter, Name: name})
+			if err != nil {
+				t.Fatalf("%s: GetSetElements(%s): %v", step.name, name, err)
+			}
+			var starts, ends []netip.Addr
+			for _, e := range els {
+				addr, _ := netip.AddrFromSlice(e.Key)
+				switch {
+				case addr.IsUnspecified():
+				case e.IntervalEnd:
+					ends = append(ends, addr)
+				default:
+					starts = append(starts, addr)
+				}
+			}
+			slices.SortFunc(starts, netip.Addr.Compare)
+			slices.SortFunc(ends, netip.Addr.Compare)
+			if len(starts) != len(ends) {
+				t.Fatalf("%s: set %s has starts %v and ends %v", step.name, name, starts, ends)
+			}
+			for i := range starts {
+				got = append(got, starts[i].String()+"-"+ends[i].String())
+			}
+		}
+		if !slices.Equal(got, step.want) {
+			t.Errorf("%s: except intervals = %v, want %v", step.name, got, step.want)
+		}
+	}
+}
