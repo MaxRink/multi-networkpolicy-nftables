@@ -108,13 +108,18 @@ func podNeedsNetworkStatus(pod *corev1.Pod, networks []*netdefv1.NetworkSelectio
 }
 
 // RequestsSecondaryNetworks reports whether the pod's networks annotation
-// selects at least one secondary network.
+// selects at least one secondary network. An annotation that cannot be parsed
+// counts as a selection, so its pod is not mistaken for a single-network pod.
 func RequestsSecondaryNetworks(pod *corev1.Pod) bool {
 	if pod == nil {
 		return false
 	}
 	networkAnnotation := strings.TrimSpace(pod.Annotations[netdefv1.NetworkAttachmentAnnot])
-	return networkAnnotation != "" && networkAnnotation != "[]" && networkAnnotation != "null"
+	if networkAnnotation == "" || networkAnnotation == "null" {
+		return false
+	}
+	networks, err := netdefutils.ParseNetworkAnnotation(networkAnnotation, pod.Namespace)
+	return err != nil || len(networks) > 0
 }
 
 // HasSecondaryNetworkStatus reports whether statuses contain an entry for a
@@ -122,6 +127,19 @@ func RequestsSecondaryNetworks(pod *corev1.Pod) bool {
 func HasSecondaryNetworkStatus(statuses []netdefv1.NetworkStatus) bool {
 	for _, status := range statuses {
 		if status.Interface != "" && status.Interface != "eth0" && !status.Default {
+			return true
+		}
+	}
+	return false
+}
+
+// HasPublishedSecondaryNetworkStatus reports whether statuses contain an entry
+// for a secondary (non-default) attachment, with or without an interface name.
+// Multus publishes network-status once every attachment is set up, and
+// attachments such as SR-IOV with DPDK report no kernel interface.
+func HasPublishedSecondaryNetworkStatus(statuses []netdefv1.NetworkStatus) bool {
+	for _, status := range statuses {
+		if !status.Default && status.Interface != "eth0" {
 			return true
 		}
 	}

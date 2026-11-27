@@ -127,7 +127,7 @@ func (r *NodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 // reported, a pod without usable interfaces is attached only to networks this
 // controller does not handle, and requeueing it would loop forever.
 func podNeedsInterfaceRetry(pod *corev1.Pod, podInfo *controllers.PodInfo) bool {
-	if podInfo != nil && controllers.HasSecondaryNetworkStatus(podInfo.NetworkStatus) {
+	if podInfo != nil && controllers.HasPublishedSecondaryNetworkStatus(podInfo.NetworkStatus) {
 		return false
 	}
 	return controllers.RequestsSecondaryNetworks(pod)

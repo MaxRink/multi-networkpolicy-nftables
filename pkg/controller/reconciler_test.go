@@ -310,41 +310,56 @@ func TestReconcile_PendingSecondaryInterfaceRequeues(t *testing.T) {
 
 // A pod whose secondary network is reported in network-status but handled by
 // a plugin this controller does not manage never gains interfaces, so it must
-// not requeue forever.
-func TestReconcile_UnmanagedSecondaryInterfaceDoesNotRequeue(t *testing.T) {
-	namespace, nodeName := testScope(t)
-	pod := newPod(namespace, "pod-unmanaged-interface", nodeName, map[string]string{"app": "demo"})
-	pod.Annotations = map[string]string{
-		netdefv1.NetworkAttachmentAnnot: "default/secondary",
+// not requeue forever. The same holds for an attachment that reports no kernel
+// interface, such as SR-IOV with DPDK, and for an empty network selection.
+func TestReconcile_SettledNetworksDoNotRequeue(t *testing.T) {
+	tests := []struct {
+		name      string
+		selection string
+		statuses  []netdefv1.NetworkStatus
+	}{
+		{name: "unmanaged", selection: "default/secondary", statuses: []netdefv1.NetworkStatus{{Name: "default/secondary", Interface: "net1"}}},
+		{name: "no-interface", selection: "default/secondary", statuses: []netdefv1.NetworkStatus{{Name: "default/secondary"}}},
+		{name: "empty", selection: "[ ]"},
+		{name: "empty-multiline", selection: "[\n]"},
 	}
-	seedObjects(t,
-		newNamespace(namespace, nil),
-		newNode(nodeName),
-		pod,
-	)
-	setPodRunning(t, pod)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			namespace, nodeName := testScope(t)
+			pod := newPod(namespace, "pod-settled", nodeName, map[string]string{"app": "demo"})
+			pod.Annotations = map[string]string{
+				netdefv1.NetworkAttachmentAnnot: tt.selection,
+			}
+			seedObjects(t,
+				newNamespace(namespace, nil),
+				newNode(nodeName),
+				pod,
+			)
+			setPodRunning(t, pod)
 
-	r := &NodeReconciler{
-		NodeName: nodeName,
-		Client:   testClient,
-		PolicyDeps: &mockPolicyDeps{
-			getPodInfoFunc: func(*corev1.Pod) (*controllers.PodInfo, error) {
-				return &controllers.PodInfo{
-					Name:          pod.Name,
-					Namespace:     pod.Namespace,
-					NodeName:      nodeName,
-					NetworkStatus: []netdefv1.NetworkStatus{{Name: "default/secondary", Interface: "net1"}},
-				}, nil
-			},
-		},
-	}
+			r := &NodeReconciler{
+				NodeName: nodeName,
+				Client:   testClient,
+				PolicyDeps: &mockPolicyDeps{
+					getPodInfoFunc: func(*corev1.Pod) (*controllers.PodInfo, error) {
+						return &controllers.PodInfo{
+							Name:          pod.Name,
+							Namespace:     pod.Namespace,
+							NodeName:      nodeName,
+							NetworkStatus: tt.statuses,
+						}, nil
+					},
+				},
+			}
 
-	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
-	if err != nil {
-		t.Fatalf("Reconcile() error = %v", err)
-	}
-	if result.RequeueAfter != 0 {
-		t.Fatalf("Reconcile() RequeueAfter = %s, want no requeue", result.RequeueAfter)
+			result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: nodeName}})
+			if err != nil {
+				t.Fatalf("Reconcile() error = %v", err)
+			}
+			if result.RequeueAfter != 0 {
+				t.Fatalf("Reconcile() RequeueAfter = %s, want no requeue", result.RequeueAfter)
+			}
+		})
 	}
 }
 
