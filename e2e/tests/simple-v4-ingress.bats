@@ -69,6 +69,8 @@ teardown_file() {
 	[ "$status" -eq "0" ]
 	run kubectl -n kube-system wait --for=delete -l app=multi-networkpolicy pod --timeout=${kubewait_timeout}
 	[ "$status" -eq "0" ]
+	run wait_for_nft_rule_absent test-simple-v4-ingress pod-server test-multinetwork-policy-simple-1
+	[ "$status" -eq "0" ]
 
 	run kubectl -n test-simple-v4-ingress annotate pod --all k8s.v1.cni.cncf.io/networks-
 	[ "$status" -eq "0" ]
